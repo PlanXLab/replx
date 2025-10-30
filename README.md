@@ -323,7 +323,7 @@ clear, ls, cd, get, put, rm, mkdir, df, repl, pwd, exit
 
 ---
 
-## Beautiful Error Messages
+## Error Messages
 
 replx automatically reformats MicroPython tracebacks with local file paths:
 
