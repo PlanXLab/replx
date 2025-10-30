@@ -32,17 +32,17 @@ pip install replx
 
 ### First Steps
 
-** Find your device:**
+**Find your device:**
 ```bash
 replx scan
 ```
 
-** Set up VS Code environment:**
+**Set up VS Code environment:**
 ```bash
 replx -p COM3 env
 ```
 
-** Run a script:**
+**Run a script:**
 ```bash
 replx run hello.py
 ```
@@ -96,7 +96,7 @@ replx shell
 | `-v, --version` | Show version and exit |
 | `--help` | Display help message |
 
-** Tip:** Create `.vscode/.env` with `SERIAL_PORT=COM3` to avoid typing `-p` every time!
+**Tip:** Create `.vscode/.env` with `SERIAL_PORT=COM3` to avoid typing `-p` every time!
 
 ---
 
@@ -137,7 +137,7 @@ replx put app/ lib/                   # Upload entire directory
 replx put config.json /data/          # Upload to specific path
 ```
 
-** Tip:** Directories are created automatically. Python files are compiled to `.mpy` for faster execution!
+**Tip:** Directories are created automatically. Python files are compiled to `.mpy` for faster execution!
 
 #### `ls` - List files
 ```bash
