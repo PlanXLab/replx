@@ -3,37 +3,91 @@ from typing import Optional
 import psutil
 
 def _find_terminal_process() -> Optional[dict]:
-    terminal_names = {
+    # Prefer actual shell processes (per-terminal) over host IDE processes (shared).
+    shell_names = {
         'powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash.exe', 'zsh.exe', 'sh.exe', 'fish.exe',
-        'WindowsTerminal.exe', 'ConEmu64.exe', 'ConEmu.exe',
-        'Code.exe',
-        'pycharm', 'pycharm64.exe', 'idea', 'idea64.exe',
+        'windowsterminal.exe',
     }
+
+    ide_names = {
+        'code.exe',
+        'conemu64.exe', 'conemu.exe',
+        'pycharm.exe', 'pycharm64.exe', 'idea.exe', 'idea64.exe',
+    }
+
+    # Fast path: parent pid is typically the actual terminal/shell.
+    try:
+        parent_pid = os.getppid()
+        if parent_pid and parent_pid > 0:
+            parent = psutil.Process(parent_pid)
+            pname = (parent.name() or '').lower()
+            if pname in shell_names:
+                return {
+                    'pid': parent.pid,
+                    'name': parent.name(),
+                    'create_time': parent.create_time(),
+                    'cwd': None,
+                    'level': 0,
+                }
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+        # Fall back to a broader traversal.
+        pass
 
     try:
         current = psutil.Process()
-        for level in range(10):
+        best_ide = None
+
+        for level in range(12):
             if current is None:
                 break
 
-            if current.name() in terminal_names:
+            try:
+                name = (current.name() or '').lower()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                break
+
+            if name in shell_names:
                 return {
                     'pid': current.pid,
                     'name': current.name(),
                     'create_time': current.create_time(),
-                    'cwd': current.cwd() if hasattr(current, 'cwd') else None,
-                    'level': level
+                    'cwd': None,
+                    'level': level,
                 }
 
-            if current.ppid() == 0:
+            if name in ide_names and best_ide is None:
+                # Keep as last resort (may be shared across terminals).
+                try:
+                    best_ide = {
+                        'pid': current.pid,
+                        'name': current.name(),
+                        'create_time': current.create_time(),
+                        'cwd': None,
+                        'level': level,
+                    }
+                except Exception:
+                    best_ide = None
+
+            try:
+                if current.ppid() == 0:
+                    break
+            except Exception:
                 break
 
-            parent = current.parent()
+            try:
+                parent = current.parent()
+            except Exception:
+                parent = None
+
             if parent is None:
                 break
             current = parent
 
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        if best_ide is not None:
+            return best_ide
+
+    except Exception:
+        # Never allow session id discovery to fail hard.
         pass
 
     return None
