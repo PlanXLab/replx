@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import sys
+from typing import Optional
 
 from replx.utils.constants import CTRL_C, CTRL_D, EOF_MARKER, MAX_PAYLOAD_SIZE
 from replx.utils.exceptions import ProtocolError
@@ -22,6 +23,31 @@ def _normalize_port(port: str) -> str:
         return port
 
 
+def _find_connection_by_port(connection_manager, port: str) -> Optional[BoardConnection]:
+    """Find a connection by port, honoring Windows' case-insensitive semantics."""
+    if not port:
+        return None
+
+    # Try exact match first (preserve original port case where possible)
+    conn = connection_manager.get_connection(port)
+    if conn:
+        return conn
+
+    # Windows: try normalized key, then case-insensitive scan
+    if sys.platform.startswith("win"):
+        normalized = _normalize_port(port)
+        conn = connection_manager.get_connection(normalized)
+        if conn:
+            return conn
+
+        port_lower = port.lower()
+        for key, candidate in connection_manager.get_all_connections().items():
+            if isinstance(key, str) and key.lower() == port_lower:
+                return candidate
+
+    return None
+
+
 class ExecCommandsMixin:
     def _cmd_exec(self, ctx: CommandContext, code: str, interactive: bool = False) -> dict:
         conn = ctx.connection
@@ -39,7 +65,7 @@ class ExecCommandsMixin:
     def _cmd_status(self, ctx: CommandContext) -> dict:
         conn = None
         if ctx.explicit_port:
-            conn = self._get_connection(_normalize_port(ctx.explicit_port))
+            conn = _find_connection_by_port(self.connection_manager, ctx.explicit_port)
         elif ctx.ppid:
             conn = self._get_active_connection(ctx.ppid)
         
@@ -66,6 +92,23 @@ class ExecCommandsMixin:
                 "board_id": conn.board_id
             }
         
+        # If explicit port was requested but not found, do not fall back
+        if ctx.explicit_port:
+            return {
+                "running": True,
+                "connected": False,
+                "port": ctx.explicit_port,
+                "device": "",
+                "core": "",
+                "manufacturer": "",
+                "version": "",
+                "in_raw_repl": False,
+                "pid": os.getpid(),
+                "busy": False,
+                "busy_command": None,
+                "detached_running": any_detached
+            }
+
         if all_connections:
             first_port, first_conn = next(iter(all_connections.items()))
             is_this_detached = first_conn.is_detached()

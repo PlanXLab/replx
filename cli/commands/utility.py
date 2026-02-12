@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import sys
 from typing import Optional
 
 import typer
@@ -27,6 +28,39 @@ from ..connection import (
 )
 from ..app import app
 from .package import _install_spec_internal
+
+
+def _is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
+def _get_connection_info_for_port(connections: dict, port: Optional[str]) -> dict:
+    """Return connection info dict for a port.
+
+    On Windows, COM ports are case-insensitive, but different call sites may
+    preserve different casing (e.g. 'com24' vs 'COM24'). This lookup makes
+    status/session display resilient to that.
+    """
+    if not port or not connections:
+        return {}
+
+    if port in connections:
+        return connections.get(port, {}) or {}
+
+    if _is_windows():
+        upper = port.upper()
+        if upper in connections:
+            return connections.get(upper, {}) or {}
+        lower = port.lower()
+        if lower in connections:
+            return connections.get(lower, {}) or {}
+
+        lower_key = lower
+        for key, value in connections.items():
+            if isinstance(key, str) and key.lower() == lower_key:
+                return value or {}
+
+    return {}
 
 
 @app.command(name="version", hidden=True)
@@ -82,12 +116,9 @@ def _get_session_list_data():
         }
     }
     """
-    if not AgentClient.is_agent_running():
-        return None, None, "no_server"
-    
     try:
-        with AgentClient() as client:
-            session_info = client.send_command('session_info', timeout=1.0)
+        with AgentClient(port=_get_current_agent_port()) as client:
+            session_info = client.send_command('session_info', timeout=1.5)
     except Exception:
         return None, None, "no_server"
     
@@ -215,7 +246,7 @@ def _print_session_list_interactive(sessions_data, current_ppid):
             content_lines.append(f"[dim]SID: {ppid}[/dim]")
         
         if fg_port:
-            conn_info = connections.get(fg_port, {})
+            conn_info = _get_connection_info_for_port(connections, fg_port)
             version = conn_info.get('version', '?')
             core = conn_info.get('core', '?')
             device = conn_info.get('device', '?')
@@ -245,7 +276,7 @@ def _print_session_list_interactive(sessions_data, current_ppid):
                 content_lines.append(line)
         
         for bg_port in bg_ports:
-            conn_info = connections.get(bg_port, {})
+            conn_info = _get_connection_info_for_port(connections, bg_port)
             version = conn_info.get('version', '?')
             core = conn_info.get('core', '?')
             device = conn_info.get('device', '?')
@@ -368,7 +399,7 @@ def _print_session_list_status(sessions_data, current_ppid):
         
         if fg_port:
             has_connections = True
-            conn_info = connections.get(fg_port, {})
+            conn_info = _get_connection_info_for_port(connections, fg_port)
             version = conn_info.get('version', '?')
             core = conn_info.get('core', '?')
             device = conn_info.get('device', '?')
@@ -390,7 +421,7 @@ def _print_session_list_status(sessions_data, current_ppid):
         
         for bg_port in bg_ports:
             has_connections = True
-            conn_info = connections.get(bg_port, {})
+            conn_info = _get_connection_info_for_port(connections, bg_port)
             version = conn_info.get('version', '?')
             core = conn_info.get('core', '?')
             device = conn_info.get('device', '?')
@@ -423,6 +454,7 @@ def _print_session_list_status(sessions_data, current_ppid):
     panel = Panel(
         text_content,
         title="Sessions",
+        title_align="left",
         border_style="cyan",
         box=get_panel_box(),
         width=CONSOLE_WIDTH
@@ -548,7 +580,7 @@ When you have multiple boards connected, use this to switch between them.
     if port:
         switch_target = port
         try:
-            with AgentClient() as client:
+            with AgentClient(port=_get_current_agent_port()) as client:
                 result = client.send_command('session_switch_fg', port=switch_target, timeout=3.0)
             
             if result.get('success'):
@@ -561,12 +593,14 @@ When you have multiple boards connected, use this to switch between them.
                 OutputHelper.print_panel(
                     f"Failed to switch foreground: {result.get('error', 'Unknown error')}",
                     title="Error",
+                    title_align="left",
                     border_style="red"
                 )
         except Exception as e:
             OutputHelper.print_panel(
                 f"Failed to switch foreground: {str(e)}",
                 title="Error",
+                title_align="left",
                 border_style="red"
             )
         return
@@ -593,7 +627,7 @@ When you have multiple boards connected, use this to switch between them.
     
     if selected_port:
         try:
-            with AgentClient() as client:
+            with AgentClient(port=_get_current_agent_port()) as client:
                 result = client.send_command('session_switch_fg', port=selected_port, timeout=3.0)
             
             if result.get('success'):
@@ -606,12 +640,14 @@ When you have multiple boards connected, use this to switch between them.
                 OutputHelper.print_panel(
                     f"Failed to switch foreground: {result.get('error', 'Unknown error')}",
                     title="Error",
+                    title_align="left",
                     border_style="red"
                 )
         except Exception as e:
             OutputHelper.print_panel(
                 f"Failed to switch foreground: {str(e)}",
                 title="Error",
+                title_align="left",
                 border_style="red"
             )
 
@@ -767,7 +803,7 @@ The connection is closed and removed from ALL sessions that reference it.
         raise typer.Exit()
     
     try:
-        with AgentClient() as client:
+        with AgentClient(port=_get_current_agent_port()) as client:
             result = client.send_command('session_disconnect', port=port, timeout=3.0)
         
         if result.get('freed_port'):
@@ -780,12 +816,14 @@ The connection is closed and removed from ALL sessions that reference it.
             OutputHelper.print_panel(
                 f"Failed to disconnect: {result.get('error', 'Unknown error')}",
                 title="Error",
+                title_align="left",
                 border_style="red"
             )
     except Exception as e:
         OutputHelper.print_panel(
             f"Failed to disconnect: {str(e)}",
             title="Error",
+            title_align="left",
             border_style="red"
         )
 
@@ -795,14 +833,6 @@ def _do_shutdown():
     Stop all connections and the agent.
     """
     agent_port = _get_current_agent_port()
-    
-    if not AgentClient.is_agent_running(port=agent_port):
-        OutputHelper.print_panel(
-            "Agent is not running. Nothing to stop.",
-            title="Shutdown",
-            border_style="dim"
-        )
-        return
     
     try:
         AgentClient.stop_agent(port=agent_port)
@@ -814,10 +844,11 @@ def _do_shutdown():
             border_style="blue"
         )
     except Exception as e:
+        # Agent might not be running or other error
         OutputHelper.print_panel(
-            f"Failed to stop agent: {str(e)}",
-            title="Shutdown Error",
-            border_style="red"
+            "Agent is not running or already stopped.",
+            title="Shutdown",
+            border_style="dim"
         )
 
 

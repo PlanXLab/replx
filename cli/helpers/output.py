@@ -37,10 +37,34 @@ class OutputHelper:
         return OutputHelper.PANEL_WIDTH
     
     @staticmethod
-    def print_panel(content: str, title: str = "", border_style: str = "blue"):
-        """Print content in a rich panel box."""
+    def print_panel(
+        content: str,
+        title: str = "",
+        border_style: str = "blue",
+        *,
+        height: int | None = None,
+        **panel_kwargs,
+    ):
+        """Print content in a rich panel box.
+        """
         width = OutputHelper._get_panel_width()
-        OutputHelper._console.print(Panel(content, title=title, title_align="left", border_style=border_style, box=get_panel_box(), expand=True, width=width))
+
+        # Keep existing default alignment unless caller overrides it.
+        if "title_align" not in panel_kwargs:
+            panel_kwargs["title_align"] = "left"
+
+        panel = Panel(
+            content,
+            title=title,
+            border_style=border_style,
+            box=get_panel_box(),
+            expand=True,
+            width=width,
+            height=height,
+            **panel_kwargs,
+        )
+
+        OutputHelper._console.print(panel)
     
     @staticmethod
     def create_progress_panel(current: int, total: int, title: str = "Progress", message: str = "", counter_text: str = None):

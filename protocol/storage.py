@@ -620,7 +620,7 @@ print(get_fs_info())
         # Normalize core name (e.g., RP2350B -> RP2350)
         normalized_core = normalize_core(self.core)
         
-        if normalized_core in ("ESP32S3", "ESP32C6"):
+        if normalized_core in ("ESP32S3", "ESP32C6", "ESP32C5", "ESP32P4"):
             command = """
 import os
 from flashbdev import bdev

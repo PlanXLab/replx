@@ -6,17 +6,29 @@ SUPPORT_CORE_DEVICE_TYPES = {
     'EFR32MG': {'std': False, 'devices': {'xnode'}},  # XBee3 Zigbee (non-standard MicroPython)
     'RP2350': {'std': True, 'devices': {'ticle', 'ticle-lite', 'ticle-sensor', 'ticle-auto'}},  # Pico 2W
     'MIMXRT1062DVJ6A': {'std': True, 'devices': {'teensy'}},  # Teensy 4.0
+    # ESP32 family (standard MicroPython)
+    'ESP32C5': {'std': True, 'devices': {'ESP32C5'}},
+    'ESP32S3': {'std': True, 'devices': {'ESP32S3'}},
+    'ESP32P4': {'std': True, 'devices': {'ESP32P4'}},
 }
 
 CORE_ROOT_FS = {
     'RP2350': '/',
     'EFR32MG': '/flash',
     'MIMXRT1062DVJ6A': '/flash',
+    'ESP32C5': '/',
+    'ESP32S3': '/',
+    'ESP32P4': '/',
 }
 
 DEFAULT_ROOT_FS = '/' 
 
 def normalize_core(core: str) -> str:
+    # Multi-core banner may include a secondary core (e.g., "ESP32P4/ESP32C6").
+    # Use the primary core for compatibility with registries, compiler flags, and root-fs mapping.
+    if core and "/" in core:
+        core = core.split("/", 1)[0]
+
     # Check if core ends with a single letter suffix (like RP2350B)
     if core and len(core) > 1 and core[-1].isalpha() and core[-2].isdigit():
         # Return without the suffix letter
@@ -53,15 +65,16 @@ def parse_device_banner(banner_text: str) -> Optional[Tuple[str, str, str, str]]
         wifi_desc = multi_with_match.group(2).strip()  # "WIFI"
         core2 = multi_with_match.group(3).strip().upper()  # "ESP32C6"
         core1 = multi_with_match.group(4).strip().upper()  # "ESP32P4"
-        
-        core = f"{core1}/{core2}"
+
+        # Report the PRIMARY core consistently (this drives package registry selection and mpy arch).
+        core = core1
         
         if prefix.endswith(" module"):
             prefix = prefix[:-7].strip()
         
-        manufacturer = f"{prefix} with {wifi_desc}".strip()
-        
-        device = core
+        manufacturer = f"{prefix} with {wifi_desc} ({core2})".strip()
+
+        device = core1
         return version, core, device, manufacturer
     
     match = re.search(r';\s*(.+?)\s+with\s+(\S+)', banner_text)

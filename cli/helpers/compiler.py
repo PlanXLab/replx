@@ -20,7 +20,12 @@ class CompilerHelper:
     def mpy_arch_tag() -> str:
         """Get the MPY architecture tag."""
         _core, _device, _version, _device_root_fs, _device_path = get_global_context()
-        return _core or "unknown"
+        if not _core:
+            return "unknown"
+        # Avoid multi-core strings creating nested output dirs (e.g. "ESP32P4/ESP32C6").
+        if "/" in _core:
+            return _core.split("/", 1)[0]
+        return _core
     
     @staticmethod
     def staging_out_for(abs_py: str, base: str, arch_tag: str) -> str:
@@ -39,6 +44,58 @@ class CompilerHelper:
             for chunk in iter(lambda: f.read(8192), b""):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
+
+    @staticmethod
+    def _march_for_core(core: str, version: str) -> list[str]:
+        """Return extra mpy-cross args for a given core/version.
+
+        Core names come from the connected board status (e.g., ESP32C5).
+        """
+        if not core:
+            raise typer.BadParameter("The core is unknown")
+
+        # Normalize multi-core strings (e.g. "ESP32P4/ESP32C6")
+        if "/" in core:
+            core = core.split("/", 1)[0]
+
+        args: list[str] = ['-msmall-int-bits=31']
+
+        if core == "EFR32MG":
+            # Parse version string (e.g., "1.19.0") to float for comparison
+            try:
+                ver_parts = version.split('.')
+                ver_float = float(f"{ver_parts[0]}.{ver_parts[1]}" if len(ver_parts) >= 2 else version)
+            except (ValueError, IndexError):
+                ver_float = 0.0
+            if ver_float < 1.19:
+                args.append('-mno-unicode')
+            return args
+
+        # ESP32 family
+        if core in ("ESP32", "ESP32S2"):
+            args.append('-march=xtensa')
+            return args
+
+        if core == "ESP32S3":
+            args.append('-march=xtensawin')
+            return args
+
+        # ESP32-C* chips are RISC-V based in MicroPython builds
+        # (e.g., ESP32C3/ESP32C5/ESP32C6). Use the generic rv32imc tag.
+        if core.startswith("ESP32C"):
+            args.append('-march=rv32imc')
+            return args
+
+        # ESP32-P* chips (e.g., ESP32P4) are also RISC-V in MicroPython builds.
+        if core.startswith("ESP32P"):
+            args.append('-march=rv32imc')
+            return args
+
+        if core == "RP2350":
+            args.append('-march=armv7emsp')
+            return args
+
+        raise typer.BadParameter(f"The {core} is not supported")
     
     @staticmethod
     def compile_to_staging(abs_py: str, base: str) -> str:
@@ -67,24 +124,8 @@ class CompilerHelper:
                 return cached_out
         
         # Cache miss or file changed - compile
-        args = ['_filepath_', '-o', '_outpath_', '-msmall-int-bits=31']
-        if _core == "EFR32MG":
-            # Parse version string (e.g., "1.19.0") to float for comparison
-            try:
-                ver_parts = _version.split('.')
-                ver_float = float(f"{ver_parts[0]}.{ver_parts[1]}" if len(ver_parts) >= 2 else _version)
-            except (ValueError, IndexError):
-                ver_float = 0.0
-            if ver_float < 1.19:
-                args.append('-mno-unicode')
-        elif _core == "ESP32":
-            args.append('-march=xtensa')
-        elif _core == "ESP32S3":
-            args.append('-march=xtensawin')
-        elif _core == "RP2350":
-            args.append('-march=armv7emsp')
-        else:
-            raise typer.BadParameter(f"The {_core} is not supported")
+        args = ['_filepath_', '-o', '_outpath_']
+        args.extend(CompilerHelper._march_for_core(_core, _version))
         
         # Ensure output directory exists
         out_dir = os.path.dirname(out_mpy)

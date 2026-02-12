@@ -45,6 +45,56 @@ def _upload_file_with_progress(client, local_path: str, remote_path: str, progre
     )
 
 
+def _find_local_pkg_version(local_meta: dict, *, scope: str, target: str, source_path: str, pkg_name: str) -> tuple[float, bool]:
+    """Resolve local registry version for a package.
+
+    Local registry keys are not always a simple `${scope}:${target}:${name}`:
+    - device-specific packages may be stored as `${scope}:${target}:${name}@_variant`
+    - some historical entries may have a different `${name}` but the same `source`
+
+    This helper prefers direct-key lookup, then variant-key lookup, then falls back
+    to matching by `source` within the target scope.
+    """
+    if not local_meta or not isinstance(local_meta, dict):
+        return 0.0, True
+
+    local_packages = local_meta.get("packages", {})
+    if not local_packages or not isinstance(local_packages, dict):
+        return 0.0, True
+
+    if not scope or not target or not source_path or not pkg_name:
+        return 0.0, True
+
+    base_key = f"{scope}:{target}:{pkg_name}"
+
+    # 1) Exact match
+    if base_key in local_packages:
+        return RegistryHelper.get_version(local_packages[base_key]), False
+
+    # 2) Variant match (device only)
+    if scope == "device":
+        best = None
+        for key, meta in local_packages.items():
+            if not isinstance(key, str):
+                continue
+            if key.startswith(base_key + "@"):
+                v = RegistryHelper.get_version(meta)
+                best = v if best is None else max(best, v)
+        if best is not None:
+            return best, False
+
+    # 3) Fallback: match by source path within the same target scope
+    # (handles cases like key name mismatch but source is stable)
+    prefix_lower = f"{scope}:{target}:".lower()
+    for key, meta in local_packages.items():
+        if not isinstance(key, str) or not isinstance(meta, dict):
+            continue
+        if key.lower().startswith(prefix_lower) and meta.get("source") == source_path:
+            return RegistryHelper.get_version(meta), False
+
+    return 0.0, True
+
+
 @app.command(name="pkg", rich_help_panel="Package Management")
 def pkg(
     args: list[str] = typer.Argument(None, help="Package command and arguments"),
@@ -52,6 +102,7 @@ def pkg(
     repo: str = typer.Option("replx_libs", help="GitHub repo name (for search/download)"),
     ref: str = typer.Option("main", help="Git reference (for search/download)"),
     target: Optional[str] = typer.Option(None, "--target", "-t", help="Board target path for update (e.g., lib/ticle)"),
+    height: Optional[int] = typer.Option(None, "--height", help="Fixed panel height for search results (no scrolling)", min=5, max=200),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
@@ -126,7 +177,7 @@ Package management for MicroPython devices.
     target_path = target.lstrip("/").rstrip("/") if target else None
     
     if cmd == "search":
-        _pkg_search(cmd_args, owner, repo, ref)
+        _pkg_search(cmd_args, owner, repo, ref, height=height)
     elif cmd == "download":
         _pkg_download(cmd_args, owner, repo, ref)
     elif cmd == "update":
@@ -143,8 +194,8 @@ Package management for MicroPython devices.
         raise typer.Exit(1)
 
 
-def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
-    _ensure_connected()
+def _pkg_search(args: list[str], owner: str, repo: str, ref: str, *, height: Optional[int] = None):
+    status = _ensure_connected()
     
     lib_name = args[0] if args else None
     
@@ -160,75 +211,32 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
 
     cores, devices = RegistryHelper.root_sections(remote)
 
-    def local_ver(source_path: str) -> tuple[float, bool]:
-        if not local or not isinstance(local, dict):
-            return (0.0, True)
-        try:
-            # Check if package exists locally by source path
-            local_packages = local.get("packages", {})
-            if not local_packages:
-                return (0.0, True)
-            
-            # First, try to match by exact source path
-            for pkg in local_packages.values():
-                if not isinstance(pkg, dict):
-                    continue
-                pkg_source = pkg.get("source", "")
-                if pkg_source == source_path:
-                    v = RegistryHelper.get_version(pkg)
-                    return (v, False)
-            
-            # If not found, try to build unique key from source_path
-            # e.g., "core/RP2350/src/i2c.py" -> scope:core, target:RP2350, name:i2c
-            # e.g., "device/ticle_lite/src/i2c.py" -> scope:device, target:ticle_lite, name:i2c
-            if "/" in source_path:
-                parts = source_path.split("/")
-                if len(parts) >= 3:
-                    scope = parts[0]  # "core" or "device"
-                    target = parts[1]  # "RP2350" or "ticle_lite"
-                    # Extract filename without extension
-                    filename = parts[-1]
-                    name = filename.replace(".py", "").replace(".pyi", "").replace("__init__", "")
-                    if not name:
-                        # For __init__.py, use parent folder
-                        name = parts[-2] if len(parts) >= 2 else ""
-                    
-                    if scope and target and name:
-                        unique_key = f"{scope}:{target}:{name}"
-                        if unique_key in local_packages:
-                            v = RegistryHelper.get_version(local_packages[unique_key])
-                            return (v, False)
-            
-            # Check if source_path is a variant
-            # For variants, we need to find the original package
-            remote_packages = remote.get("packages", {})
-            for orig_name, orig_meta in remote_packages.items():
-                # Check if source_path matches any variant
-                variants = orig_meta.get("variants", {})
-                for var_name, var_meta in variants.items():
-                    if var_meta.get("source") == source_path:
-                        # This is a variant - check if original package exists locally
-                        # For variants, also use unique key matching
-                        if "/" in source_path:
-                            parts = source_path.split("/")
-                            if len(parts) >= 3:
-                                scope = parts[0]
-                                target = parts[1]
-                                unique_key = f"{scope}:{target}:{orig_name}"
-                                if unique_key in local_packages:
-                                    v = RegistryHelper.get_version(local_packages[unique_key])
-                                    return (v, False)
-                        # Fallback: try original name directly
-                        if orig_name in local_packages:
-                            v = RegistryHelper.get_version(local_packages[orig_name])
-                            return (v, False)
-                        # Original package not found locally
-                        return (0.0, True)
-            
-            # Source not found in local packages means missing
-            return (0.0, True)
-        except Exception:
-            return (0.0, True)
+    # Nerd Font icons for status column (display only)
+    STAT_ICON_NEW = ""
+    STAT_ICON_UPD = ""
+
+    def status_label(remote_ver: float, local_ver_: float, missing_local: bool) -> str:
+        if missing_local:
+            return "NEW"
+        if remote_ver > (local_ver_ or 0.0):
+            return "UPD"
+        return ""
+
+    def local_ver(source_path: str, target: str, scope: str) -> tuple[float, bool]:
+        """Check if package exists locally for specific target (core/device)."""
+        if not source_path or not target:
+            return 0.0, True
+
+        # Extract package name from source path
+        # e.g., "core/_std/src/i2c.py" -> "i2c"
+        # e.g., "core/_std/src/upaho/__init__.py" -> "upaho"
+        filename = source_path.split("/")[-1] if "/" in source_path else source_path
+        name = filename.replace(".py", "").replace(".pyi", "").replace("__init__", "")
+        if not name and "/" in source_path:
+            parts = source_path.split("/")
+            name = parts[-2] if len(parts) >= 2 else ""
+
+        return _find_local_pkg_version(local, scope=scope, target=target, source_path=source_path, pkg_name=name)
 
     def add_core_rows(core_name: str, rows: list):
         for relpath, pkg_meta in RegistryHelper.walk_files_for_core(remote, core_name, "src"):
@@ -236,14 +244,15 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
                 continue
             rver = RegistryHelper.get_version(pkg_meta)
             source = pkg_meta.get("source", "")
-            lver, missing = local_ver(source)
+            lver, missing = local_ver(source, core_name, "core")
+            stat = status_label(rver, lver, missing)
             # Extract package name from source (e.g., "slip" from "core/_std/src/slip.py")
             pkg_name = pkg_meta.get("source", "").split("/")[-1].replace(".py", "")
             # Display folder name for __init__.py files
             display_path = f"src/{relpath}"
             if relpath.endswith("/__init__.py"):
                 display_path = display_path.replace("/__init__.py", "/")
-            rows.append(("core", core_name, SearchHelper.fmt_ver_with_star(rver, lver, missing), display_path, pkg_name))
+            rows.append(("core", core_name, stat, f"{rver:.1f}", display_path, pkg_name))
 
     def add_device_rows(dev_name: str, rows: list):
         for relpath, pkg_meta in RegistryHelper.walk_files_for_device(remote, dev_name, "src"):
@@ -251,34 +260,39 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
                 continue
             rver = RegistryHelper.get_version(pkg_meta)
             source = pkg_meta.get("source", "")
-            lver, missing = local_ver(source)
+            lver, missing = local_ver(source, dev_name, "device")
+            stat = status_label(rver, lver, missing)
             # Extract package name from source
             pkg_name = pkg_meta.get("source", "").split("/")[-1].replace(".py", "")
             # Display folder name for __init__.py files
             display_path = f"src/{relpath}"
             if relpath.endswith("/__init__.py"):
                 display_path = display_path.replace("/__init__.py", "/")
-            rows.append(("device", dev_name, SearchHelper.fmt_ver_with_star(rver, lver, missing), display_path, pkg_name))
+            rows.append(("device", dev_name, stat, f"{rver:.1f}", display_path, pkg_name))
 
     def resolve_current_dev_core() -> tuple[Optional[str], Optional[str]]:
-        try:
-            client = _create_agent_client()
-            status = client.send_command('status')
-            if status.get('connected'):
-                cur_dev = status.get('device', '').strip()
-                cur_core = status.get('core', '').strip()
-                if cur_dev or cur_core:
-                    # Convert device name to filesystem path format for matching GitHub metadata
-                    dk = SearchHelper.key_ci(devices, device_name_to_path(cur_dev)) if cur_dev else None
-                    ck = SearchHelper.key_ci(cores, cur_core) if cur_core else None
-                    if ck:
-                        return dk, ck
-        except Exception:
-            # Agent not running or connection failed - search will show all
-            pass
+        """Get current device and core from status returned by _ensure_connected()."""
+        # Use status values from _ensure_connected() to ensure correct device/core
+        # for the specified port (e.g., --port com1)
+        if not status or not status.get('connected'):
+            return None, None
+        
+        cur_core = status.get('core', '').strip()
+        cur_dev = status.get('device', '').strip()
+        
+        if not cur_core:
+            return None, None
+        
+        # Convert device name to filesystem path format for matching GitHub metadata
+        dk = SearchHelper.key_ci(devices, device_name_to_path(cur_dev)) if cur_dev else None
+        ck = SearchHelper.key_ci(cores, cur_core) if cur_core else None
+        
+        if ck:
+            return dk, ck
+        
         return None, None
 
-    rows: list[tuple[str, str, str, str, str]] = []
+    rows: list[tuple[str, str, str, str, str, str]] = []
     cur_dev_key, cur_core_key = resolve_current_dev_core()
 
     if lib_name:
@@ -310,10 +324,10 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
                     add_device_rows(d, temp_rows)
             
             # Filter by search query
-            for scope, target, ver_str, shown_path, pkg_name in temp_rows:
+            for scope, target, stat, ver_str, shown_path, pkg_name in temp_rows:
                 # Check if query matches package name or file path
                 if (q in pkg_name.lower()) or (q in shown_path.lower()):
-                    rows.append((scope, target, ver_str, shown_path, pkg_name))
+                    rows.append((scope, target, stat, ver_str, shown_path, pkg_name))
     else:
         # No search query - list all for current or all devices/cores
         if cur_core_key:
@@ -336,24 +350,71 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
 
     def row_key(r):
         scope_order = 0 if r[0] == "core" else 1
-        return (scope_order, r[1].lower(), r[3].lower())
+        return (scope_order, r[1].lower(), r[4].lower())
 
     rows.sort(key=row_key)
 
     w1 = max(5, max(len(r[0]) for r in rows))
     w2 = max(6, max(len(r[1]) for r in rows))
-    w3 = max(5, max(len(r[2]) for r in rows))
+
+    def _stat_display(stat: str) -> str:
+        if stat == "NEW":
+            return STAT_ICON_NEW
+        if stat == "UPD":
+            return STAT_ICON_UPD
+        return ""
+
+    w3 = max(4, max(len(_stat_display(r[2])) for r in rows))  # STAT
+    w4 = max(3, max(len(r[3]) for r in rows))  # VER
 
     lines = []
-    lines.append(f"{'SCOPE'.ljust(w1)}   {'TARGET'.ljust(w2)}   {'VER'.ljust(w3)}  FILE")
+    lines.append(f"{'SCOPE'.ljust(w1)}   {'TARGET'.ljust(w2)}   {'STAT'.ljust(w3)}   {'VER'.ljust(w4)}  FILE")
     lines.append("─" * (80 - 4))
-    for scope, target, ver_str, shown_path, _pkg_name in rows:
-        lines.append(f"{scope.ljust(w1)}   {target.ljust(w2)}   {ver_str.ljust(w3)}  {shown_path[4:]}")
+
+    def _color_target(scope: str, padded: str) -> str:
+        if scope == "core":
+            return f"[bright_green]{padded}[/bright_green]"
+        if scope == "device":
+            return f"[bright_yellow]{padded}[/bright_yellow]"
+        return padded
+
+    def _color_stat(padded: str, stat: str) -> str:
+        if stat == "NEW":
+            return f"[bright_yellow]{padded}[/bright_yellow]"
+        if stat == "UPD":
+            return f"[cyan]{padded}[/cyan]"
+        return padded
+
+    def _color_file(padded: str, stat: str) -> str:
+        # De-emphasize unchanged entries; keep NEW/UPD entries readable.
+        if stat in ("NEW", "UPD"):
+            return padded
+        return f"[dim]{padded}[/dim]"
+
+    for scope, target, stat, ver_str, shown_path, _pkg_name in rows:
+        scope_cell = scope.ljust(w1)
+        target_cell = _color_target(scope, target.ljust(w2))
+
+        stat_shown = _stat_display(stat)
+        stat_cell_raw = stat_shown.ljust(w3)
+        stat_cell = _color_stat(stat_cell_raw, stat)
+
+        ver_cell = ver_str.ljust(w4)
+
+        file_plain = shown_path[4:]
+        file_cell = _color_file(file_plain, stat)
+
+        lines.append(f"{scope_cell}   {target_cell}   {stat_cell}   {ver_cell}  {file_cell}")
+
+    lines.append("")
+    lines.append(f"[dim]{STAT_ICON_NEW} new   {STAT_ICON_UPD} update[/dim]")
+
     
     OutputHelper.print_panel(
         "\n".join(lines),
         title=f"Search Results [{owner}/{repo}@{ref}]",
-        border_style="magenta"
+        border_style="magenta",
+        height=height,
     )
 
 
@@ -442,8 +503,8 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
 
     exts = (".py", ".pyi", ".json")
 
-    def _plan_for_core(core_name: str, part: str) -> list[tuple[str, dict, str, str, dict]]:
-        """Returns list of (relpath, file_pkg_meta, display_name, orig_pkg_name, orig_pkg_meta)."""
+    def _plan_for_core(core_name: str, part: str) -> list[tuple[str, dict, str, str, dict, str]]:
+        """Returns list of (relpath, file_pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type)."""
         todo = []
         remote_packages = remote.get("packages", {})
         
@@ -487,20 +548,33 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
                 orig_pkg_name = pkg_name
                 orig_pkg_meta = pkg_meta
             
-            # Check local version using ORIGINAL package name with scope:target prefix
-            unique_pkg_key = f"core:{core_name}:{orig_pkg_name}"
-            local_pkg = local_packages.get(unique_pkg_key, {})
-            lver = RegistryHelper.get_version(local_pkg) if local_pkg else 0.0
+            # Check local version using the same resolver as `pkg search`
+            # (handles variant keys and source-based matching)
+            source_for_match = (
+                source
+                or orig_pkg_meta.get("source", "")
+                or orig_pkg_meta.get("typehint", "")
+                or ""
+            )
+            lver, missing = _find_local_pkg_version(
+                local,
+                scope="core",
+                target=core_name,
+                source_path=source_for_match,
+                pkg_name=orig_pkg_name,
+            )
+
+            change_type = "NEW" if missing else ("UPD" if float(lver) < float(rver) else "")
             
             if float(lver) < float(rver):
                 # Extract filename for display
                 display_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "")
-                todo.append((relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta))
+                todo.append((relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
         
         return todo
 
-    def _plan_for_device(device_name: str, part: str) -> list[tuple[str, dict, str, str, dict]]:
-        """Returns list of (relpath, file_pkg_meta, display_name, orig_pkg_name, orig_pkg_meta)."""
+    def _plan_for_device(device_name: str, part: str) -> list[tuple[str, dict, str, str, dict, str]]:
+        """Returns list of (relpath, file_pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type)."""
         todo = []
         remote_packages = remote.get("packages", {})
         
@@ -543,19 +617,33 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
                 orig_pkg_name = pkg_name
                 orig_pkg_meta = pkg_meta
             
-            # Check local version using ORIGINAL package name with scope:target prefix
-            unique_pkg_key = f"device:{device_name}:{orig_pkg_name}"
-            local_pkg = local_packages.get(unique_pkg_key, {})
-            lver = RegistryHelper.get_version(local_pkg) if local_pkg else 0.0
+            # Check local version using the same resolver as `pkg search`
+            source_for_match = (
+                source
+                or orig_pkg_meta.get("source", "")
+                or orig_pkg_meta.get("typehint", "")
+                or ""
+            )
+            lver, missing = _find_local_pkg_version(
+                local,
+                scope="device",
+                target=device_name,
+                source_path=source_for_match,
+                pkg_name=orig_pkg_name,
+            )
+
+            change_type = "NEW" if missing else ("UPD" if float(lver) < float(rver) else "")
             
             if float(lver) < float(rver):
                 # Extract display name
                 display_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "")
-                todo.append((relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta))
+                todo.append((relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
         
         return todo
 
     plan = []
+    new_count = 0
+    upd_count = 0
     download_targets = []
     
     # Check core for updates (always check, even if already downloaded)
@@ -563,11 +651,19 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
         core_src_files = _plan_for_core(core, "src")
         core_hints_files = _plan_for_core(core, "typehints")
         
-        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta in core_src_files:
-            plan.append(("core", core, "src", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta))
+        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in core_src_files:
+            plan.append(("core", core, "src", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+            if change_type == "NEW":
+                new_count += 1
+            elif change_type == "UPD":
+                upd_count += 1
         
-        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta in core_hints_files:
-            plan.append(("core", core, "typehints", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta))
+        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in core_hints_files:
+            plan.append(("core", core, "typehints", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+            if change_type == "NEW":
+                new_count += 1
+            elif change_type == "UPD":
+                upd_count += 1
         
         if core_src_files or core_hints_files:
             download_targets.append(f"core/{core}")
@@ -577,11 +673,19 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
         device_src_files = _plan_for_device(device_name_to_path(dev), "src")
         device_hints_files = _plan_for_device(device_name_to_path(dev), "typehints")
         
-        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta in device_src_files:
-            plan.append(("device", device_name_to_path(dev), "src", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta))
+        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in device_src_files:
+            plan.append(("device", device_name_to_path(dev), "src", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+            if change_type == "NEW":
+                new_count += 1
+            elif change_type == "UPD":
+                upd_count += 1
         
-        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta in device_hints_files:
-            plan.append(("device", device_name_to_path(dev), "typehints", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta))
+        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in device_hints_files:
+            plan.append(("device", device_name_to_path(dev), "typehints", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+            if change_type == "NEW":
+                new_count += 1
+            elif change_type == "UPD":
+                upd_count += 1
         
         if device_src_files or device_hints_files:
             download_targets.append(f"device/{dev}")
@@ -596,7 +700,7 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
         errors = []
         
         def download_file(task):
-            scope, target, part, relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta = task
+            scope, target, part, relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, _change_type = task
             
             # Get correct source path based on part (src or typehints)
             if part == "typehints":
@@ -710,7 +814,7 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
         else:
             message = f"Core [bright_green]{core}[/bright_green] and device [bright_green]{dev}[/bright_green] are already up to date."
     else:
-        message = f"[bright_green]{download_target}[/bright_green]: [green]{total}[/green] file(s) downloaded."
+        message = f"[bright_green]{download_target}[/bright_green]: [green]{total}[/green] file(s) downloaded. ( {new_count},  {upd_count})"
     
     OutputHelper.print_panel(
         message,
@@ -1069,13 +1173,13 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None):
             if rel_dir:
                 unique_dirs.add(rel_dir)
         
+        client = _create_agent_client()
+
         for rel_dir in unique_dirs:
             try:
-                InstallHelper.ensure_remote_dir(rel_dir)
+                InstallHelper.ensure_remote_dir(rel_dir, client=client)
             except Exception:
                 pass
-        
-        client = _create_agent_client()
         
         total_files = len(upload_files)
         folder_name = os.path.basename(abs_dir)
@@ -1152,9 +1256,8 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None):
             remote = f"/{target_dir}/{name}"
         
         file_size = os.path.getsize(local_file)
-        InstallHelper.ensure_remote_dir(target_dir)
-        
         client = _create_agent_client()
+        InstallHelper.ensure_remote_dir(target_dir, client=client)
         
         progress_state = {"current": 0}
         progress_lock = threading.Lock()
@@ -1504,28 +1607,9 @@ Compile Python files to MicroPython bytecode (.mpy).
         )
         raise typer.Exit(1)
     
-    # Build mpy-cross arguments based on architecture
-    def get_arch_args(arch: str, version: str = "1.24.0") -> list:
-        args = ['-msmall-int-bits=31']
-        if arch == "EFR32MG":
-            try:
-                ver_parts = version.split('.')
-                ver_float = float(f"{ver_parts[0]}.{ver_parts[1]}" if len(ver_parts) >= 2 else version)
-            except (ValueError, IndexError):
-                ver_float = 0.0
-            if ver_float < 1.19:
-                args.append('-mno-unicode')
-        elif arch == "ESP32":
-            args.append('-march=xtensa')
-        elif arch == "ESP32S3":
-            args.append('-march=xtensawin')
-        elif arch == "RP2350":
-            args.append('-march=armv7emsp')
-        return args
-    
-    
     version = STATE.version if STATE.version else "1.24.0"
-    arch_args = get_arch_args(target_arch, version)
+    # Use CompilerHelper mapping to keep `mpy` in sync with `pkg update`.
+    arch_args = CompilerHelper._march_for_core(target_arch, version)
     
     compiled = []
     failed = []

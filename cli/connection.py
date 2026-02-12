@@ -8,6 +8,7 @@ This module provides connection-related functionality used across CLI commands:
 """
 
 import os
+import sys
 from typing import Optional
 
 import typer
@@ -60,8 +61,7 @@ def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = 
     # Stop agent only if explicitly requested (e.g., fg connection failure when no other connections)
     if stop_agent:
         try:
-            if AgentClient.is_agent_running():
-                AgentClient.stop_agent()
+            AgentClient.stop_agent()
         except Exception:
             pass
     
@@ -167,7 +167,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 with AgentClient(port=agent_port) as client:
                     client.send_command('set_default', port=default_conn, timeout=1.0)
         except Exception as e:
-            OutputHelper.print_panel(f"Failed to start agent: {str(e)}", title="Agent Error", border_style="red")
+            OutputHelper.print_panel(f"Failed to start agent: {str(e)}", title="Agent Error", title_align="left", border_style="red")
             raise typer.Exit(1)
         
         # Connect fg (Serial only)
@@ -237,6 +237,13 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
         with AgentClient(port=agent_port) as client:
             status = client.send_command('status')
             session_info = client.send_command('session_info', timeout=1.0)
+
+        def _port_norm(p: Optional[str]) -> str:
+            if not p:
+                return ""
+            if sys.platform.startswith("win"):
+                return p.upper()
+            return p
         
         current_ppid = get_cached_session_id()
         current_fg = None
@@ -389,7 +396,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
             explicit_conn = _resolve_connection(explicit_port)
             if explicit_conn:
                 explicit_key = explicit_conn['connection']
-                if explicit_key != current_fg and explicit_key not in [bg for bg in current_bgs]:
+                if _port_norm(explicit_key) != _port_norm(current_fg) and _port_norm(explicit_key) not in [_port_norm(bg) for bg in current_bgs]:
                     port_arg = explicit_conn['connection']
                     
                     try:
@@ -401,6 +408,19 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                                 device=explicit_conn.get('device'),
                                 as_foreground=False,  # bg로 추가
                                 set_default=False,
+                            )
+
+                        # If this command caused a new connection to be established,
+                        # show the same Auto-connected panel to avoid confusion.
+                        # (Without this, the command output appears with no indication
+                        # that a background board was just connected.)
+                        if bg_result and not bg_result.get('existing', False):
+                            _print_auto_connect_info(
+                                port_arg,
+                                bg_result.get('version', explicit_conn.get('version', '?')),
+                                bg_result.get('core', explicit_conn.get('core', '?')),
+                                bg_result.get('device', explicit_conn.get('device', '?')),
+                                bg_result.get('manufacturer', explicit_conn.get('manufacturer', '')),
                             )
                         
                         # Notify user if connection was auto-switched
@@ -451,11 +471,27 @@ def _get_current_agent_port() -> int:
     global_opts = _get_global_options()
     if global_opts.get('agent_port'):
         return global_opts['agent_port']
-    
-    conn = _resolve_connection(global_opts.get('port'))
-    if conn:
-        return conn.get('agent_port', DEFAULT_AGENT_PORT)
-    
+
+    explicit_port = global_opts.get('port')
+    env_path = _find_env_file()
+    default_conn = _get_default_connection(env_path) if env_path else None
+
+    # If an explicit port is provided, use its configured agent_port if possible
+    if explicit_port:
+        conn = _resolve_connection(explicit_port)
+        if conn:
+            return conn.get('agent_port', DEFAULT_AGENT_PORT)
+
+    # Otherwise, prefer workspace DEFAULT connection's agent_port
+    if env_path and default_conn:
+        try:
+            env_data = _read_env_ini(env_path)
+            connections = env_data.get('connections', {})
+            if default_conn in connections:
+                return connections[default_conn].get('agent_port', DEFAULT_AGENT_PORT)
+        except Exception:
+            pass
+
     return DEFAULT_AGENT_PORT
 
 
