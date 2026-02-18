@@ -9,19 +9,6 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-
-
-def _normalize_path_for_comparison(path: str) -> str:
-    """Normalize file path for comparison.
-    
-    Windows: case-insensitive
-    Linux/macOS: case-sensitive
-    """
-    path = os.path.normpath(path)
-    if sys.platform.startswith("win"):
-        return path.lower()
-    else:
-        return path
 from rich.text import Text
 
 from replx.terminal import IS_WINDOWS
@@ -45,6 +32,70 @@ from ..connection import (
 )
 
 from ..app import app
+
+
+def _normalize_path_for_comparison(path: str) -> str:
+    """Normalize file path for comparison.
+    
+    Windows: case-insensitive
+    Linux/macOS: case-sensitive
+    """
+    path = os.path.normpath(path)
+    if sys.platform.startswith("win"):
+        return path.lower()
+    else:
+        return path
+
+
+def _serial_port_cmp_key(port: str) -> str:
+    """Comparison key for serial ports.
+
+    Policy:
+    - Display: keep OS-provided casing.
+    - Compare: on Windows, treat COM ports case-insensitively.
+    """
+    if port is None:
+        return ""
+    p = str(port).strip()
+    return p.lower() if IS_WINDOWS else p
+
+
+def _serial_port_display(port: str) -> str:
+    """Format a serial port name for display.
+
+    Requirement: on Windows, always show port names in uppercase.
+    """
+    if port is None:
+        return ""
+    p = str(port).strip()
+    return p.upper() if IS_WINDOWS else p
+
+
+def _resolve_os_serial_port_name(port: str) -> str:
+    """Resolve port name to the OS-enumerated spelling (best-effort).
+
+    This is mainly for Windows where users might type `com1` but the OS reports
+    `COM1`. We keep display as OS-provided and use case-insensitive comparison
+    separately.
+    """
+    if not port:
+        return port
+    p = str(port).strip()
+    if not IS_WINDOWS:
+        return p
+
+    try:
+        from serial.tools.list_ports import comports as list_ports_comports
+
+        needle = p.lower()
+        for info in list_ports_comports():
+            dev = getattr(info, "device", None)
+            if isinstance(dev, str) and dev.lower() == needle:
+                return dev
+    except Exception:
+        pass
+
+    return p
 
 
 def _check_vscode_version(vscode_dir: str) -> bool:
@@ -86,11 +137,6 @@ def _check_vscode_version(vscode_dir: str) -> bool:
 
 
 def _create_vscode_files_and_typehints(vscode_dir: str, core: str, device: str, overwrite: bool = False):
-    """Create VSCode configuration files and setup typehints paths.
-    
-    Returns:
-        list: List of typehint paths that were added
-    """
     task_file = os.path.join(vscode_dir, "tasks.json")
     settings_file = os.path.join(vscode_dir, "settings.json")
     launch_file = os.path.join(vscode_dir, "launch.json")
@@ -244,6 +290,9 @@ Run this once per project folder to set up your workspace.
     port = global_opts.get('port')
     agent_port = global_opts.get('agent_port')
 
+    # Store/use the OS-enumerated port spelling when possible.
+    port = _resolve_os_serial_port_name(port)
+
     if not port:
         OutputHelper.print_panel(
             "[bright_blue]--port[/bright_blue] is required for setup.\n\n"
@@ -324,7 +373,7 @@ Run this once per project folder to set up your workspace.
                     
                     typehint_paths = _create_vscode_files_and_typehints(vscode_dir, core, device)
                     
-                    content = f"Connection: [bright_blue]{current_port}[/bright_blue] [dim](Default)[/dim]\n"
+                    content = f"Connection: [bright_blue]{_serial_port_display(current_port)}[/bright_blue] [dim](Default)[/dim]\n"
                     content += f"Version: [yellow]{version}[/yellow]\n"
                     content += f"Core: [bright_green]{core}[/bright_green]\n"
                     content += f"Device: [bright_yellow]{device}[/bright_yellow]\n"
@@ -373,7 +422,7 @@ Run this once per project folder to set up your workspace.
                         typehint_paths = _create_vscode_files_and_typehints(vscode_dir, STATE.core, STATE.device)
                         
                         workspace = os.path.dirname(vscode_dir)
-                        content = f"Connection: [bright_blue]{port}[/bright_blue] [dim](Default)[/dim]\n"
+                        content = f"Connection: [bright_blue]{_serial_port_display(port)}[/bright_blue] [dim](Default)[/dim]\n"
                         content += f"Version: [yellow]{STATE.version}[/yellow]\n"
                         content += f"Core: [bright_green]{STATE.core}[/bright_green]\n"
                         content += f"Device: [bright_yellow]{STATE.device}[/bright_yellow]\n"
@@ -382,7 +431,7 @@ Run this once per project folder to set up your workspace.
                         content += f"Workspace: [dim]{workspace}[/dim]\n"
                         if typehint_paths:
                             content += f"Typehints: [dim]{len(typehint_paths)} path(s) configured[/dim]\n"
-                        content += f"Previous fg: [dim]{current_port}[/dim] → bg"
+                        content += f"Previous fg: [dim]{_serial_port_display(current_port)}[/dim] → bg"
                         
                         OutputHelper.print_panel(
                             content,
@@ -524,7 +573,7 @@ Run this once per project folder to set up your workspace.
     
     display_conn = port
     workspace = os.path.dirname(vscode_dir)
-    content = f"Connection: [bright_blue]{display_conn}[/bright_blue] [dim](Default)[/dim]\n"
+    content = f"Connection: [bright_blue]{_serial_port_display(display_conn)}[/bright_blue] [dim](Default)[/dim]\n"
     content += f"Version: [yellow]{STATE.version}[/yellow]\n"
     content += f"Core: [bright_green]{STATE.core}[/bright_green]\n"
     content += f"Device: [bright_yellow]{STATE.device}[/bright_yellow]\n"
@@ -678,11 +727,11 @@ Scans all serial ports to detect MicroPython devices.
         raise typer.Exit()
 
     serial_results = []
-    connected_serial_ports = set() 
-    exclude_serial_ports = set() 
+    connected_serial_ports_cmp = set()
+    exclude_serial_ports = set()
     
     history_connections = {}
-    history_default = None  
+    history_default = None
 
     env_path = _find_env_file()
     if env_path:
@@ -690,6 +739,8 @@ Scans all serial ports to detect MicroPython devices.
         history_connections = env_data.get('connections', {})
         history_default = env_data.get('default')
     
+    history_default_cmp = _serial_port_cmp_key(history_default) if history_default else None
+
     if AgentClient.is_agent_running():
         try:
             with AgentClient() as client:
@@ -706,10 +757,11 @@ Scans all serial ports to detect MicroPython devices.
                     try:
                         status = client.send_command('status', port=port_key, timeout=1.0)
                         if status.get('connected'):
-                            connected_serial_ports.add(port_key)
-                            exclude_serial_ports.add(port_key)
+                            display_port = _serial_port_display(port_key)
+                            connected_serial_ports_cmp.add(_serial_port_cmp_key(display_port))
+                            exclude_serial_ports.add(display_port)
                             serial_results.append((
-                                port_key,
+                                display_port,
                                 status.get('version') or '?',
                                 status.get('core') or '?',
                                 status.get('device') or '?',
@@ -725,6 +777,7 @@ Scans all serial ports to detect MicroPython devices.
 
     for port_device, board_info in scanned:
         version, core, device, manufacturer = board_info
+        port_device = _serial_port_display(port_device)
         serial_results.append((
             port_device,
             version,
@@ -740,32 +793,37 @@ Scans all serial ports to detect MicroPython devices.
             return (port[:match.start()], int(match.group(1)))
         return (port, 0)
     
-    # Deduplicate ports (same port may appear from agent and scan)
-    seen_ports = set()
+    # Deduplicate ports (same port may appear from agent and scan) -
+    # on Windows COM ports are case-insensitive.
+    seen_ports_cmp = set()
     unique_results = []
     for result in serial_results:
-        norm_port = result[0]
-        if norm_port not in seen_ports:
-            seen_ports.add(norm_port)
-            unique_results.append(result)
+        port = _serial_port_display(result[0])
+        key = _serial_port_cmp_key(port)
+        if key not in seen_ports_cmp:
+            seen_ports_cmp.add(key)
+            unique_results.append((port, result[1], result[2], result[3], result[4]))
     serial_results = unique_results
     
     serial_results.sort(key=port_sort_key)
 
-    scanned_serial_ports = set(r[0] for r in serial_results)
+    scanned_serial_ports_cmp = set(_serial_port_cmp_key(r[0]) for r in serial_results)
     
     serial_history_data = []
     
+    history_keys_cmp = set(_serial_port_cmp_key(k) for k in history_connections.keys())
+
     for conn_key, conn_data in history_connections.items():
         if '.' in conn_key:
             continue
         
-        if conn_key not in scanned_serial_ports:
+        # Hide history entries when the same port is currently present (case-insensitive on Windows)
+        if _serial_port_cmp_key(conn_key) not in scanned_serial_ports_cmp:
             version = conn_data.get('version', '-') or '-'
             core = conn_data.get('core', '-') or '-'
             device = conn_data.get('device', '-') or '-'
             manufacturer = conn_data.get('manufacturer', '-') or '-'
-            serial_history_data.append((conn_key, version, core, device, manufacturer))
+            serial_history_data.append((_serial_port_display(conn_key), version, core, device, manufacturer))
     
     serial_history_data.sort(key=port_sort_key)
     
@@ -773,8 +831,9 @@ Scans all serial ports to detect MicroPython devices.
         return "[green]󱓦[/green]" if is_connected else " "
     
     def get_default_marker(conn_id, is_history=False):
-        is_default = history_default and conn_id == history_default
-        is_in_hist = conn_id in {k for k in history_connections.keys()}
+        conn_cmp = _serial_port_cmp_key(conn_id)
+        is_default = bool(history_default_cmp and conn_cmp == history_default_cmp)
+        is_in_hist = conn_cmp in history_keys_cmp
         if is_default:
             return "[bright_yellow]󰷌[/bright_yellow]"
         elif is_in_hist or is_history:
@@ -798,7 +857,7 @@ Scans all serial ports to detect MicroPython devices.
     has_serial = False
     for port, version, core, device, manufacturer in serial_results:
         has_serial = True
-        is_connected = port in connected_serial_ports
+        is_connected = _serial_port_cmp_key(port) in connected_serial_ports_cmp
         serial_table.add_row(
             get_conn_marker(is_connected),
             port,
@@ -811,7 +870,7 @@ Scans all serial ports to detect MicroPython devices.
     
     if serial_history_data:
         for port, version, core, device, manufacturer in serial_history_data:
-            is_connected = port in connected_serial_ports
+            is_connected = _serial_port_cmp_key(port) in connected_serial_ports_cmp
             if is_connected:
                 serial_table.add_row(
                     get_conn_marker(True),
@@ -825,7 +884,7 @@ Scans all serial ports to detect MicroPython devices.
             else:
                 serial_table.add_row(
                     " ",
-                    f"[dim]{port}[/dim]",  # Keep original case
+                    f"[dim]{_serial_port_display(port)}[/dim]",
                     get_default_marker(port, is_history=True),
                     f"[dim]{version}[/dim]",
                     f"[dim]{core}[/dim]",
@@ -1132,7 +1191,6 @@ print(json.dumps(result))
     from rich.console import Console
     from rich.live import Live
     from rich.spinner import Spinner
-    from rich.text import Text
     
     console = Console()
     spinner = Spinner("dots", text=Text(f" Connecting to {ssid}...", style="bright_cyan"))

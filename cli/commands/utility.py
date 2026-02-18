@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import threading
 import sys
@@ -28,6 +29,38 @@ from ..connection import (
 )
 from ..app import app
 from .package import _install_spec_internal
+
+
+def _port_sort_key(port: str) -> tuple:
+    """Stable sort key for ports.
+
+    - Sorts by trailing number when present (COM24 -> 24)
+    - Falls back to lexicographic
+    """
+    if port is None:
+        return ("", -1)
+    p = str(port).strip()
+    m = re.search(r"(\d+)$", p)
+    if m:
+        return (p[: m.start()].lower(), int(m.group(1)))
+    return (p.lower(), 0)
+
+
+def _sorted_unique_ports(ports: list[str | None]) -> list[str]:
+    seen = set()
+    out: list[str] = []
+    for p in ports:
+        if not p:
+            continue
+        s = str(p).strip()
+        if not s:
+            continue
+        if s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    out.sort(key=_port_sort_key)
+    return out
 
 
 def _is_windows() -> bool:
@@ -245,61 +278,47 @@ def _print_session_list_interactive(sessions_data, current_ppid):
         else:
             content_lines.append(f"[dim]SID: {ppid}[/dim]")
         
-        if fg_port:
+        # Sort all ports within a session so output is deterministic and matches scan.
+        ordered_ports = _sorted_unique_ports(([fg_port] if fg_port else []) + list(bg_ports or []))
+
+        if ordered_ports:
             conn_info = _get_connection_info_for_port(connections, fg_port)
-            version = conn_info.get('version', '?')
-            core = conn_info.get('core', '?')
-            device = conn_info.get('device', '?')
-            manufacturer = conn_info.get('manufacturer', '')
-            is_busy = conn_info.get('busy', False)
-            status = 'busy' if is_busy else 'idle'
-            status_color = 'red' if is_busy else 'green'
-            
-            color = color_map[row_idx % len(color_map)]
-            row_idx += 1
-            
-            if is_current:
-                selector = f"[{color}] 󱓥  [/{color}]"
-                line = f"{selector}  [{color}]{fg_port:>{PORT_W}}[/{color}]  [{status_color}]{status:<{STATUS_W}}[/{status_color}]  {version:<{VER_W}}  {core:<{CORE_W}}  [{color}]{device:<{DEV_W}}[/{color}]  [dim]{manufacturer}[/dim]"
-                content_lines.append(line)
-            elif fg_port not in numbered_ports:
-                bracket = _num_to_bracket(select_num)
-                selectable_map[select_num] = fg_port
-                numbered_ports.add(fg_port)
-                select_num += 1
-                selector = f"[bright_cyan]{bracket}[/bright_cyan]"
-                line = f"{selector}  [{color}]{fg_port:>{PORT_W}}[/{color}]  [{status_color}]{status:<{STATUS_W}}[/{status_color}]  {version:<{VER_W}}  {core:<{CORE_W}}  [{color}]{device:<{DEV_W}}[/{color}]  [dim]{manufacturer}[/dim]"
-                content_lines.append(line)
-            else:
-                selector = "[dim] 󰌹  [/dim]"
-                line = f"{selector}  [dim]{fg_port:>{PORT_W}}  {status:<{STATUS_W}}  {version:<{VER_W}}  {core:<{CORE_W}}  {device:<{DEV_W}}  {manufacturer}[/dim]"
-                content_lines.append(line)
-        
-        for bg_port in bg_ports:
-            conn_info = _get_connection_info_for_port(connections, bg_port)
-            version = conn_info.get('version', '?')
-            core = conn_info.get('core', '?')
-            device = conn_info.get('device', '?')
-            manufacturer = conn_info.get('manufacturer', '')
-            is_busy = conn_info.get('busy', False)
-            status = 'busy' if is_busy else 'idle'
-            status_color = 'red' if is_busy else 'green'
-            
-            color = color_map[row_idx % len(color_map)]
-            row_idx += 1
-            
-            if bg_port not in numbered_ports:
-                bracket = _num_to_bracket(select_num)
-                selectable_map[select_num] = bg_port
-                numbered_ports.add(bg_port)
-                select_num += 1
-                selector = f"[bright_cyan]{bracket}[/bright_cyan]"
-                line = f"{selector}  [{color}]{bg_port:>{PORT_W}}[/{color}]  [{status_color}]{status:<{STATUS_W}}[/{status_color}]  {version:<{VER_W}}  {core:<{CORE_W}}  [{color}]{device:<{DEV_W}}[/{color}]  [dim]{manufacturer}[/dim]"
-                content_lines.append(line)
-            else:
-                selector = "[dim] 󰌹  [/dim]"
-                line = f"{selector}  [dim]{bg_port:>{PORT_W}}  {status:<{STATUS_W}}  {version:<{VER_W}}  {core:<{CORE_W}}  {device:<{DEV_W}}  {manufacturer}[/dim]"
-                content_lines.append(line)
+            for p in ordered_ports:
+                is_fg = bool(fg_port and p == fg_port)
+                conn_info = _get_connection_info_for_port(connections, p)
+                version = conn_info.get('version', '?')
+                core = conn_info.get('core', '?')
+                device = conn_info.get('device', '?')
+                manufacturer = conn_info.get('manufacturer', '')
+                is_busy = conn_info.get('busy', False)
+                status = 'busy' if is_busy else 'idle'
+                status_color = 'red' if is_busy else 'green'
+
+                color = color_map[row_idx % len(color_map)]
+                row_idx += 1
+
+                p_disp = OutputHelper.format_port(p)
+
+                if is_current and is_fg:
+                    selector = f"[{color}] 󱓥  [/{color}]"
+                    line = f"{selector}  [{color}]{p_disp:>{PORT_W}}[/{color}]  [{status_color}]{status:<{STATUS_W}}[/{status_color}]  {version:<{VER_W}}  {core:<{CORE_W}}  [{color}]{device:<{DEV_W}}[/{color}]  [dim]{manufacturer}[/dim]"
+                    content_lines.append(line)
+                elif p not in numbered_ports:
+                    bracket = _num_to_bracket(select_num)
+                    selectable_map[select_num] = p
+                    numbered_ports.add(p)
+                    select_num += 1
+                    selector = f"[bright_cyan]{bracket}[/bright_cyan]"
+                    icon = "󱓥" if is_fg else " "
+                    line = f"{selector}  [{color}]{p_disp:>{PORT_W}}[/{color}]  [{status_color}]{status:<{STATUS_W}}[/{status_color}]  {version:<{VER_W}}  {core:<{CORE_W}}  [{color}]{device:<{DEV_W}}[/{color}]  [dim]{manufacturer}[/dim]"
+                    if icon and is_fg and is_current:
+                        # current FG already has 󱓥 row above; keep simple
+                        pass
+                    content_lines.append(line)
+                else:
+                    selector = "[dim] 󰌹  [/dim]"
+                    line = f"{selector}  [dim]{p_disp:>{PORT_W}}  {status:<{STATUS_W}}  {version:<{VER_W}}  {core:<{CORE_W}}  {device:<{DEV_W}}  {manufacturer}[/dim]"
+                    content_lines.append(line)
         
         content_lines.append("")
     
@@ -359,6 +378,14 @@ def _print_session_list_status(sessions_data, current_ppid):
     for sess in sessions:
         if sess.get('default_port'):
             all_defaults.add(sess['default_port'])
+
+    def _port_key(p: str) -> str:
+        if not p:
+            return ""
+        s = str(p).strip()
+        return s.lower() if _is_windows() else s
+
+    all_defaults_keyed = {_port_key(p) for p in all_defaults}
     
     sessions_sorted = sorted(sessions, key=lambda s: (not s.get('is_current'), s.get('ppid', 0)))
     
@@ -371,7 +398,7 @@ def _print_session_list_status(sessions_data, current_ppid):
         return "[green]󱓥[/green]" if is_foreground else ""
     
     def get_default_marker(port):
-        is_default = port in all_defaults
+        is_default = _port_key(port) in all_defaults_keyed
         return "[bright_yellow]󰷌[/bright_yellow]" if is_default else ""
     
     for sess in sessions_sorted:
@@ -397,42 +424,23 @@ def _print_session_list_status(sessions_data, current_ppid):
         
         has_connections = False
         
-        if fg_port:
+        ordered_ports = _sorted_unique_ports(([fg_port] if fg_port else []) + list(bg_ports or []))
+
+        for p in ordered_ports:
             has_connections = True
-            conn_info = _get_connection_info_for_port(connections, fg_port)
-            version = conn_info.get('version', '?')
-            core = conn_info.get('core', '?')
-            device = conn_info.get('device', '?')
-            manufacturer = conn_info.get('manufacturer', '')
-            is_busy = conn_info.get('busy', False)
-            status_text = 'busy' if is_busy else 'idle'
-            status_style = '[red]busy[/red]' if is_busy else '[green]idle[/green]'
-            
-            session_table.add_row(
-                get_conn_marker(True),
-                fg_port,
-                get_default_marker(fg_port),
-                status_style,
-                version,
-                core,
-                device,
-                manufacturer
-            )
-        
-        for bg_port in bg_ports:
-            has_connections = True
-            conn_info = _get_connection_info_for_port(connections, bg_port)
+            is_fg = bool(fg_port and p == fg_port)
+            conn_info = _get_connection_info_for_port(connections, p)
             version = conn_info.get('version', '?')
             core = conn_info.get('core', '?')
             device = conn_info.get('device', '?')
             manufacturer = conn_info.get('manufacturer', '')
             is_busy = conn_info.get('busy', False)
             status_style = '[red]busy[/red]' if is_busy else '[green]idle[/green]'
-            
+
             session_table.add_row(
-                get_conn_marker(False),
-                bg_port,
-                get_default_marker(bg_port),
+                get_conn_marker(is_fg),
+                OutputHelper.format_port(p),
+                get_default_marker(p),
                 status_style,
                 version,
                 core,
@@ -579,13 +587,25 @@ When you have multiple boards connected, use this to switch between them.
     
     if port:
         switch_target = port
+
+        # Windows: agent connection keys are case-sensitive, but COM ports are
+        # not. Resolve `com4` -> `COM4` (or whatever the agent registered) by
+        # looking up current connections.
+        if sys.platform.startswith("win"):
+            sessions_data, _current_ppid, _error = _get_session_list_data()
+            if sessions_data and not _error:
+                needle = str(switch_target).strip().lower()
+                for key in sessions_data.get('connections', {}).keys():
+                    if isinstance(key, str) and key.strip().lower() == needle:
+                        switch_target = key
+                        break
         try:
             with AgentClient(port=_get_current_agent_port()) as client:
                 result = client.send_command('session_switch_fg', port=switch_target, timeout=3.0)
             
             if result.get('success'):
                 OutputHelper.print_panel(
-                    f"Switched foreground to [bright_green]{switch_target}[/bright_green]",
+                    f"Switched foreground to [bright_green]{OutputHelper.format_port(switch_target)}[/bright_green]",
                     title="Foreground Switched",
                     border_style="green"
                 )
@@ -632,7 +652,7 @@ When you have multiple boards connected, use this to switch between them.
             
             if result.get('success'):
                 OutputHelper.print_panel(
-                    f"Switched foreground to [bright_green]{selected_port}[/bright_green]",
+                    f"Switched foreground to [bright_green]{OutputHelper.format_port(selected_port)}[/bright_green]",
                     title="Foreground Switched",
                     border_style="green"
                 )
@@ -730,7 +750,7 @@ Quickly check your active foreground connection.
     manufacturer = conn_info.get('manufacturer', '')
     
     OutputHelper.print_panel(
-        f"[green]󱓥[/green]  [bright_cyan]{fg_port}[/bright_cyan]  {version}  [bright_green]{core}[/bright_green]  [bright_yellow]{device}[/bright_yellow]  [dim]{manufacturer}[/dim]",
+        f"[green]󱓥[/green]  [bright_cyan]{OutputHelper.format_port(fg_port)}[/bright_cyan]  {version}  [bright_green]{core}[/bright_green]  [bright_yellow]{device}[/bright_yellow]  [dim]{manufacturer}[/dim]",
         title="Foreground",
         border_style="green"
     )
@@ -808,7 +828,7 @@ The connection is closed and removed from ALL sessions that reference it.
         
         if result.get('freed_port'):
             OutputHelper.print_panel(
-                f"Disconnected [bright_blue]{port}[/bright_blue]",
+                f"Disconnected [bright_blue]{OutputHelper.format_port(port)}[/bright_blue]",
                 title="Disconnected",
                 border_style="blue"
             )

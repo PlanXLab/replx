@@ -111,7 +111,12 @@ class DeviceScanner:
             excluded.add(exclude_port)
         if exclude_ports:
             for p in exclude_ports:
-                excluded.add(p)
+                if p:
+                    excluded.add(p)
+
+        excluded_norm = None
+        if sys.platform == "win32":
+            excluded_norm = {str(p).lower() for p in excluded if p}
         
         # Collect all ports and apply platform-specific filtering
         all_ports = list(list_ports_comports())
@@ -121,8 +126,11 @@ class DeviceScanner:
         
         for port in all_ports:
             # Skip excluded ports
-            if port.device in excluded:
-                continue
+            if excluded:
+                if port.device in excluded:
+                    continue
+                if excluded_norm is not None and str(port.device).lower() in excluded_norm:
+                    continue
             
             # Skip Bluetooth ports (all platforms)
             if DeviceScanner.is_bluetooth_port(port):

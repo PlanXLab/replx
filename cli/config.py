@@ -270,11 +270,20 @@ class ConfigManager:
     def get_connection(env_path: str, connection: str) -> Optional[dict]:
         """Get configuration for a specific connection."""
         env_data = ConfigManager.read(env_path)
-        # Platform-aware lookup for serial ports
-        norm_connection = connection
-        for key, value in env_data['connections'].items():
-            if key == norm_connection:
-                return value
+        if not connection:
+            return None
+
+        # Exact match first
+        if connection in env_data.get('connections', {}):
+            return env_data['connections'][connection]
+
+        # Windows COM ports are case-insensitive; fall back to case-insensitive lookup.
+        if sys.platform.startswith("win"):
+            needle = str(connection).lower()
+            for key, value in env_data.get('connections', {}).items():
+                if isinstance(key, str) and key.lower() == needle:
+                    return value
+
         return None
     
     @staticmethod
@@ -285,22 +294,82 @@ class ConfigManager:
                           agent_port: int = None,
                           set_default: bool = False):
         """Update or add a connection configuration."""
+
+        def _resolve_os_serial_port_name(port: str) -> str:
+            """Resolve port name to the OS-enumerated casing.
+
+            Policy:
+            - Store the port name exactly as the OS/pyserial reports it.
+            - Windows COM ports are case-insensitive, but the OS typically
+              enumerates them as 'COM{n}'. If the user provides 'com1', rewrite
+              to 'COM1' when possible.
+            """
+            if not port:
+                return port
+            p = str(port).strip()
+            if not sys.platform.startswith("win"):
+                return p
+            try:
+                from serial.tools.list_ports import comports as list_ports_comports
+
+                needle = p.lower()
+                for info in list_ports_comports():
+                    dev = getattr(info, "device", None)
+                    if isinstance(dev, str) and dev.lower() == needle:
+                        return dev
+            except Exception:
+                pass
+            return p
+
+        # Normalize incoming connection name to OS-enumerated spelling (Windows).
+        desired_key = _resolve_os_serial_port_name(connection)
+
         env_data = ConfigManager.read(env_path)
         
         # Find existing connection
         existing_key = None
-        for key in env_data['connections']:
-            if key == connection:
+        for key in env_data.get('connections', {}):
+            if key == desired_key:
                 existing_key = key
                 break
-        
-        # Use existing key to preserve original case, or use original connection name for new entry
+
+        # Windows: case-insensitive match for COM ports to avoid duplicate sections
+        if existing_key is None and sys.platform.startswith("win") and desired_key:
+            needle = str(desired_key).lower()
+            for key in env_data.get('connections', {}):
+                if isinstance(key, str) and key.lower() == needle:
+                    existing_key = key
+                    break
+
+        # If we found an existing connection differing only by case, rename it to desired_key
+        # so .replx stores the OS-provided port spelling.
+        conn_key = None
         if existing_key:
-            conn_key = existing_key
+            if sys.platform.startswith("win") and desired_key and existing_key != desired_key:
+                conns = env_data.get('connections', {})
+                if desired_key in conns and desired_key != existing_key:
+                    # Merge: keep existing desired_key values, fill missing from old.
+                    merged = dict(conns[desired_key] or {})
+                    for k, v in (conns[existing_key] or {}).items():
+                        if k not in merged:
+                            merged[k] = v
+                    conns[desired_key] = merged
+                    try:
+                        del conns[existing_key]
+                    except KeyError:
+                        pass
+                else:
+                    conns[desired_key] = conns.pop(existing_key)
+
+                if env_data.get('default') == existing_key:
+                    env_data['default'] = desired_key
+
+                conn_key = desired_key
+            else:
+                conn_key = existing_key
         else:
-            # For new connections, preserve original case on all platforms
-            conn_key = connection
-            env_data['connections'][conn_key] = {}
+            conn_key = desired_key
+            env_data.setdefault('connections', {})[conn_key] = {}
         
         conn = env_data['connections'][conn_key]
         

@@ -39,8 +39,9 @@ def _print_auto_connect_info(port: str, version: str, core: str, device: str, ma
     Print auto-connect notification when automatically connecting to default board.
     Similar to 'replx whoami' output but with different title.
     """
+    port_disp = OutputHelper.format_port(port)
     OutputHelper.print_panel(
-        f"[bright_green]{port}[/bright_green]  {version}  {core}  [bright_green]{device}[/bright_green]  [dim]{manufacturer}[/dim]",
+        f"[bright_green]{port_disp}[/bright_green]  {version}  {core}  [bright_green]{device}[/bright_green]  [dim]{manufacturer}[/dim]",
         title="Auto-connected",
         border_style="dim"
     )
@@ -56,7 +57,7 @@ def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = 
         stop_agent: If True, stop the agent (only for critical errors like fg connection failure)
     """
     # Build connection info string
-    conn_info = port if port else "unknown"
+    conn_info = OutputHelper.format_port(port) if port else "unknown"
     
     # Stop agent only if explicitly requested (e.g., fg connection failure when no other connections)
     if stop_agent:
@@ -361,7 +362,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 
                 # Show auto-connect info when session is created with explicit CONN
                 _print_auto_connect_info(
-                    conn['connection'],
+                    fg_conn['connection'],
                     result.get('version', '?'),
                     result.get('core', fg_conn.get('core', '?')),
                     result.get('device', fg_conn.get('device', '?')),
@@ -370,7 +371,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 
                 status = result
                 status['connected'] = True
-                current_fg = conn['connection']
+                current_fg = fg_conn['connection']
                 
                 # CONN is set as fg - no need to add as bg anymore
                 STATE.core = status.get('core', STATE.core)

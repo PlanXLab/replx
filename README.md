@@ -93,8 +93,6 @@ replx shutdown
 Stops the agent and releases the serial port for other applications.
 The next replx command will automatically restart the agent and reconnect.
 
-Alias: `free`
-
 ---
 
 ## Common Workflows
@@ -108,7 +106,7 @@ replx run my_script.py
 replx my_script.py
 
 # Run with echo enabled for interactive scripts
-replx my_script.py -e
+replx -e my_script.py 
 ```
 
 ### Sync Your Project
@@ -179,7 +177,7 @@ Shows currently connected device details (port, version, core, device).
 #### `fg` - Switch foreground connection
 ```bash
 replx fg                # Interactive: select from list
-replx fg COM10          # Switch to specific port
+replx COM10 fg          # Switch to specific port
 replx fg 1              # Switch by number
 ```
 

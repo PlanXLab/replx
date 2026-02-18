@@ -6,6 +6,18 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Set, Tuple
 
 
+def _canon_port(port: Optional[str]) -> Optional[str]:
+    if port is None:
+        return None
+    p = str(port).strip()
+    if sys.platform == "win32" or sys.platform.startswith("win"):
+        if p and p.lower().startswith("com"):
+            # Only canonicalize plain COMx names
+            if p[3:].isdigit():
+                return p.upper()
+    return p
+
+
 @dataclass
 class Session:
     ppid: int
@@ -15,7 +27,7 @@ class Session:
     default_port: Optional[str] = None  # This session's workspace default
 
     def add_connection(self, port: str, as_foreground: bool = False):
-        # Store original port
+        port = _canon_port(port)
         if as_foreground:
             if self.foreground and self.foreground != port:
                 self.backgrounds.add(self.foreground)
@@ -30,6 +42,7 @@ class Session:
         self.last_access = time.time()
 
     def remove_connection(self, port: str) -> bool:
+        port = _canon_port(port)
         was_foreground = self.foreground and self.foreground == port
         if was_foreground:
             self.foreground = None
@@ -52,6 +65,7 @@ class Session:
         return result
 
     def has_connection(self, port: str) -> bool:
+        port = _canon_port(port)
         if self.foreground and self.foreground == port:
             return True
         return any(bg == port for bg in self.backgrounds)
@@ -60,6 +74,7 @@ class Session:
         return self.foreground is None and not self.backgrounds
 
     def switch_foreground(self, port: str) -> bool:
+        port = _canon_port(port)
         if self.foreground and self.foreground == port:
             return True
 
@@ -116,7 +131,8 @@ class SessionManager:
         as_foreground: bool = False,
         default_port: str = None
     ) -> Session:
-        # Keep original port case
+        port = _canon_port(port)
+        default_port = _canon_port(default_port) if default_port else None
         
         with self._sessions_lock:
             # Get or create session inside the lock to avoid double-locking
@@ -139,6 +155,7 @@ class SessionManager:
         return session
 
     def remove_connection_from_session(self, ppid: int, port: str) -> Tuple[bool, bool]:
+        port = _canon_port(port)
         session = self.get_session(ppid)
         if not session:
             return False, False
@@ -148,7 +165,7 @@ class SessionManager:
             return True, was_foreground
 
     def remove_connection_from_all_sessions(self, port: str) -> List[int]:
-        # Keep original port case for comparison
+        port = _canon_port(port)
         affected_sessions = []
 
         with self._sessions_lock:
@@ -164,6 +181,7 @@ class SessionManager:
         return session.foreground if session else None
 
     def switch_foreground(self, ppid: int, port: str) -> bool:
+        port = _canon_port(port)
         session = self.get_session(ppid)
         if not session:
             return False
@@ -174,14 +192,14 @@ class SessionManager:
     def resolve_port(self, ppid: int, explicit_port: str = None, default_port: str = None) -> Optional[str]:
         """Resolve port for ConnectionManager lookup."""
         if explicit_port:
-            return explicit_port
+            return _canon_port(explicit_port)
 
         session = self.get_session(ppid)
         if session and session.foreground:
             return session.foreground
 
         if default_port:
-            return default_port
+            return _canon_port(default_port)
 
         return None
 

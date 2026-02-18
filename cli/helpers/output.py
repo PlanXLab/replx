@@ -28,6 +28,17 @@ class OutputHelper:
     
     _console = Console()
     PANEL_WIDTH = None
+
+    @staticmethod
+    def format_port(port: str) -> str:
+        """Format a serial port name for display.
+
+        Requirement: on Windows, always show port names in uppercase.
+        """
+        if port is None:
+            return ""
+        p = str(port).strip()
+        return p.upper() if sys.platform.startswith("win") else p
     
     @staticmethod
     def _get_panel_width():

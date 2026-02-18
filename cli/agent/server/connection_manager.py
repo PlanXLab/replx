@@ -226,11 +226,46 @@ class ConnectionManager:
 
     @default_port.setter
     def default_port(self, value: Optional[str]):
-        self._default_port = value if value else None
+        self._default_port = self._canon_port(value) if value else None
+
+    @staticmethod
+    def _is_windows() -> bool:
+        return sys.platform == "win32" or sys.platform.startswith("win")
+
+    @staticmethod
+    def _canon_port(port: Optional[str]) -> Optional[str]:
+        """Canonicalize port keys for internal storage/lookup.
+
+        On Windows, COM ports are case-insensitive; we canonicalize COMx to
+        uppercase so all commands behave consistently.
+        """
+        if port is None:
+            return None
+        p = str(port).strip()
+        if not p:
+            return ""
+        if ConnectionManager._is_windows() and re.match(r"(?i)^com\d+$", p):
+            return p.upper()
+        return p
+
+    def _resolve_existing_key(self, port: str) -> Optional[str]:
+        """Return the stored key matching `port`, possibly case-insensitively on Windows."""
+        if port is None:
+            return None
+        p = self._canon_port(port)
+        if p in self._connections:
+            return p
+        if self._is_windows() and re.match(r"(?i)^com\d+$", p or ""):
+            needle = (p or "").lower()
+            for k in self._connections.keys():
+                if isinstance(k, str) and k.lower() == needle:
+                    return k
+        return None
 
     def get_connection(self, port: str) -> Optional[BoardConnection]:
         with self._connections_lock:
-            return self._connections.get(port)
+            key = self._resolve_existing_key(port)
+            return self._connections.get(key) if key else None
 
     def get_all_connections(self) -> Dict[str, BoardConnection]:
         with self._connections_lock:
@@ -242,15 +277,18 @@ class ConnectionManager:
 
     def has_connection(self, port: str) -> bool:
         with self._connections_lock:
-            return port in self._connections
+            return self._resolve_existing_key(port) is not None
 
     def add_connection(self, port: str, connection: BoardConnection) -> None:
         with self._connections_lock:
-            self._connections[port] = connection
+            key = self._canon_port(port)
+            connection.port = key
+            self._connections[key] = connection
 
     def remove_connection(self, port: str) -> Optional[BoardConnection]:
         with self._connections_lock:
-            return self._connections.pop(port, None)
+            key = self._resolve_existing_key(port)
+            return self._connections.pop(key, None) if key else None
 
     def connection_count(self) -> int:
         with self._connections_lock:
@@ -264,8 +302,8 @@ class ConnectionManager:
         baudrate: int = 115200
     ) -> Tuple[BoardConnection, Optional[str]]:
         # Store port
-        original_port = port
-        port_key = port
+        original_port = str(port).strip() if port is not None else ""
+        port_key = self._canon_port(original_port)
 
         with self._connections_lock:
             if port_key in self._connections:
@@ -314,7 +352,7 @@ class ConnectionManager:
             )
 
             conn = BoardConnection(
-                port=original_port,  # Store original case
+                port=port_key,  # Canonical key (Windows COM ports uppercased)
                 repl_protocol=repl_protocol,
                 file_system=file_system,
                 core=detected_core,
@@ -325,7 +363,7 @@ class ConnectionManager:
             )
 
             with self._connections_lock:
-                self._connections[port_key] = conn  # Use normalized key
+                self._connections[port_key] = conn
 
             return conn, None
 
@@ -377,7 +415,7 @@ class ConnectionManager:
             if board_id not in self._board_id_cache:
                 self._board_id_cache[board_id] = {}
             
-            self._board_id_cache[board_id]["serial_port"] = port
+            self._board_id_cache[board_id]["serial_port"] = self._canon_port(port)
     
     def find_conflicting_by_board_id(self, port: str) -> Optional[str]:
         """
@@ -468,11 +506,13 @@ class ConnectionManager:
         return None
 
     def disconnect(self, port: str) -> bool:
+        key = None
         with self._connections_lock:
-            if port not in self._connections:
+            key = self._resolve_existing_key(port)
+            if not key:
                 return False
 
-            conn = self._connections.pop(port)
+            conn = self._connections.pop(key)
 
         # Stop detached script first (this waits for drain thread)
         conn.stop_detached()

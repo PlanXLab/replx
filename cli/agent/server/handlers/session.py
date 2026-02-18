@@ -6,6 +6,16 @@ from ..command_dispatcher import CommandContext
 
 
 class SessionCommandsMixin:
+    @staticmethod
+    def _canon_port(port: str) -> str:
+        if port is None:
+            return port
+        p = str(port).strip()
+        if sys.platform == "win32" or sys.platform.startswith("win"):
+            if p.lower().startswith("com") and p[3:].isdigit():
+                return p.upper()
+        return p
+
     def _cmd_session_setup(self, ctx: CommandContext, port: str = None,
                            core: str = "RP2350", device: str = None,
                            as_foreground: bool = True, set_default: bool = False,
@@ -20,13 +30,14 @@ class SessionCommandsMixin:
         if not port:
             raise ValueError("Port is required")
         
+        port = self._canon_port(port)
         conn_key = port
 
         session = self._get_or_create_session(ppid)
         
         # Update session's workspace default - preserve original case
         if local_default:
-            session.default_port = local_default
+            session.default_port = self._canon_port(local_default)
 
         existing_conn = self._get_connection(conn_key)
 
@@ -89,6 +100,7 @@ class SessionCommandsMixin:
         ppid = ctx.ppid
         if not port and ctx.explicit_port:
             port = ctx.explicit_port
+        port = self._canon_port(port) if port else None
         if not ppid:
             raise ValueError("Session PPID required")
 
@@ -157,7 +169,7 @@ class SessionCommandsMixin:
         if not ppid:
             return {"success": False, "error": "Session PPID required"}
 
-        port = ctx.explicit_port
+        port = self._canon_port(ctx.explicit_port)
         if not port:
             return {"success": False, "error": "Port required"}
 

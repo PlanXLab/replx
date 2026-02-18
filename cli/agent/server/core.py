@@ -280,25 +280,25 @@ class AgentServer(
         gc_counter = 0
         while self.running:
             time.sleep(HEARTBEAT_INTERVAL)
+            # IMPORTANT: While REPL/interactive session is active, suspend all
+            # heartbeat maintenance work (including zombie cleanup) to avoid
+            # interfering with long-running terminal interactions.
+            all_conns = self.connection_manager.get_all_connections()
+            if all_conns and any(conn.interactive.active or conn.repl.active for conn in all_conns.values()):
+                continue
+
             zombie_check_counter += 1
             gc_counter += 1
-            
+
             if zombie_check_counter >= ZOMBIE_CHECK_INTERVAL:
                 self._cleanup_zombie_sessions()
                 zombie_check_counter = 0
-            
+
             if gc_counter >= GC_COLLECT_INTERVAL:
                 gc.collect()
                 gc_counter = 0
-            
-            all_conns = self.connection_manager.get_all_connections()
+
             if not all_conns:
-                continue
-            
-            has_active_session = any(
-                conn.interactive.active or conn.repl.active for conn in all_conns.values()
-            )
-            if has_active_session:
                 continue
             
             with self._command_lock:
