@@ -394,12 +394,16 @@ def _print_session_list_status(sessions_data, current_ppid):
     string_io = StringIO()
     temp_console = Console(file=string_io, force_terminal=True, width=300)
     
-    def get_conn_marker(is_foreground):
-        return "[green]󱓥[/green]" if is_foreground else ""
+    def get_conn_marker(is_foreground, is_current):
+        if not is_foreground:
+            return ""
+        return "[green]󱓥[/green]" if is_current else "[dim]󱓥[/dim]"
     
-    def get_default_marker(port):
+    def get_default_marker(port, is_current):
         is_default = _port_key(port) in all_defaults_keyed
-        return "[bright_yellow]󰷌[/bright_yellow]" if is_default else ""
+        if not is_default:
+            return ""
+        return "[bright_yellow]󰷌[/bright_yellow]" if is_current else "[dim]󰷌[/dim]"
     
     for sess in sessions_sorted:
         ppid = sess.get('ppid')
@@ -414,13 +418,13 @@ def _print_session_list_status(sessions_data, current_ppid):
         
         session_table = Table(show_header=False, box=None, padding=(0, COLUMN_PADDING), collapse_padding=True, expand=False)
         session_table.add_column("conn", no_wrap=True)
-        session_table.add_column("port", style="bright_cyan", no_wrap=True, justify="right")
+        session_table.add_column("port", no_wrap=True, justify="right")
         session_table.add_column("default", no_wrap=True)
         session_table.add_column("status", no_wrap=True)
         session_table.add_column("version", no_wrap=True)
-        session_table.add_column("core", style="bright_green", no_wrap=True)
-        session_table.add_column("device", style="bright_yellow", no_wrap=True)
-        session_table.add_column("manufacturer", style="dim", no_wrap=True, overflow="ignore")
+        session_table.add_column("core", no_wrap=True)
+        session_table.add_column("device", no_wrap=True)
+        session_table.add_column("manufacturer", no_wrap=True, overflow="ignore")
         
         has_connections = False
         
@@ -435,17 +439,30 @@ def _print_session_list_status(sessions_data, current_ppid):
             device = conn_info.get('device', '?')
             manufacturer = conn_info.get('manufacturer', '')
             is_busy = conn_info.get('busy', False)
-            status_style = '[red]busy[/red]' if is_busy else '[green]idle[/green]'
+            if is_current:
+                status_text = Text("busy", style="red") if is_busy else Text("idle", style="green")
+                version_text = Text(version)
+                core_text = Text(core, style="bright_green")
+                device_text = Text(device, style="bright_yellow")
+                manufacturer_text = Text(manufacturer, style="dim")
+                port_text = Text(OutputHelper.format_port(p), style="bright_cyan")
+            else:
+                status_text = Text("busy", style="dim red") if is_busy else Text("idle", style="dim green")
+                version_text = Text(version, style="dim")
+                core_text = Text(core, style="dim")
+                device_text = Text(device, style="dim")
+                manufacturer_text = Text(manufacturer, style="dim")
+                port_text = Text(OutputHelper.format_port(p), style="dim")
 
             session_table.add_row(
-                get_conn_marker(is_fg),
-                OutputHelper.format_port(p),
-                get_default_marker(p),
-                status_style,
-                version,
-                core,
-                device,
-                manufacturer
+                get_conn_marker(is_fg, is_current),
+                port_text,
+                get_default_marker(p, is_current),
+                status_text,
+                version_text,
+                core_text,
+                device_text,
+                manufacturer_text
             )
         
         if has_connections:

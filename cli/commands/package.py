@@ -289,7 +289,7 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str, *, height: Opt
         
         if ck:
             return dk, ck
-        
+
         return None, None
 
     rows: list[tuple[str, str, str, str, str, str]] = []
@@ -300,10 +300,10 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str, *, height: Opt
         dkey = SearchHelper.key_ci(devices, device_name_to_path(lib_name))
         ckey = SearchHelper.key_ci(cores, lib_name)
 
-        if dkey:
+        if dkey and cur_dev_key and dkey == cur_dev_key:
             # Device found, add device packages
             add_device_rows(dkey, rows)
-        elif ckey:
+        elif ckey and cur_core_key and ckey == cur_core_key:
             # Core found, add core packages
             add_core_rows(ckey, rows)
         else:
@@ -316,12 +316,6 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str, *, height: Opt
                 add_core_rows(cur_core_key, temp_rows)
                 if cur_dev_key and cur_dev_key != cur_core_key:
                     add_device_rows(cur_dev_key, temp_rows)
-            else:
-                # No current device connected, search in all
-                for c in sorted(cores, key=str.lower):
-                    add_core_rows(c, temp_rows)
-                for d in sorted(devices, key=str.lower):
-                    add_device_rows(d, temp_rows)
             
             # Filter by search query
             for scope, target, stat, ver_str, shown_path, pkg_name in temp_rows:
@@ -329,16 +323,11 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str, *, height: Opt
                 if (q in pkg_name.lower()) or (q in shown_path.lower()):
                     rows.append((scope, target, stat, ver_str, shown_path, pkg_name))
     else:
-        # No search query - list all for current or all devices/cores
+        # No search query - list only for current core/device
         if cur_core_key:
             add_core_rows(cur_core_key, rows)
             if cur_dev_key and cur_dev_key != cur_core_key:
                 add_device_rows(cur_dev_key, rows)
-        else:
-            for c in sorted(cores, key=str.lower):
-                add_core_rows(c, rows)
-            for d in sorted(devices, key=str.lower):
-                add_device_rows(d, rows)
 
     if not rows:
         OutputHelper.print_panel(

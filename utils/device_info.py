@@ -10,6 +10,8 @@ SUPPORT_CORE_DEVICE_TYPES = {
     'ESP32C5': {'std': True, 'devices': {'ESP32C5'}},
     'ESP32S3': {'std': True, 'devices': {'ESP32S3'}},
     'ESP32P4': {'std': True, 'devices': {'ESP32P4'}},
+    'ESP32P4C5': {'std': True, 'devices': {'ESP32P4'}},
+    'ESP32P4C6': {'std': True, 'devices': {'ESP32P4'}},
 }
 
 CORE_ROOT_FS = {
@@ -19,6 +21,8 @@ CORE_ROOT_FS = {
     'ESP32C5': '/',
     'ESP32S3': '/',
     'ESP32P4': '/',
+    'ESP32P4C5': '/',
+    'ESP32P4C6': '/',
 }
 
 DEFAULT_ROOT_FS = '/' 
@@ -28,6 +32,11 @@ def normalize_core(core: str) -> str:
     # Use the primary core for compatibility with registries, compiler flags, and root-fs mapping.
     if core and "/" in core:
         core = core.split("/", 1)[0]
+
+    # Normalize ESP32P4 Wi-Fi companion variants to base core for
+    # compatibility with root-fs/typehint/device lookups.
+    if core in ("ESP32P4C5", "ESP32P4C6"):
+        return "ESP32P4"
 
     # Check if core ends with a single letter suffix (like RP2350B)
     if core and len(core) > 1 and core[-1].isalpha() and core[-2].isdigit():
@@ -66,15 +75,23 @@ def parse_device_banner(banner_text: str) -> Optional[Tuple[str, str, str, str]]
         core2 = multi_with_match.group(3).strip().upper()  # "ESP32C6"
         core1 = multi_with_match.group(4).strip().upper()  # "ESP32P4"
 
-        # Report the PRIMARY core consistently (this drives package registry selection and mpy arch).
-        core = core1
+        # Distinguish ESP32P4 variants by external Wi-Fi core.
+        # - ESP32P4 + ESP32C5 -> ESP32P4C5
+        # - ESP32P4 + ESP32C6 -> ESP32P4C6
+        # Otherwise keep primary core.
+        if core1 == "ESP32P4" and core2 in ("ESP32C5", "ESP32C6"):
+            core = f"ESP32P4{core2[-2:]}"
+        else:
+            core = core1
         
         if prefix.endswith(" module"):
             prefix = prefix[:-7].strip()
         
         manufacturer = f"{prefix} with {wifi_desc} ({core2})".strip()
 
-        device = core1
+        # For unsupported board-specific device names, keep device == core.
+        # (e.g., ESP32P4C5 / ESP32P4C6)
+        device = core
         return version, core, device, manufacturer
     
     match = re.search(r';\s*(.+?)\s+with\s+(\S+)', banner_text)
