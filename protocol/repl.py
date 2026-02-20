@@ -1,4 +1,3 @@
-import os
 import sys
 import time
 import struct
@@ -12,10 +11,10 @@ import typer
 from replx.utils.exceptions import ProtocolError, TransportError
 from replx.utils.constants import (
     CTRL_A, CTRL_B, CTRL_C, CTRL_D, CTRL_E,
-    EOF_MARKER, REPL_BUFSIZE,
+    EOF_MARKER,
     RAW_REPL_PROMPT, SOFT_REBOOT_MSG, OK_RESPONSE,
     RAW_PASTE_INIT, RAW_PASTE_SUPPORTED, RAW_PASTE_NOT_SUPPORTED,
-    RAW_PASTE_FALLBACK, RAW_PASTE_WINDOW_INC, RAW_PASTE_END_DATA,
+    RAW_PASTE_WINDOW_INC, RAW_PASTE_END_DATA,
     RAW_PASTE_DEFAULT_WINDOW_SIZE,
     ERROR_HEADER,
     DEVICE_CHUNK_SIZE_DEFAULT, DEVICE_CHUNK_SIZE_EFR32MG,

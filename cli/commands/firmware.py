@@ -1,7 +1,6 @@
 import os
 import re
 import time
-import shutil
 import urllib.request
 import urllib.error
 import json
@@ -19,7 +18,6 @@ from ..helpers import (
     OutputHelper, StoreManager,
     get_panel_box, CONSOLE_WIDTH
 )
-from ..config import STATE
 from ..connection import (
     _ensure_connected, _create_agent_client
 )

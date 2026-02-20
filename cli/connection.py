@@ -14,7 +14,7 @@ from typing import Optional
 import typer
 
 from .agent.client import AgentClient, get_cached_session_id
-from .helpers import OutputHelper, DeviceScanner, set_global_context
+from .helpers import OutputHelper, set_global_context
 from .config import (
     STATE,
     DEFAULT_AGENT_PORT,
@@ -24,15 +24,6 @@ from .config import (
     _resolve_connection,
     _get_global_options,
 )
-
-
-def _auto_detect_port() -> Optional[str]:
-    """Auto-detect the first available MicroPython REPL port."""
-    results = DeviceScanner.scan_serial_ports(max_workers=5)
-    if results:
-        return results[0][0]
-    return None
-
 
 def _print_auto_connect_info(port: str, version: str, core: str, device: str, manufacturer: str = ""):
     """
@@ -141,7 +132,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                     "Run [bright_blue]replx --port PORT setup[/bright_blue] first.\n\n"
                     "Examples:\n"
                     "  [bright_green]replx --port COM3 setup[/bright_green]\n"
-                    "  [bright_green]replx --port auto setup[/bright_green]",
+                    "  [bright_green]replx --port /dev/ttyACM0 setup[/bright_green]",
                     title="Setup Required",
                     border_style="red"
                 )
@@ -512,7 +503,6 @@ def _create_agent_client() -> AgentClient:
 
 
 __all__ = [
-    '_auto_detect_port',
     '_handle_connection_error',
     '_ensure_connected',
     '_get_current_agent_port',

@@ -1,7 +1,6 @@
 """Environment setup and file management utilities."""
 import os
 import stat
-import shutil
 
 
 class EnvironmentManager:

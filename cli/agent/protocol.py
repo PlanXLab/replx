@@ -4,7 +4,7 @@ import time
 import base64
 from typing import Dict, Any, Optional, List
 
-from replx.utils.constants import MAX_UDP_SIZE, MAX_PAYLOAD_SIZE
+from replx.utils.constants import MAX_PAYLOAD_SIZE
 
 # Protocol constants
 _MAGIC = b'RPLX'

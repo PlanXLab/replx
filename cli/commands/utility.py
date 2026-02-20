@@ -21,7 +21,6 @@ from ..helpers import (
 from ..config import (
     STATE, DEFAULT_AGENT_PORT,
     _resolve_connection, _get_global_options,
-    _find_env_file, _get_default_connection
 )
 from ..connection import (
     _ensure_connected, _create_agent_client,
@@ -870,22 +869,37 @@ def _do_shutdown():
     Stop all connections and the agent.
     """
     agent_port = _get_current_agent_port()
-    
+
     try:
-        AgentClient.stop_agent(port=agent_port)
-        
-        OutputHelper.print_panel(
-            "Stopped all connections and agent.\n"
-            "[dim]Run any replx command to reconnect.[/dim]",
-            title="Shutdown Complete",
-            border_style="blue"
-        )
+        was_running = AgentClient.is_agent_running(port=agent_port)
+        stopped = AgentClient.stop_agent(port=agent_port)
+
+        if was_running and stopped:
+            OutputHelper.print_panel(
+                "Stopped all connections and agent.\n"
+                "[dim]Run any replx command to reconnect.[/dim]",
+                title="Shutdown Complete",
+                border_style="blue"
+            )
+        elif not was_running:
+            OutputHelper.print_panel(
+                "Agent is already stopped.\n"
+                "[dim]Run any replx command to start and reconnect.[/dim]",
+                title="Already Shutdown",
+                border_style="dim"
+            )
+        else:
+            OutputHelper.print_panel(
+                "Failed to stop agent cleanly.\n"
+                "[dim]Some connections may still be active.[/dim]",
+                title="Shutdown Failed",
+                border_style="red"
+            )
     except Exception as e:
-        # Agent might not be running or other error
         OutputHelper.print_panel(
-            "Agent is not running or already stopped.",
-            title="Shutdown",
-            border_style="dim"
+            f"Failed to shutdown agent: {str(e)}",
+            title="Shutdown Failed",
+            border_style="red"
         )
 
 

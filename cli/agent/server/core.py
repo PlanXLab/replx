@@ -6,8 +6,6 @@ import threading
 import time
 from typing import Optional, Dict, Any
 
-from replx.protocol import ReplProtocol, create_storage
-from replx.utils import get_root_fs_for_core
 from replx.utils.constants import (
     DEFAULT_AGENT_PORT, AGENT_HOST, MAX_CONNECTIONS, MAX_UDP_SIZE,
     AGENT_SOCKET_TIMEOUT, HEARTBEAT_INTERVAL,
@@ -17,7 +15,7 @@ from replx.utils.constants import (
 from replx.utils.exceptions import TransportError
 from replx.commands import CmdGroups
 from replx.cli.agent.protocol import AgentProtocol
-from .connection_manager import ConnectionManager, BoardConnection, _detect_device_info
+from .connection_manager import ConnectionManager, BoardConnection
 from .session_manager import SessionManager, Session
 from .command_dispatcher import (
     CommandContext,

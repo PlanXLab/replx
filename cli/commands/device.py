@@ -298,7 +298,7 @@ Run this once per project folder to set up your workspace.
             "[bright_blue]--port[/bright_blue] is required for setup.\n\n"
             "Examples:\n"
             "  [bright_green]replx --port COM3 setup[/bright_green]\n"
-            "  [bright_green]replx --port auto setup[/bright_green]  [dim]# Auto-detect port[/dim]",
+            "  [bright_green]replx --port /dev/ttyACM0 setup[/bright_green]",
             title="Connection Required",
             border_style="yellow"
         )
@@ -504,7 +504,7 @@ Run this once per project folder to set up your workspace.
             "Please check:\n"
             "  • Device is powered on and connected\n"
             "  • Serial cable is properly attached\n\n"
-            "[dim]Run 'replx setup --port PORT' to reconfigure if needed.[/dim]",
+            "[dim]Run 'replx --port PORT setup' to reconfigure if needed.[/dim]",
             title="Connection Error",
             border_style="red"
         )

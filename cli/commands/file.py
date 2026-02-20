@@ -297,7 +297,6 @@ Download files or directories from the device to your computer.
 @app.command(name="cat", rich_help_panel="File Operations")
 def cat(
     remote: str = typer.Argument("", help="Remote file path"),
-    encoding: str = typer.Option("utf-8", help="File encoding for text files"),
     number: bool = typer.Option(False, "-n", "--number", help="Show line numbers"),
     lines: Optional[str] = typer.Option(None, "-L", "--lines", help="Range: lines (text) or bytes (binary)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
@@ -321,7 +320,6 @@ Text files show as-is; binary files show in hex format.
 [bold cyan]Options:[/bold cyan]
   [yellow]-n, --number[/yellow]          Show line numbers (text only)
   [yellow]-L, --lines N:M[/yellow]       Line range (text) or byte range (binary)
-  [yellow]--encoding TEXT[/yellow]       File encoding [dim][default: utf-8][/dim]
 
 [bold cyan]Arguments:[/bold cyan]
   [yellow]FILE[/yellow]      Remote file path [red][required][/red]

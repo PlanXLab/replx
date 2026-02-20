@@ -12,11 +12,10 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.live import Live
-from rich.spinner import Spinner
 
 from ..helpers import (
     OutputHelper, StoreManager, InstallHelper, SearchHelper, RegistryHelper,
-    DeviceValidator, CompilerHelper,
+    CompilerHelper,
     get_panel_box, CONSOLE_WIDTH
 )
 from replx.utils import device_name_to_path
@@ -442,12 +441,6 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
     
     core_exists_remote = core in cores if core else False
     device_exists_remote = (device_name_to_path(dev) in devices if dev else False) and (dev != core)
-    
-    core_src_path = os.path.join(StoreManager.pkg_root(), "core", core, "src") if core else ""
-    device_src_path = os.path.join(StoreManager.pkg_root(), "device", device_name_to_path(dev), "src") if dev and dev != core else ""
-    
-    core_exists_local = os.path.isdir(core_src_path) if core_src_path else False
-    device_exists_local = os.path.isdir(device_src_path) if device_src_path else False
     
     if not core_exists_remote:
         OutputHelper.print_panel(
@@ -960,7 +953,6 @@ def _install_spec_internal(spec: str, live=None, update_callback=None):
                 while upload_thread.is_alive():
                     with progress_lock:
                         bytes_sent = progress_state["bytes_sent"]
-                        bytes_total = progress_state["bytes_total"]
                         cumulative = progress_state["cumulative_bytes"]
                     
                     total_sent = cumulative + bytes_sent
@@ -1034,9 +1026,6 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None):
             target_dir = target_path
         else:
             target_dir = "lib"
-        
-        total = len(py_files)
-        base = os.getcwd()
         
         compiled_files = []
         total_size = 0

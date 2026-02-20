@@ -11,8 +11,6 @@ from replx.utils.constants import (
     CTRL_B,
     CTRL_C,
     REPL_PROMPT,
-    SERIAL_TIMEOUT,
-    SERIAL_WRITE_TIMEOUT,
 )
 
 
@@ -210,7 +208,6 @@ class DeviceScanner:
         device = port_info.device.lower()
         description = port_info.description.lower() if port_info.description else ""
         vid = port_info.vid  # USB Vendor ID
-        pid = port_info.pid  # USB Product ID
         
         # Skip if it's a Bluetooth port
         if DeviceScanner.is_bluetooth_port(port_info):

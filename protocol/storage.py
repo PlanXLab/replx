@@ -804,7 +804,7 @@ if chunk:
                     if progress_callback:
                         progress_callback(total, total)
                         
-                except Exception as e:
+                except Exception:
                     # Ensure file handle is closed on error
                     if file_opened:
                         try:

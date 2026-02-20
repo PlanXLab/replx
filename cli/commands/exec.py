@@ -865,7 +865,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
             if cmd == "ls":
                 ls(path="/", recursive=False, show_help=True)
             elif cmd == "cat":
-                cat(remote="", encoding="utf-8", show_help=True)
+                cat(remote="", show_help=True)
             elif cmd == "cp":
                 cp(args=None, recursive=False, show_help=True)
             elif cmd == "mv":
@@ -1038,7 +1038,6 @@ Manage WiFi connection.
                 number = False
                 lines_opt = None
                 file_arg = None
-                encoding = "utf-8"
                 
                 i = 1
                 while i < len(args):
@@ -1049,10 +1048,6 @@ Manage WiFi connection.
                         if i + 1 < len(args):
                             lines_opt = args[i + 1]
                             i += 1
-                    elif arg in ("-e", "--encoding"):
-                        if i + 1 < len(args):
-                            encoding = args[i + 1]
-                            i += 1
                     elif not arg.startswith('-'):
                         file_arg = arg
                     i += 1
@@ -1062,7 +1057,7 @@ Manage WiFi connection.
                     return
                     
                 remote = posixpath.normpath(posixpath.join(current_path, file_arg))
-                cat(remote=remote, encoding=encoding, number=number, lines=lines_opt, show_help=False)
+                cat(remote=remote, number=number, lines=lines_opt, show_help=False)
                 return
                 
             elif cmd == "cp":

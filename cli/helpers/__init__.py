@@ -3,7 +3,6 @@ Helpers Package
 
 This package contains domain-separated helper utilities for the CLI.
 """
-import sys
 from rich.box import ROUNDED, HORIZONTALS
 
 # Panel box style: "rounded" (4-side box) or "horizontals" (top/bottom only)

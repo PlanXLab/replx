@@ -334,7 +334,7 @@ def _print_main_help():
     lines.append("[bold cyan]Global Options:[/bold cyan]")
     lines.append("  [yellow]-p, --port[/yellow] [cyan]PORT[/cyan]       Serial port [dim](COM3, /dev/ttyUSB0)[/dim]")
     lines.append("  [dim] 󱞩 [cyan]PORT[/cyan] can be used alone without the -p flag[/dim]")
-    lines.append("  [dim] 󱞩 scan, status, whoami, shutdown ignore these options[/dim]")
+    lines.append("  [dim] 󱞩 setup requires an explicit port[/dim]")
 
     # Command groups - descriptions match first line of each command's help_text
     command_groups = [
@@ -428,7 +428,7 @@ def cli(
     """
     MicroPython REPL tool for device management.
     
-    Use 'replx setup --port PORT' to connect, then run commands.
+    Use 'replx --port PORT setup' to connect, then run commands.
     """
     
     # Store global options in module-level storage for access by all commands
