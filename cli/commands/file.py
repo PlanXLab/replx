@@ -63,7 +63,7 @@ Download files or directories from the device to your computer.
 
 [bold cyan]Related:[/bold cyan]
   replx put local /remote   [dim]# Upload files instead[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -339,7 +339,7 @@ Text files show as-is; binary files show in hex format.
 
 [bold cyan]Related:[/bold cyan]
   replx get file ./       [dim]# Download to local machine[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -477,14 +477,11 @@ Text files show as-is; binary files show in hex format.
         range_info = f" (bytes {start_byte}-{end_byte})" if lines else f" ({total_bytes} bytes)"
         title = f"Binary File (Hex): {display_remote}{range_info}"
         
-        console = Console(width=CONSOLE_WIDTH)
-        console.print(Panel(
+        OutputHelper.print_panel(
             hex_output,
             title=title,
-            border_style="blue",
-            box=get_panel_box(),
-            width=CONSOLE_WIDTH
-        ))
+            border_style="blue"
+        )
         return  # Binary file handled, exit early
     else:
         # Text file - content is string from server
@@ -544,7 +541,6 @@ Text files show as-is; binary files show in hex format.
     # Use syntax highlighting for supported file types (text files only)
     if language and not is_binary:
         from rich.syntax import Syntax
-        console = Console(width=CONSOLE_WIDTH)
         
         # Create syntax-highlighted content
         syntax = Syntax(
@@ -555,15 +551,12 @@ Text files show as-is; binary files show in hex format.
             start_line=start_line if number else 1,
             word_wrap=False
         )
-        
-        # Print in a panel
-        console.print(Panel(
+
+        OutputHelper.print_panel(
             syntax,
             title=title,
-            border_style="blue",
-            box=get_panel_box(),
-            width=CONSOLE_WIDTH
-        ))
+            border_style="blue"
+        )
     else:
         # Plain text or binary - use existing panel
         OutputHelper.print_panel(
@@ -607,7 +600,7 @@ Create directories on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx rm -r /dir          [dim]# Remove directory[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -722,7 +715,7 @@ Delete files or directories from the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx get file ./         [dim]# Backup before deleting[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -1027,7 +1020,7 @@ Copy files or directories on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx mv src dest       [dim]# Move instead of copy[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -1312,7 +1305,7 @@ Move or rename files and directories on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx cp src dest       [dim]# Copy instead of move[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -1570,7 +1563,7 @@ Create empty files on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx put file /        [dim]# Upload file with content[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -1662,7 +1655,7 @@ List files and directories on the connected device.
 [bold cyan]Related:[/bold cyan]
   replx cat file.py     [dim]# View file contents[/dim]
   replx get file ./     [dim]# Download file[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -1869,7 +1862,7 @@ Upload files or directories from your computer to the device.
 [bold cyan]Related:[/bold cyan]
   replx get remote local    [dim]# Download files instead[/dim]
   replx pkg update ./file.py   [dim]# Install with .mpy compilation[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     

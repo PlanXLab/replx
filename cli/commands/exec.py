@@ -6,6 +6,10 @@ import threading
 import posixpath
 import signal
 import shlex
+import hashlib
+import subprocess
+import shutil
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -26,6 +30,108 @@ from ..app import app
 
 from .file import ls, cat, cp, mv, rm, mkdir, touch
 from .device import usage
+
+
+def _resolve_vscode_command() -> list[str] | None:
+    candidates = ["code", "code-insiders", "codium"]
+    comspec = os.environ.get("COMSPEC", "cmd.exe")
+
+    for name in candidates:
+        found = shutil.which(name)
+        if found:
+            lower = found.lower()
+            if lower.endswith(".cmd") or lower.endswith(".bat"):
+                return [comspec, "/c", found]
+            if sys.platform.startswith("win") and lower.endswith(".exe"):
+                exe_path = Path(found)
+                cmd_name = "code-insiders.cmd" if "insiders" in lower else "code.cmd"
+                cmd_path = exe_path.parent / "bin" / cmd_name
+                if cmd_path.exists():
+                    return [comspec, "/c", str(cmd_path)]
+            return [found]
+
+    if sys.platform.startswith("win"):
+        win_paths = [
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Microsoft VS Code" / "Code.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Microsoft VS Code Insiders" / "Code - Insiders.exe",
+            Path(os.environ.get("ProgramFiles", "")) / "Microsoft VS Code" / "Code.exe",
+            Path(os.environ.get("ProgramFiles", "")) / "Microsoft VS Code Insiders" / "Code - Insiders.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "")) / "Microsoft VS Code" / "Code.exe",
+        ]
+        for path in win_paths:
+            if str(path) and path.exists():
+                cmd_name = "code-insiders.cmd" if "insiders" in path.name.lower() else "code.cmd"
+                cmd_path = path.parent / "bin" / cmd_name
+                if cmd_path.exists():
+                    return [comspec, "/c", str(cmd_path)]
+                return [str(path)]
+
+    return None
+
+
+def _file_md5(path: str) -> str | None:
+    try:
+        with open(path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except Exception:
+        return None
+
+
+def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> bool:
+    vscode_cmd = _resolve_vscode_command()
+
+    if vscode_cmd:
+        start_ts = time.monotonic()
+        proc = subprocess.Popen(vscode_cmd + ["--reuse-window", "--wait", local_path])
+
+        last_seen_hash = original_hash
+        changed_stable_since = None
+        timeout_sec = 120
+
+        while True:
+            now = time.monotonic()
+            elapsed = now - start_ts
+
+            current_hash = _file_md5(local_path)
+            hash_changed = bool(original_hash and current_hash and current_hash != original_hash)
+
+            if hash_changed:
+                if changed_stable_since is None or current_hash != last_seen_hash:
+                    changed_stable_since = now
+                    last_seen_hash = current_hash
+                elif now - changed_stable_since >= 0.4:
+                    # Edited content has settled; continue even if VSCode --wait is stuck.
+                    return True
+            else:
+                changed_stable_since = None
+
+            rc = proc.poll()
+            if rc is not None:
+                if rc != 0:
+                    return False
+                return True
+
+            if elapsed >= timeout_sec:
+                # Some VSCode setups may not release --wait reliably.
+                # Do not auto-finish while user may still be editing.
+                print("Waiting for editor close is taking longer than expected.")
+                input("After closing the editor tab/window, press Enter to continue...")
+                return True
+
+            time.sleep(0.1)
+
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(local_path)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", local_path], check=False)
+        else:
+            subprocess.run(["xdg-open", local_path], check=False)
+        print("Editor command not found in PATH. Opened file with default editor.")
+        input("After saving and closing the file, press Enter to continue...")
+        return True
+    except Exception:
+        return False
 
 
 @app.command(name="exec", rich_help_panel="Execution")
@@ -71,7 +177,7 @@ Quick way to execute code without creating a file.
 [bold cyan]Related:[/bold cyan]
   replx run script.py     [dim]# Run script file instead[/dim]
   replx repl              [dim]# Interactive MicroPython prompt[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -142,7 +248,7 @@ By default, runs a file from your computer. Use -d to run from device.
 [bold cyan]Related:[/bold cyan]
   replx -c "code"         [dim]# Run single command instead[/dim]
   replx repl              [dim]# Interactive mode[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -551,7 +657,7 @@ Start a live MicroPython session where you can type code line by line.
 [bold cyan]Related:[/bold cyan]
   replx shell             [dim]# Interactive file management[/dim]
   replx -c "code"         [dim]# Single command instead[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -770,7 +876,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
 
 [bold cyan]Related:[/bold cyan]
   replx repl              [dim]# Interactive MicroPython instead[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -831,7 +937,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
             
             "edit": """\
 [bold cyan]Usage:[/bold cyan]
-  edit [yellow]FILE[/yellow]
+    edit [yellow]FILE[/yellow]
 
 [bold cyan]Description:[/bold cyan]
   Edit a file from device in VSCode
@@ -840,8 +946,8 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
   - Prompts to upload if file was modified
 
 [bold cyan]Examples:[/bold cyan]
-  edit main.py        [dim]# Edit main.py[/dim]
-  edit /lib/utils.py  [dim]# Edit with absolute path[/dim]""",
+    edit main.py        [dim]# Edit main.py[/dim]
+    edit /lib/utils.py  [dim]# Edit with absolute path[/dim]""",
             
             "help": """\
 [bold cyan]Usage:[/bold cyan]
@@ -1208,11 +1314,11 @@ Manage WiFi connection.
                 if "--help" in args or "-h" in args:
                     print_shell_help("edit")
                     return
-                    
+
                 if len(args) != 2:
                     print("Usage: edit <file>")
                     return
-                
+
                 file_arg = args[1]
                 if file_arg.startswith('/'):
                     remote_path = file_arg
@@ -1255,15 +1361,13 @@ Manage WiFi connection.
                         original_hash = hashlib.md5(f.read()).hexdigest()
                     
                     print("Opening in VSCode... (close the file tab to continue)")
-                    try:
-                        subprocess.run(['code', '--wait', local_path], shell=True)
-                    except FileNotFoundError:
-                        print("Error: 'code' command not found. Make sure VSCode is in PATH.")
+                    if not _open_editor_and_wait(local_path, original_hash):
+                        print("Error: Could not open editor. Install VSCode or configure the 'code' command.")
                         return
                     
                     with open(local_path, 'rb') as f:
                         new_hash = hashlib.md5(f.read()).hexdigest()
-                    
+
                     if new_hash == original_hash:
                         print("No changes detected.")
                     else:
@@ -1402,7 +1506,7 @@ Reset the connected MicroPython device.
   
 [bold cyan]Note:[/bold cyan]
   Both resets run boot.py → main.py sequence after restart."""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     

@@ -285,7 +285,7 @@ Firmware management for RP2350-based ticle devices.
   • Supported: ticle-lite, ticle-sensor, ticle-autocon, etc.
   • USB connection required (RP2350 devices only)
   • Old versions auto-cleaned, keeps only latest"""
-        OutputHelper._console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         OutputHelper._console.print()
         raise typer.Exit()
     

@@ -322,8 +322,6 @@ app = typer.Typer(
 
 
 def _print_main_help():
-    console = Console(width=CONSOLE_WIDTH)
-    
     lines = []
     lines.append("[bold]MicroPython development tool for VSCode[/bold]")
     lines.append("[dim]Connect, manage files, run code, and develop on MicroPython boards[/dim]")
@@ -389,13 +387,11 @@ def _print_main_help():
     lines.append("")
     lines.append("[dim]Use 'replx COMMAND --help' for detailed help on each command.[/dim]")
     
-    console.print(Panel(
+    OutputHelper.print_panel(
         "\n".join(lines),
         title="replx",
-        border_style="bright_blue",
-        box=get_panel_box(),
-        width=CONSOLE_WIDTH
-    ))
+        border_style="bright_blue"
+    )
 
 
 # =============================================================================

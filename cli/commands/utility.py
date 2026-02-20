@@ -116,7 +116,7 @@ Show replx version information.
 [bold cyan]Examples:[/bold cyan]
   replx version           [dim]# Show version[/dim]
   replx -v                [dim]# Same as above[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -475,15 +475,12 @@ def _print_session_list_status(sessions_data, current_ppid):
     text_content = Text.from_ansi(output_text)
     text_content.no_wrap = True
     
-    panel = Panel(
+    OutputHelper.print_panel(
         text_content,
         title="Sessions",
         title_align="left",
-        border_style="cyan",
-        box=get_panel_box(),
-        width=CONSOLE_WIDTH
+        border_style="cyan"
     )
-    Console(width=CONSOLE_WIDTH).print(panel)
 
 
 @app.command(rich_help_panel="Connection & Session")
@@ -530,7 +527,7 @@ Displays a table of all terminal sessions with their connected boards.
 [bold cyan]Related:[/bold cyan]
   replx fg COM3         [dim]# Switch FG to different board[/dim]
   replx disconnect      [dim]# Release current FG connection[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -594,7 +591,7 @@ When you have multiple boards connected, use this to switch between them.
 
 [bold cyan]Related:[/bold cyan]
   replx status            [dim]# See all active connections[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -721,7 +718,7 @@ Quickly check your active foreground connection.
 
 [bold cyan]Related:[/bold cyan]
   replx status            [dim]# See all active connections[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -807,7 +804,7 @@ The connection is closed and removed from ALL sessions that reference it.
 
 [bold cyan]Related:[/bold cyan]
   replx shutdown          [dim]# Stop ALL connections and agent[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -939,7 +936,7 @@ This is the "full cleanup" command - stops everything.
 
 [bold cyan]Related:[/bold cyan]
   replx disconnect        [dim]# Release only one connection[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -986,7 +983,7 @@ Format (erase) the filesystem on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx init              [dim]# Format AND install libraries[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -1124,7 +1121,7 @@ Completely reset device: format filesystem and install all libraries.
 [bold cyan]Related:[/bold cyan]
   replx format            [dim]# Just erase (no install)[/dim]
   replx pkg update        [dim]# Just install (no format)[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     

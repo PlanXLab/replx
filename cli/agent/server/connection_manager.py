@@ -84,6 +84,7 @@ class InteractiveSessionState:
             self.detached = False
 
     def stop(self):
+        thread_to_join = None
         with self.lock:
             self.active = False
             self.ppid = None
@@ -91,7 +92,11 @@ class InteractiveSessionState:
             self.client_addr = None
             self.input_queue = []
             self.stop_requested = False
+            thread_to_join = self.thread
             self.thread = None
+
+        if thread_to_join and thread_to_join.is_alive() and thread_to_join is not threading.current_thread():
+            thread_to_join.join(timeout=1)
 
     def is_owner(self, ppid: int) -> bool:
         with self.lock:
@@ -516,6 +521,12 @@ class ConnectionManager:
 
         # Stop detached script first (this waits for drain thread)
         conn.stop_detached()
+
+        # Stop REPL/interactive workers before transport close to release serial handle promptly.
+        if conn.repl.active:
+            conn.repl.stop()
+        if conn.interactive.active:
+            conn.interactive.stop()
         
         # Release busy state
         conn.release()

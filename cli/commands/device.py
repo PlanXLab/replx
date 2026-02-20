@@ -280,7 +280,7 @@ Run this once per project folder to set up your workspace.
 [bold cyan]Note:[/bold cyan]
   Connection is remembered. After setup, just use [green]replx ls[/green] without port.
   To switch boards, run setup again with the new port."""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -626,7 +626,7 @@ Show memory and storage usage of the connected device.
 [bold cyan]Related:[/bold cyan]
   replx whoami              [dim]# See connected device info[/dim]
   replx ls -r               [dim]# See what's using storage[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -722,7 +722,7 @@ Scans all serial ports to detect MicroPython devices.
 
 [bold cyan]Related:[/bold cyan]
   replx COM3 setup        [dim]# Connect to a scanned board[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
 
@@ -898,6 +898,7 @@ Scans all serial ports to detect MicroPython devices.
     
     if has_serial:
         temp_console.print(serial_table)
+        temp_console.print("[dim]  󱓦 connected    󰷌 default[/dim]")
     else:
         temp_console.print("  [dim]No serial devices found[/dim]")
     
@@ -906,14 +907,12 @@ Scans all serial ports to detect MicroPython devices.
     text_content = Text.from_ansi(output_text)
     text_content.no_wrap = True
     
-    panel = Panel(
+    OutputHelper.print_panel(
         text_content,
         title="MicroPython Devices",
         border_style="cyan",
-        box=get_panel_box(),
-        width=CONSOLE_WIDTH
+        title_align="left"
     )
-    Console(width=CONSOLE_WIDTH).print(panel)
 
 
 @app.command(rich_help_panel="Device Management")
@@ -954,7 +953,7 @@ Manage WiFi connection on the connected device.
 [bold cyan]Note:[/bold cyan]
   • Credentials saved to /wifi_config.py on device
   • boot on: Non-blocking (no boot delay)"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     

@@ -26,7 +26,7 @@ class OutputHelper:
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     
-    _console = Console()
+    _console = Console(width=CONSOLE_WIDTH, legacy_windows=False)
     PANEL_WIDTH = None
 
     @staticmethod

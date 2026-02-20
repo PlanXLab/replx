@@ -101,7 +101,6 @@ def pkg(
     repo: str = typer.Option("replx_libs", help="GitHub repo name (for search/download)"),
     ref: str = typer.Option("main", help="Git reference (for search/download)"),
     target: Optional[str] = typer.Option(None, "--target", "-t", help="Board target path for update (e.g., lib/ticle)"),
-    height: Optional[int] = typer.Option(None, "--height", help="Fixed panel height for search results (no scrolling)", min=5, max=200),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
@@ -152,7 +151,7 @@ Package management for MicroPython devices.
     [dim]• GITHUB: raw.githubusercontent.com [/dim]
     [dim]• e.g. OWNER: micropython | REPO: micropython-lib | BRANCH: master[/dim]
     [dim]• e.g. path: micropython/umqtt.simple/umqtt | file.py: simple.py[/dim]"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
@@ -176,7 +175,7 @@ Package management for MicroPython devices.
     target_path = target.lstrip("/").rstrip("/") if target else None
     
     if cmd == "search":
-        _pkg_search(cmd_args, owner, repo, ref, height=height)
+        _pkg_search(cmd_args, owner, repo, ref)
     elif cmd == "download":
         _pkg_download(cmd_args, owner, repo, ref)
     elif cmd == "update":
@@ -193,7 +192,7 @@ Package management for MicroPython devices.
         raise typer.Exit(1)
 
 
-def _pkg_search(args: list[str], owner: str, repo: str, ref: str, *, height: Optional[int] = None):
+def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
     status = _ensure_connected()
     
     lib_name = args[0] if args else None
@@ -402,7 +401,6 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str, *, height: Opt
         "\n".join(lines),
         title=f"Search Results [{owner}/{repo}@{ref}]",
         border_style="magenta",
-        height=height,
     )
 
 
@@ -1508,7 +1506,7 @@ Compile Python files to MicroPython bytecode (.mpy).
 [bold cyan]Note:[/bold cyan]
   • Requires board connection (architecture auto-detected)
   • Compiled .mpy files are smaller and use less RAM"""
-        console.print(Panel(help_text, border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+        OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
     
