@@ -1,13 +1,3 @@
-"""
-Configuration management for replx CLI.
-
-Handles:
-- .replx INI file reading/writing
-- Connection configuration management
-- Agent port allocation
-- Connection resolution (global option -> session -> default)
-"""
-
 import os
 import sys
 from dataclasses import dataclass
@@ -16,13 +6,8 @@ from typing import Optional, Dict, Any
 from replx.utils.constants import DEFAULT_AGENT_PORT, MAX_AGENT_PORT
 
 
-# ============================================================================
-# Runtime State
-# ============================================================================
-
 @dataclass
 class RuntimeState:
-    """Global runtime state for the current session."""
     version: str = "?"
     core: str = ""
     device: str = ""
@@ -32,13 +17,7 @@ class RuntimeState:
     device_path: str = ""
 
 
-# Singleton instance
 STATE = RuntimeState()
-
-
-# ============================================================================
-# Global Options (set by CLI callback)
-# ============================================================================
 
 class GlobalOptions:
     """Global CLI options storage."""
@@ -69,53 +48,26 @@ class GlobalOptions:
         self._agent_port = value
     
     def set(self, port: str = None, agent_port: int = None):
-        """Set global options."""
         self._port = port
         self._agent_port = agent_port
     
     def get(self) -> Dict[str, Any]:
-        """Get all global options as dict."""
         return {
             'port': self._port,
             'agent_port': self._agent_port
         }
     
     def clear(self):
-        """Clear all global options."""
         self._port = None
         self._agent_port = None
 
 
-# Singleton instance
 GLOBAL_OPTIONS = GlobalOptions()
 
-
-# ============================================================================
-# Environment File Management
-# ============================================================================
-
 class ConfigManager:
-    """
-    Manages .replx configuration file (INI format).
-    
-    File format:
-        [COM3]
-        VERSION=1.24.1
-        CORE=RP2350
-        DEVICE=ticle
-        MANUFACTURER=Raspberry Pi
-        
-        [DEFAULT]
-        CONNECTION=COM3
-    """
-    
+   
     @staticmethod
     def find_env_file() -> Optional[str]:
-        """Find .vscode/.replx file by searching up from current directory.
-        
-        Handles symlinks properly on all platforms.
-        """
-        # Use realpath to resolve symlinks
         current = os.path.realpath(os.getcwd())
         root = os.path.abspath(os.sep)
         
@@ -133,11 +85,6 @@ class ConfigManager:
     
     @staticmethod
     def find_or_create_vscode_dir() -> str:
-        """Find existing .vscode directory or create one in current directory.
-        
-        Handles symlinks properly on all platforms.
-        """
-        # Use realpath to resolve symlinks
         current = os.path.realpath(os.getcwd())
         root = os.path.abspath(os.sep)
         
@@ -153,26 +100,12 @@ class ConfigManager:
                 break
             search_dir = parent
         
-        # Not found, create in current directory
         vscode_dir = os.path.join(current, ".vscode")
         os.makedirs(vscode_dir, exist_ok=True)
         return vscode_dir
     
     @staticmethod
     def read(env_path: str) -> dict:
-        """
-        Read INI-style .replx file.
-        
-        Returns:
-            dict with structure:
-            {
-                'connections': {
-                    'COM3': {'version': '...', 'core': '...', ...},
-                    ...
-                },
-                'default': 'COM3'
-            }
-        """
         result = {
             'connections': {},
             'default': None
@@ -190,18 +123,15 @@ class ConfigManager:
             for line in content.splitlines():
                 line = line.strip()
                 
-                # Skip empty lines and comments
                 if not line or line.startswith('#'):
                     continue
                 
-                # Section header
                 if line.startswith('[') and line.endswith(']'):
                     current_section = line[1:-1].strip()
                     if current_section.upper() != 'DEFAULT':
                         result['connections'][current_section] = {}
                     continue
                 
-                # Key=Value pairs
                 if '=' in line and current_section:
                     key, value = line.split('=', 1)
                     key = key.strip().upper()
@@ -229,17 +159,8 @@ class ConfigManager:
     
     @staticmethod
     def write(env_path: str, connections: dict, default: Optional[str] = None):
-        """
-        Write INI-style .replx file.
-        
-        Args:
-            env_path: Path to .replx file
-            connections: Dict of connection configs
-            default: Default connection key
-        """
         lines = []
         
-        # Write connection sections
         for conn_key, conn_data in connections.items():
             lines.append(f'[{conn_key}]')
             if conn_data.get('version'):
@@ -254,13 +175,11 @@ class ConfigManager:
                 lines.append(f"SERIAL_PORT={conn_data['serial_port']}")
             lines.append('')
         
-        # Write DEFAULT section
         if default:
             lines.append('[DEFAULT]')
             lines.append(f'CONNECTION={default}')
             lines.append('')
         
-        # Ensure directory exists
         os.makedirs(os.path.dirname(env_path), exist_ok=True)
         
         with open(env_path, 'w', encoding='utf-8') as f:
@@ -268,16 +187,13 @@ class ConfigManager:
     
     @staticmethod
     def get_connection(env_path: str, connection: str) -> Optional[dict]:
-        """Get configuration for a specific connection."""
         env_data = ConfigManager.read(env_path)
         if not connection:
             return None
 
-        # Exact match first
         if connection in env_data.get('connections', {}):
             return env_data['connections'][connection]
 
-        # Windows COM ports are case-insensitive; fall back to case-insensitive lookup.
         if sys.platform.startswith("win"):
             needle = str(connection).lower()
             for key, value in env_data.get('connections', {}).items():
@@ -293,17 +209,8 @@ class ConfigManager:
                           serial_port: str = None,
                           agent_port: int = None,
                           set_default: bool = False):
-        """Update or add a connection configuration."""
 
         def _resolve_os_serial_port_name(port: str) -> str:
-            """Resolve port name to the OS-enumerated casing.
-
-            Policy:
-            - Store the port name exactly as the OS/pyserial reports it.
-            - Windows COM ports are case-insensitive, but the OS typically
-              enumerates them as 'COM{n}'. If the user provides 'com1', rewrite
-              to 'COM1' when possible.
-            """
             if not port:
                 return port
             p = str(port).strip()
@@ -321,19 +228,16 @@ class ConfigManager:
                 pass
             return p
 
-        # Normalize incoming connection name to OS-enumerated spelling (Windows).
         desired_key = _resolve_os_serial_port_name(connection)
 
         env_data = ConfigManager.read(env_path)
         
-        # Find existing connection
         existing_key = None
         for key in env_data.get('connections', {}):
             if key == desired_key:
                 existing_key = key
                 break
 
-        # Windows: case-insensitive match for COM ports to avoid duplicate sections
         if existing_key is None and sys.platform.startswith("win") and desired_key:
             needle = str(desired_key).lower()
             for key in env_data.get('connections', {}):
@@ -341,14 +245,11 @@ class ConfigManager:
                     existing_key = key
                     break
 
-        # If we found an existing connection differing only by case, rename it to desired_key
-        # so .replx stores the OS-provided port spelling.
         conn_key = None
         if existing_key:
             if sys.platform.startswith("win") and desired_key and existing_key != desired_key:
                 conns = env_data.get('connections', {})
                 if desired_key in conns and desired_key != existing_key:
-                    # Merge: keep existing desired_key values, fill missing from old.
                     merged = dict(conns[desired_key] or {})
                     for k, v in (conns[existing_key] or {}).items():
                         if k not in merged:
@@ -386,7 +287,6 @@ class ConfigManager:
         if agent_port is not None:
             conn['agent_port'] = agent_port
         
-        # Set default using the actual key (preserves case on all platforms)
         if set_default:
             env_data['default'] = conn_key
         
@@ -394,42 +294,26 @@ class ConfigManager:
     
     @staticmethod
     def get_default(env_path: str) -> Optional[str]:
-        """Get the default connection from .replx file."""
         env_data = ConfigManager.read(env_path)
         return env_data.get('default')
 
 
-# ============================================================================
-# Agent Port Allocation
-# ============================================================================
-
 class AgentPortManager:
-    """Manages agent port allocation."""
     
     @staticmethod
     def find_available_port(env_path: str = None) -> int:
-        """
-        Find an available agent port.
-        
-        Rules:
-        1. Start from DEFAULT_AGENT_PORT (49152)
-        2. Skip ports that are registered and have responding agents
-        """
         from .agent.client import AgentClient
         
         env_data = ConfigManager.read(env_path) if env_path and os.path.exists(env_path) else {'connections': {}}
         
-        # Collect registered ports
         registered_ports = {}
         for conn_key, conn_data in env_data['connections'].items():
             port = conn_data.get('agent_port')
             if port:
                 registered_ports[port] = conn_key
         
-        # Find first available port
         for port in range(DEFAULT_AGENT_PORT, MAX_AGENT_PORT):
             if port in registered_ports:
-                # Check if agent is actually running
                 if AgentClient.is_agent_running(port=port):
                     continue
             return port
@@ -438,12 +322,6 @@ class AgentPortManager:
     
     @staticmethod
     def find_running_agent(env_path: str = None) -> Optional[int]:
-        """
-        Find an already running agent from .replx connections.
-        
-        Returns:
-            The agent port if a running agent is found, None otherwise.
-        """
         from .agent.client import AgentClient
         
         if not env_path or not os.path.exists(env_path):
@@ -451,14 +329,12 @@ class AgentPortManager:
         
         env_data = ConfigManager.read(env_path)
         
-        # Collect all registered agent ports
         agent_ports = set()
         for conn_key, conn_data in env_data.get('connections', {}).items():
             port = conn_data.get('agent_port')
             if port:
                 agent_ports.add(port)
         
-        # Check if any agent is running
         for port in sorted(agent_ports):
             if AgentClient.is_agent_running(port=port):
                 return port
@@ -466,61 +342,32 @@ class AgentPortManager:
         return None
 
 
-# ============================================================================
-# Connection Resolution
-# ============================================================================
-
 class ConnectionResolver:
-    """
-    Resolves which connection to use based on priority:
-    1. Global option (--port)
-    2. Agent's session foreground (based on PPID)
-    3. .replx DEFAULT
-    """
     
     @staticmethod
     def resolve(global_port: str = None) -> Optional[dict]:
-        """
-        Resolve connection configuration.
-        
-        Returns:
-            dict with:
-            {
-                'connection': 'COM3',
-                'agent_port': 49152,
-                'core': 'RP2350',
-                'device': 'ticle',
-                'source': 'global' | 'session' | 'default'
-            }
-            or None if no connection can be resolved
-        """
         from .agent.client import AgentClient
         
         env_path = ConfigManager.find_env_file()
         
-        # 1. Global option (--port)
         if global_port:
             return ConnectionResolver._resolve_serial(global_port, env_path)
         
-        # 2. Query Agent for session's foreground connection
         if AgentClient.is_agent_running():
             result = ConnectionResolver._resolve_from_session()
             if result:
                 return result
         
-        # 3. DEFAULT from .replx
         return ConnectionResolver._resolve_from_default(env_path)
     
     @staticmethod
     def _resolve_serial(port: str, env_path: str) -> dict:
-        """Resolve serial port connection."""
         conn_key = port
         result = {
             'connection': port,
             'source': 'global'
         }
         
-        # Try to get existing config (use normalized for lookup)
         if env_path:
             config = ConfigManager.get_connection(env_path, conn_key)
             if config:
@@ -528,7 +375,6 @@ class ConnectionResolver:
                 result['core'] = config.get('core')
                 result['device'] = config.get('device')
         
-        # Assign agent port if not found
         if not result.get('agent_port'):
             result['agent_port'] = AgentPortManager.find_available_port(env_path)
         
@@ -536,14 +382,13 @@ class ConnectionResolver:
     
     @staticmethod
     def _resolve_from_session() -> Optional[dict]:
-        """Resolve from current agent session."""
-        from .agent.client import AgentClient
+        from .agent.client import AgentClient, get_cached_session_id
         
         try:
             with AgentClient() as client:
                 session_info = client.send_command('session_info', timeout=1.0)
                 
-                ppid = os.getppid()
+                ppid = get_cached_session_id()
                 for session in session_info.get('sessions', []):
                     if session.get('ppid') == ppid and session.get('foreground'):
                         fg_port = session['foreground']
@@ -564,7 +409,6 @@ class ConnectionResolver:
     
     @staticmethod
     def _resolve_from_default(env_path: str) -> Optional[dict]:
-        """Resolve from .replx DEFAULT."""
         if not env_path:
             return None
         
@@ -584,55 +428,35 @@ class ConnectionResolver:
             'source': 'default'
         }
 
-
-# ============================================================================
-# Backward compatibility aliases (for gradual migration)
-# ============================================================================
-
 def _find_env_file() -> Optional[str]:
-    """Alias for ConfigManager.find_env_file()."""
     return ConfigManager.find_env_file()
 
 def _find_or_create_vscode_dir() -> str:
-    """Alias for ConfigManager.find_or_create_vscode_dir()."""
     return ConfigManager.find_or_create_vscode_dir()
 
 def _read_env_ini(env_path: str) -> dict:
-    """Alias for ConfigManager.read()."""
     return ConfigManager.read(env_path)
 
-def _write_env_ini(env_path: str, connections: dict, default: Optional[str] = None):
-    """Alias for ConfigManager.write()."""
-    return ConfigManager.write(env_path, connections, default)
-
 def _get_connection_config(env_path: str, connection: str) -> Optional[dict]:
-    """Alias for ConfigManager.get_connection()."""
     return ConfigManager.get_connection(env_path, connection)
 
 def _update_connection_config(env_path: str, connection: str, **kwargs):
-    """Alias for ConfigManager.update_connection()."""
     return ConfigManager.update_connection(env_path, connection, **kwargs)
 
 def _get_default_connection(env_path: str) -> Optional[str]:
-    """Alias for ConfigManager.get_default()."""
     return ConfigManager.get_default(env_path)
 
 def _find_available_agent_port(env_path: str) -> int:
-    """Alias for AgentPortManager.find_available_port()."""
     return AgentPortManager.find_available_port(env_path)
 
 def _find_running_agent_port(env_path: str) -> Optional[int]:
-    """Alias for AgentPortManager.find_running_agent()."""
     return AgentPortManager.find_running_agent(env_path)
 
 def _resolve_connection(global_port: str = None) -> Optional[dict]:
-    """Alias for ConnectionResolver.resolve()."""
     return ConnectionResolver.resolve(global_port)
 
 def _set_global_options(port: str = None, agent_port: int = None):
-    """Alias for GLOBAL_OPTIONS.set()."""
     GLOBAL_OPTIONS.set(port, agent_port)
 
 def _get_global_options() -> dict:
-    """Alias for GLOBAL_OPTIONS.get()."""
     return GLOBAL_OPTIONS.get()

@@ -11,12 +11,6 @@ from replx.utils.exceptions import TransportError
 
 
 def _detect_device_info(transport, core: str, device: str = None) -> Tuple[str, str, str, str]:
-    """Detect device information from transport.
-    
-    Returns:
-        Tuple of (version, core, device, manufacturer)
-    """
-    # Use shorter delays on Unix for faster failure on invalid ports
     delay1 = 0.05 if sys.platform != "win32" else 0.1
     delay2 = 0.1 if sys.platform != "win32" else 0.2
     delay3 = 0.1 if sys.platform != "win32" else 0.2
@@ -168,7 +162,6 @@ class BoardConnection:
     last_command_time: float = field(default_factory=time.time)
     _busy_lock: threading.Lock = field(default_factory=threading.Lock)
     
-    # Detached script state (per-connection)
     detached_running: bool = False
     _detached_lock: threading.Lock = field(default_factory=threading.Lock)
     _drain_thread: Optional[threading.Thread] = field(default=None, repr=False)
@@ -208,7 +201,6 @@ class BoardConnection:
             self.busy_client = None
     
     def stop_detached(self):
-        """Stop detached script and drain thread for this connection."""
         with self._detached_lock:
             self.detached_running = False
         
@@ -221,7 +213,6 @@ class ConnectionManager:
         self._connections: Dict[str, BoardConnection] = {}
         self._connections_lock = threading.RLock()
         self._default_port: Optional[str] = None
-        # Cache: maps board_id -> {serial_port}
         self._board_id_cache: Dict[str, Dict[str, str]] = {}
         self._cache_lock = threading.Lock()
 
@@ -239,11 +230,6 @@ class ConnectionManager:
 
     @staticmethod
     def _canon_port(port: Optional[str]) -> Optional[str]:
-        """Canonicalize port keys for internal storage/lookup.
-
-        On Windows, COM ports are case-insensitive; we canonicalize COMx to
-        uppercase so all commands behave consistently.
-        """
         if port is None:
             return None
         p = str(port).strip()
@@ -254,7 +240,6 @@ class ConnectionManager:
         return p
 
     def _resolve_existing_key(self, port: str) -> Optional[str]:
-        """Return the stored key matching `port`, possibly case-insensitively on Windows."""
         if port is None:
             return None
         p = self._canon_port(port)
@@ -306,7 +291,6 @@ class ConnectionManager:
         device: str = None,
         baudrate: int = 115200
     ) -> Tuple[BoardConnection, Optional[str]]:
-        # Store port
         original_port = str(port).strip() if port is not None else ""
         port_key = self._canon_port(original_port)
 
@@ -328,13 +312,10 @@ class ConnectionManager:
             repl_protocol = ReplProtocol(transport)
 
             device_root_fs = "/"
-            # Skip filesystem check if detection already failed (version is "?")
-            # This speeds up failure on invalid ports
             if version != "?":
                 try:
                     result = repl_protocol.exec("import os; print(os.getcwd())")
                     if result:
-                        # exec() returns bytes, decode to string
                         if isinstance(result, bytes):
                             result = result.decode('utf-8', errors='ignore')
                         cwd = result.strip() if result else "/"
@@ -357,7 +338,7 @@ class ConnectionManager:
             )
 
             conn = BoardConnection(
-                port=port_key,  # Canonical key (Windows COM ports uppercased)
+                port=port_key,
                 repl_protocol=repl_protocol,
                 file_system=file_system,
                 core=detected_core,
@@ -376,35 +357,21 @@ class ConnectionManager:
             return None, str(e)
 
     def ensure_board_id(self, port: str) -> Optional[str]:
-        """
-        Lazily query and cache the board's unique ID.
-        Uses machine.unique_id().hex() to get a consistent ID.
-        
-        Args:
-            port: The connection key
-            
-        Returns:
-            The board_id string, or None if query failed
-        """
         conn = self.get_connection(port)
         if not conn or not conn.repl_protocol:
             return None
         
-        # Return cached value if already queried
         if conn.board_id is not None:
             return conn.board_id
         
         try:
-            # Query machine.unique_id().hex()
             result = conn.repl_protocol.exec("import machine; print(machine.unique_id().hex())")
             if result:
-                # exec() returns bytes, decode to string
                 if isinstance(result, bytes):
                     result = result.decode('utf-8', errors='ignore')
                 result = result.strip()
                 if result:
                     conn.board_id = result
-                    # Update board_id cache
                     self._update_board_id_cache(port, conn.board_id)
                     return conn.board_id
         except Exception:
@@ -413,9 +380,6 @@ class ConnectionManager:
         return None
     
     def _update_board_id_cache(self, port: str, board_id: str) -> None:
-        """
-        Update the board_id cache with port mapping.
-        """
         with self._cache_lock:
             if board_id not in self._board_id_cache:
                 self._board_id_cache[board_id] = {}
@@ -423,37 +387,22 @@ class ConnectionManager:
             self._board_id_cache[board_id]["serial_port"] = self._canon_port(port)
     
     def find_conflicting_by_board_id(self, port: str) -> Optional[str]:
-        """
-        Find conflicting connection by comparing board IDs.
-        This is called after ensure_board_id() to detect if the same board
-        is already connected via a different transport.
-        
-        Args:
-            port: The current connection key
-            
-        Returns:
-            The conflicting connection's port key, or None if no conflict
-        """
         conn = self.get_connection(port)
         if not conn or not conn.board_id:
             return None
         
         with self._connections_lock:
             for key, other_conn in self._connections.items():
-                # Skip self
                 if key == port:
                     continue
                 
-                # Skip disconnected
                 if not other_conn.is_connected():
                     continue
                 
-                # Ensure other connection's board_id is queried
                 if other_conn.board_id is None:
                     try:
                         result = other_conn.repl_protocol.exec("import machine; print(machine.unique_id().hex())")
                         if result:
-                            # exec() returns bytes, decode to string
                             if isinstance(result, bytes):
                                 result = result.decode('utf-8', errors='ignore')
                             result = result.strip()
@@ -462,46 +411,28 @@ class ConnectionManager:
                     except Exception:
                         continue
                 
-                # Compare board IDs
                 if other_conn.board_id and other_conn.board_id == conn.board_id:
                     return key
         
         return None
     
     def resolve_board_conflict(self, port: str) -> Optional[str]:
-        """
-        Check for board conflicts using board_id and automatically disconnect
-        the conflicting connection.
-        
-        Args:
-            port: The current connection key
-            
-        Returns:
-            The disconnected port key, or None if no conflict was found/resolved
-        """
-        # First, ensure board_id is queried for this connection
         board_id = self.ensure_board_id(port)
         if not board_id:
             return None
         
-        # Find any conflicting connection
         conflicting_port = self.find_conflicting_by_board_id(port)
         if conflicting_port:
-            # Auto-disconnect the older connection
             self.disconnect(conflicting_port)
             
-            # Reset REPL state of the new connection
             conn = self.get_connection(port)
             if conn and conn.repl_protocol:
                 try:
                     transport = conn.repl_protocol._transport
-                    # Send Ctrl+C to interrupt any ongoing operation
                     transport.write(b'\x03')
                     time.sleep(0.05)
-                    # Send Ctrl+B to enter Normal mode (exit Raw REPL if in it)
                     transport.write(b'\x02')
                     time.sleep(0.1)
-                    # Clear any pending data
                     transport.reset_input_buffer()
                 except Exception:
                     pass
@@ -519,19 +450,15 @@ class ConnectionManager:
 
             conn = self._connections.pop(key)
 
-        # Stop detached script first (this waits for drain thread)
         conn.stop_detached()
 
-        # Stop REPL/interactive workers before transport close to release serial handle promptly.
         if conn.repl.active:
             conn.repl.stop()
         if conn.interactive.active:
             conn.interactive.stop()
         
-        # Release busy state
         conn.release()
 
-        # Close transport outside the lock to avoid potential deadlocks
         if conn.repl_protocol:
             try:
                 transport = conn.repl_protocol._transport
@@ -592,13 +519,6 @@ class ConnectionManager:
         return conn.busy if conn else False
 
     def check_health(self, port: str) -> bool:
-        """Check if the connection to the specified port is still healthy.
-        
-        This method actively tests the serial port to detect disconnection.
-        
-        Returns:
-            True if the connection is healthy, False otherwise.
-        """
         conn = self.get_connection(port)
         if not conn or not conn.repl_protocol:
             return False
@@ -608,14 +528,11 @@ class ConnectionManager:
             if not transport:
                 return False
             
-            # Use check_connection which actively probes the port
             if hasattr(transport, 'check_connection'):
                 return transport.check_connection()
             
-            # Fallback: check is_open property
             return transport.is_open
         except TransportError:
-            # Serial port has been disconnected
             return False
         except Exception:
             return False

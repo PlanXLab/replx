@@ -12,11 +12,6 @@ from ..connection_manager import BoardConnection
 
 
 def _normalize_port(port: str) -> str:
-    """Normalize port name for comparison.
-    
-    Windows: case-insensitive (COM10 == com10)
-    Linux/macOS: case-sensitive (/dev/ttyACM0 != /dev/TTYACM0)
-    """
     if sys.platform.startswith("win"):
         return port.upper()
     else:
@@ -24,16 +19,13 @@ def _normalize_port(port: str) -> str:
 
 
 def _find_connection_by_port(connection_manager, port: str) -> Optional[BoardConnection]:
-    """Find a connection by port, honoring Windows' case-insensitive semantics."""
     if not port:
         return None
 
-    # Try exact match first (preserve original port case where possible)
     conn = connection_manager.get_connection(port)
     if conn:
         return conn
 
-    # Windows: try normalized key, then case-insensitive scan
     if sys.platform.startswith("win"):
         normalized = _normalize_port(port)
         conn = connection_manager.get_connection(normalized)
@@ -69,7 +61,6 @@ class ExecCommandsMixin:
         elif ctx.ppid:
             conn = self._get_active_connection(ctx.ppid)
         
-        # Check if any connection is running a detached script
         all_connections = self.connection_manager.get_all_connections()
         any_detached = any(c.is_detached() for c in all_connections.values())
         
@@ -92,7 +83,6 @@ class ExecCommandsMixin:
                 "board_id": conn.board_id
             }
         
-        # If explicit port was requested but not found, do not fall back
         if ctx.explicit_port:
             return {
                 "running": True,
@@ -110,7 +100,11 @@ class ExecCommandsMixin:
             }
 
         if all_connections:
-            first_port, first_conn = next(iter(all_connections.items()))
+            default_port = getattr(self, '_default_port', None)
+            if default_port and default_port in all_connections:
+                first_port, first_conn = default_port, all_connections[default_port]
+            else:
+                first_port, first_conn = next(iter(all_connections.items()))
             is_this_detached = first_conn.is_detached()
             return {
                 "running": True,
@@ -149,7 +143,6 @@ class ExecCommandsMixin:
         self.connection_manager.disconnect_all()        
         self.session_manager.clear_all_sessions()
         
-        # Close socket to unblock _serve loop immediately
         if self.server_socket:
             try:
                 self.server_socket.close()
@@ -163,7 +156,6 @@ class ExecCommandsMixin:
         if not conn or not conn.repl_protocol:
             raise RuntimeError("Not connected")
         
-        # Stop any detached script on this connection before reset
         if conn.is_detached():
             self._stop_detached_script(conn)
         
@@ -215,7 +207,6 @@ class ExecCommandsMixin:
                 send_error("Interactive session already active on this connection")
                 return
         
-        # Reset board before running to ensure clean state
         repl = conn.repl_protocol
         if conn.is_detached():
             self._stop_detached_script(conn)
@@ -245,7 +236,6 @@ class ExecCommandsMixin:
         thread.start()
     
     def _safe_reset_repl(self, repl):
-        """Reset REPL to clean state after execution."""
         try:
             repl.interrupt()
             time.sleep(0.05)
@@ -294,15 +284,13 @@ class ExecCommandsMixin:
         def data_consumer(chunk: bytes):
             if not chunk:
                 return
-            # Filter control chars and raw REPL prompt
             filtered = chunk.replace(EOF_MARKER, b'').replace(b'\r', b'')
-            # Remove leading '>' (raw REPL prompt) from first chunk only
             if first_chunk[0] and filtered.startswith(b'>'):
                 filtered = filtered[1:]
                 first_chunk[0] = False
             elif first_chunk[0]:
                 first_chunk[0] = False
-            # Remove trailing '>' (raw REPL prompt after execution)
+
             if filtered.endswith(b'>'):
                 filtered = filtered[:-1]
             if not filtered:
@@ -360,7 +348,6 @@ class ExecCommandsMixin:
                 repl._exec(script_data, interactive=False, echo=False, detach=False, 
                           data_consumer=data_consumer)
             except ProtocolError as e:
-                # Store error but don't duplicate - will be sent via completed message
                 conn.interactive.error = str(e)
             finally:
                 input_thread_running[0] = False
@@ -368,7 +355,6 @@ class ExecCommandsMixin:
                 flush_buffer()
             
             conn.interactive.completed = True
-            # Send completion with error (error will be shown in panel, not duplicated in output)
             send_stream(completed=True, error=conn.interactive.error)
             self._safe_reset_repl(repl)
                 
@@ -383,7 +369,6 @@ class ExecCommandsMixin:
         finally:
             input_thread_running[0] = False
             flush_timer_running[0] = False
-            # Wait for threads to finish
             if input_thread.is_alive():
                 input_thread.join(timeout=0.5)
             conn.interactive.stop()
@@ -432,21 +417,16 @@ class ExecCommandsMixin:
         
         repl = conn.repl_protocol
         
-        # Reset board before running to ensure clean state (unlike exec which preserves state)
-        # Stop any detached script first
         if conn.is_detached():
             self._stop_detached_script(conn)
         
-        # Perform soft reset
         repl.reset()
         
-        # Wait for board to stabilize after reset
         time.sleep(0.1)
         
-        # Load script
         if script_path:
             if not os.path.exists(script_path):
-                raise FileNotFoundError(f"Script not found: {script_path}")
+                raise RuntimeError(f"Script not found: {script_path}")
             with open(script_path, 'rb') as f:
                 script_data = f.read()
             display_name = script_path
@@ -457,19 +437,16 @@ class ExecCommandsMixin:
             raise RuntimeError("Either script_path or script_content required")
         
         if detach:
-            # Non-interactive mode: send script and return immediately
             conn.busy = True
             conn.busy_command = 'detached_script'
             
             try:
-                # Ensure we're in normal REPL mode
                 try:
                     repl._leave_repl()
                 except Exception:
                     pass
                 repl._in_raw_repl = False
                 
-                # Clear any pending state
                 repl.interrupt()
                 time.sleep(0.05)
                 repl.interrupt()
@@ -478,7 +455,6 @@ class ExecCommandsMixin:
                 time.sleep(0.1)
                 repl.drain()
                 
-                # Enter paste mode and send script
                 repl.enter_paste_mode()
                 time.sleep(0.2)
                 repl.drain()
@@ -499,7 +475,6 @@ class ExecCommandsMixin:
                 conn.release()
                 raise RuntimeError(f"Script send failed: {e}")
         else:
-            # Blocking mode: execute and wait for result
             try:
                 script_code = script_data.decode('utf-8', errors='replace')
                 output = repl.exec(script_code)

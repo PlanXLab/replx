@@ -217,8 +217,6 @@ class AgentServer(
         if not port:
             raise ValueError("Port is required")
         
-        # Use ConnectionManager's create_serial_connection which properly detects device info
-        # before entering raw REPL mode
         board_conn, error = self.connection_manager.create_serial_connection(
             port=port,
             core=core,
@@ -278,12 +276,7 @@ class AgentServer(
         gc_counter = 0
         while self.running:
             time.sleep(HEARTBEAT_INTERVAL)
-            # IMPORTANT: While REPL/interactive session is active, suspend all
-            # heartbeat maintenance work (including zombie cleanup) to avoid
-            # interfering with long-running terminal interactions.
             all_conns = self.connection_manager.get_all_connections()
-            if all_conns and any(conn.interactive.active or conn.repl.active for conn in all_conns.values()):
-                continue
 
             zombie_check_counter += 1
             gc_counter += 1

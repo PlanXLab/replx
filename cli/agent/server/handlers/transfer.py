@@ -235,22 +235,16 @@ class TransferCommandsMixin:
                 for item in file_items:
                     rel_path, size, is_dir = item
 
-                    # For root directory downloads, rel_path is already the full path without leading /
-                    # For subdirectory downloads, we need to strip the base name
                     is_root_download = (remote_normalized == conn.device_root_fs.rstrip('/') or 
                                        remote_normalized == '/')
                     
                     if is_root_download:
-                        # Root download: rel_path like "/boot.py" or "/lib/ticle/utools.mpy"
-                        # Strip leading slash for local path construction
                         relative = rel_path.lstrip('/')
-                        # Ensure remote_file has proper format
                         if rel_path.startswith('/'):
                             remote_file = rel_path
                         else:
                             remote_file = '/' + rel_path
                     else:
-                        # Subdirectory download
                         base_name = posixpath.basename(remote_normalized)
                         if base_name and rel_path.startswith(base_name + '/'):
                             relative = rel_path[len(base_name) + 1:]
@@ -259,7 +253,6 @@ class TransferCommandsMixin:
                         else:
                             relative = rel_path
                         
-                        # Construct remote file path
                         if rel_path.startswith('/'):
                             remote_file = rel_path
                         else:
@@ -496,22 +489,18 @@ class TransferCommandsMixin:
                     except Exception:
                         pass
 
-                # Upload files one by one with individual error handling
                 files_uploaded = 0
                 for local_file, remote_file, filename in file_specs:
                     max_retries = 3
                     for retry in range(max_retries):
                         try:
-                            # Force clean REPL state before each file upload (especially after errors)
                             if retry > 0:
                                 try:
-                                    # After error, force REPL resync
                                     conn.file_system.repl._in_raw_repl = False
                                     conn.file_system.repl._enter_repl()
                                 except Exception:
                                     pass
                             
-                            # Clean up any leftover file handles
                             if files_uploaded > 0 or retry > 0:
                                 try:
                                     with conn.file_system.repl.session():
@@ -522,7 +511,6 @@ class TransferCommandsMixin:
                             conn.file_system.put(local_file, remote_file)
                             files_uploaded += 1
                             
-                            # Send progress update
                             progress_msg = AgentProtocol.create_progress_stream(seq, {
                                 "current": files_uploaded,
                                 "total": total_files,
@@ -531,15 +519,13 @@ class TransferCommandsMixin:
                             })
                             progress_data = AgentProtocol.encode_message(progress_msg)
                             self.server_socket.sendto(progress_data, client_addr)
-                            break  # Success, move to next file
+                            break
                             
                         except Exception as e:
                             if retry == max_retries - 1:
-                                # Last retry failed - log error but continue with other files
                                 import sys
                                 print(f"Warning: Failed to upload {filename} after {max_retries} attempts: {e}", file=sys.stderr)
                             else:
-                                # Wait longer before retry
                                 time.sleep(0.5)
 
                 final_response = AgentProtocol.create_response(seq=seq, result={

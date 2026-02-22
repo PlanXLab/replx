@@ -1,12 +1,3 @@
-"""
-Connection management utilities for CLI commands.
-
-This module provides connection-related functionality used across CLI commands:
-- Agent client creation and management
-- Connection establishment and validation
-- Error handling for connection issues
-"""
-
 import os
 import sys
 from typing import Optional
@@ -26,10 +17,6 @@ from .config import (
 )
 
 def _print_auto_connect_info(port: str, version: str, core: str, device: str, manufacturer: str = ""):
-    """
-    Print auto-connect notification when automatically connecting to default board.
-    Similar to 'replx whoami' output but with different title.
-    """
     port_disp = OutputHelper.format_port(port)
     OutputHelper.print_panel(
         f"[bright_green]{port_disp}[/bright_green]  {version}  {core}  [bright_green]{device}[/bright_green]  [dim]{manufacturer}[/dim]",
@@ -39,25 +26,14 @@ def _print_auto_connect_info(port: str, version: str, core: str, device: str, ma
 
 
 def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = False):
-    """
-    Handle connection errors by showing appropriate message.
-    
-    Args:
-        e: The exception that occurred
-        port: Serial port for connection
-        stop_agent: If True, stop the agent (only for critical errors like fg connection failure)
-    """
-    # Build connection info string
     conn_info = OutputHelper.format_port(port) if port else "unknown"
     
-    # Stop agent only if explicitly requested (e.g., fg connection failure when no other connections)
     if stop_agent:
         try:
             AgentClient.stop_agent()
         except Exception:
             pass
     
-    # Build detailed error message
     error_detail = str(e)
     if error_detail:
         error_msg = (
@@ -87,29 +63,13 @@ def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = 
 
 
 def _ensure_connected(ctx: typer.Context = None) -> dict:
-    """
-    Ensure agent is running and connected before executing command.
-    
-    Session fg/bg policy (excluding scan/session, setup is a separate policy):
-    1. Session Available = fg CONN available
-    2. No Session Available + CONN omitted → default → fg, fg work
-    3. No Session Available + CONN → CONN → fg, fg work
-    4. Session Available + CONN omitted → fg work
-    5. Session Available + CONN → CONN → bg, bg work
-    
-    Returns:
-        dict with connection status from agent
-    """
-    # Get global options
     global_opts = _get_global_options()
     explicit_port = global_opts.get('port')
     global_agent_port = global_opts.get('agent_port')
     
-    # Get env file and default
     env_path = _find_env_file()
     default_conn = _get_default_connection(env_path) if env_path else None
     
-    # Determine agent port
     if global_agent_port:
         agent_port = global_agent_port
     elif env_path and default_conn:
@@ -122,9 +82,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
     else:
         agent_port = DEFAULT_AGENT_PORT
     
-    # Case: Server NOT running
     if not AgentClient.is_agent_running(port=agent_port):
-        # Determine what to connect
         if not explicit_port:
             if not default_conn:
                 OutputHelper.print_panel(
@@ -151,7 +109,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
             )
             raise typer.Exit(1)
         
-        # Start agent
         try:
             AgentClient.start_agent(port=agent_port)
             
@@ -162,7 +119,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
             OutputHelper.print_panel(f"Failed to start agent: {str(e)}", title="Agent Error", title_align="left", border_style="red")
             raise typer.Exit(1)
         
-        # Connect fg (Serial only)
         try:
             port_arg = conn['connection']
             
@@ -174,10 +130,9 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                     device=conn.get('device'),
                     as_foreground=True,
                     set_default=False,
-                    local_default=default_conn,  # Pass workspace default to server
+                    local_default=default_conn,
                 )
             
-            # Notify user if connection was auto-switched
             if result.get('switched_from'):
                 OutputHelper.print_panel(
                     f"Auto-disconnected [yellow]{result['switched_from']}[/yellow] (same board)",
@@ -191,7 +146,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
             STATE.manufacturer = result.get('manufacturer', '')
             STATE.device_root_fs = result.get('device_root_fs', '/')
             
-            # Show auto-connect info when auto-connecting (server was not running)
             _print_auto_connect_info(
                 conn['connection'],
                 STATE.version,
@@ -204,7 +158,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
             _handle_connection_error(e, port=port_arg, stop_agent=True)
             raise typer.Exit(1)
         
-        # Update .replx config
         if conn['source'] == 'global':
             is_first_connection = env_path is None or default_conn is None
             if not env_path:
@@ -217,14 +170,12 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 set_default=is_first_connection
             )
         
-        # Set global context for helper functions (e.g., InstallHelper)
         set_global_context(STATE.core, STATE.device, STATE.version, STATE.device_root_fs, STATE.device_path)
         
         with AgentClient(port=agent_port, device_port=explicit_port) as client:
             status = client.send_command('status')
         return status
     
-    # Case: Server IS running
     try:
         with AgentClient(port=agent_port) as client:
             status = client.send_command('status')
@@ -248,9 +199,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 break
         
         if not current_fg:
-            # No foreground connection for this session (No Session)
             if not explicit_port:
-                # Rules 2: No Session + CONN omitted → default → fg
                 if not default_conn:
                     OutputHelper.print_panel(
                         "No active foreground connection and no default configured.\n\n"
@@ -261,7 +210,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                     )
                     raise typer.Exit(1)
                 
-                # Create fg with default
                 fg_conn = _resolve_connection(default_conn)
                 if not fg_conn:
                     OutputHelper.print_panel(
@@ -282,10 +230,9 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         device=fg_conn.get('device'),
                         as_foreground=True,
                         set_default=False,
-                        local_default=default_conn,  # Pass workspace default to server
+                        local_default=default_conn,
                     )
                 
-                # Notify user if connection was auto-switched
                 if result.get('switched_from'):
                     OutputHelper.print_panel(
                         f"Auto-disconnected [yellow]{result['switched_from']}[/yellow] (same board)",
@@ -293,7 +240,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         border_style="dim"
                     )
                 
-                # Show auto-connect info when using default connection
                 _print_auto_connect_info(
                     fg_conn['connection'],
                     result.get('version', '?'),
@@ -306,7 +252,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 status['connected'] = True
                 current_fg = fg_conn['connection']
             else:
-                # Rule 3: No session + CONN → CONN → fg
                 fg_conn = _resolve_connection(explicit_port)
                 if not fg_conn:
                     OutputHelper.print_panel(
@@ -326,11 +271,10 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         core=fg_conn.get('core') or "RP2350",
                         device=fg_conn.get('device'),
                         as_foreground=True,
-                        set_default=False,  # General commands do not change defaults
-                        local_default=default_conn,  # Pass workspace default to server
+                        set_default=False,
+                        local_default=default_conn,
                     )
                 
-                # Notify user if connection was auto-switched
                 if result.get('switched_from'):
                     OutputHelper.print_panel(
                         f"Auto-disconnected [yellow]{result['switched_from']}[/yellow] (same board)",
@@ -351,7 +295,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         set_default=False
                     )
                 
-                # Show auto-connect info when session is created with explicit CONN
                 _print_auto_connect_info(
                     fg_conn['connection'],
                     result.get('version', '?'),
@@ -364,7 +307,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 status['connected'] = True
                 current_fg = fg_conn['connection']
                 
-                # CONN is set as fg - no need to add as bg anymore
                 STATE.core = status.get('core', STATE.core)
                 STATE.device = status.get('device', STATE.device)
                 STATE.version = status.get('version', STATE.version)
@@ -372,8 +314,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 
                 return status
 
-        # Rule 4: Session available + CONN omitted → fg work
-        # Since current_fg already exists, proceed with fg (status is already obtained based on fg)
         if not explicit_port:
             STATE.core = status.get('core', STATE.core)
             STATE.device = status.get('device', STATE.device)
@@ -383,7 +323,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
             
             return status
         
-        # Rule 5: Session available + CONN → CONN → bg, bg work    
         if explicit_port:
             explicit_conn = _resolve_connection(explicit_port)
             if explicit_conn:
@@ -402,10 +341,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                                 set_default=False,
                             )
 
-                        # If this command caused a new connection to be established,
-                        # show the same Auto-connected panel to avoid confusion.
-                        # (Without this, the command output appears with no indication
-                        # that a background board was just connected.)
                         if bg_result and not bg_result.get('existing', False):
                             _print_auto_connect_info(
                                 port_arg,
@@ -415,7 +350,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                                 bg_result.get('manufacturer', explicit_conn.get('manufacturer', '')),
                             )
                         
-                        # Notify user if connection was auto-switched
                         if bg_result.get('switched_from'):
                             OutputHelper.print_panel(
                                 f"Auto-disconnected [yellow]{bg_result['switched_from']}[/yellow] (same board)",
@@ -438,7 +372,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         _handle_connection_error(e, port=port_arg)
                         raise typer.Exit(1)
         
-        # Get status for explicit port if provided
         if explicit_port:
             with AgentClient(port=agent_port, device_port=explicit_port) as client:
                 status = client.send_command('status')
@@ -459,7 +392,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
 
 
 def _get_current_agent_port() -> int:
-    """Get agent port for current connection (from resolved connection)."""
     global_opts = _get_global_options()
     if global_opts.get('agent_port'):
         return global_opts['agent_port']
@@ -468,13 +400,11 @@ def _get_current_agent_port() -> int:
     env_path = _find_env_file()
     default_conn = _get_default_connection(env_path) if env_path else None
 
-    # If an explicit port is provided, use its configured agent_port if possible
     if explicit_port:
         conn = _resolve_connection(explicit_port)
         if conn:
             return conn.get('agent_port', DEFAULT_AGENT_PORT)
 
-    # Otherwise, prefer workspace DEFAULT connection's agent_port
     if env_path and default_conn:
         try:
             env_data = _read_env_ini(env_path)
@@ -488,7 +418,6 @@ def _get_current_agent_port() -> int:
 
 
 def _get_device_port() -> Optional[str]:
-    """Get explicit device port from --port option."""
     global_opts = _get_global_options()
     if global_opts.get('port'):
         return global_opts.get('port')
@@ -496,9 +425,6 @@ def _get_device_port() -> Optional[str]:
 
 
 def _create_agent_client() -> AgentClient:
-    """
-    Create AgentClient with proper agent_port and device_port.
-    """
     return AgentClient(port=_get_current_agent_port(), device_port=_get_device_port())
 
 

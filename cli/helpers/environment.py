@@ -1,14 +1,10 @@
-"""Environment setup and file management utilities."""
 import os
-import stat
 
 
 class EnvironmentManager:
-    """Environment setup and file management utilities."""
     
     @staticmethod
     def load_env_from_rep():
-        """Load environment variables from the .replx file in the .vscode directory."""
         current_path = os.getcwd()
 
         while True:
@@ -26,12 +22,3 @@ class EnvironmentManager:
             if parent_path == current_path:
                 return
             current_path = parent_path
-    
-    @staticmethod
-    def force_remove_readonly(func, path, exc_info):
-        """Force remove a read-only file or directory."""
-        try:
-            os.chmod(path, stat.S_IWRITE)
-            func(path)
-        except Exception as e:
-            print(f"Deletion failed: {path}, error: {e}")

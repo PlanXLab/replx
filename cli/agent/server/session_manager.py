@@ -12,7 +12,6 @@ def _canon_port(port: Optional[str]) -> Optional[str]:
     p = str(port).strip()
     if sys.platform == "win32" or sys.platform.startswith("win"):
         if p and p.lower().startswith("com"):
-            # Only canonicalize plain COMx names
             if p[3:].isdigit():
                 return p.upper()
     return p
@@ -24,7 +23,7 @@ class Session:
     foreground: Optional[str] = None
     backgrounds: Set[str] = field(default_factory=set)
     last_access: float = field(default_factory=time.time)
-    default_port: Optional[str] = None  # This session's workspace default
+    default_port: Optional[str] = None 
 
     def add_connection(self, port: str, as_foreground: bool = False):
         port = _canon_port(port)
@@ -32,7 +31,6 @@ class Session:
             if self.foreground and self.foreground != port:
                 self.backgrounds.add(self.foreground)
             self.foreground = port
-            # Remove from backgrounds
             for bg in list(self.backgrounds):
                 if bg == port:
                     self.backgrounds.discard(bg)
@@ -47,10 +45,8 @@ class Session:
         if was_foreground:
             self.foreground = None
             if self.backgrounds:
-                # Pop any item
                 self.foreground = self.backgrounds.pop()
         else:
-            # Remove from backgrounds
             for bg in list(self.backgrounds):
                 if bg == port:
                     self.backgrounds.discard(bg)
@@ -78,7 +74,6 @@ class Session:
         if self.foreground and self.foreground == port:
             return True
 
-        # Check if port is in backgrounds
         found_bg = None
         for bg in self.backgrounds:
             if bg == port:
@@ -92,7 +87,7 @@ class Session:
             self.backgrounds.add(self.foreground)
 
         self.backgrounds.discard(found_bg)
-        self.foreground = found_bg  # Use original case from backgrounds
+        self.foreground = found_bg
         self.last_access = time.time()
 
         return True
@@ -135,7 +130,6 @@ class SessionManager:
         default_port = _canon_port(default_port) if default_port else None
         
         with self._sessions_lock:
-            # Get or create session inside the lock to avoid double-locking
             if ppid not in self._sessions:
                 self._sessions[ppid] = Session(ppid=ppid)
             session = self._sessions[ppid]
@@ -190,7 +184,6 @@ class SessionManager:
             return session.switch_foreground(port)
 
     def resolve_port(self, ppid: int, explicit_port: str = None, default_port: str = None) -> Optional[str]:
-        """Resolve port for ConnectionManager lookup."""
         if explicit_port:
             return _canon_port(explicit_port)
 
@@ -204,7 +197,6 @@ class SessionManager:
         return None
 
     def is_process_alive(self, pid: int) -> bool:
-        """Check if a process is alive across platforms."""
         try:
             if sys.platform == 'win32':
                 import ctypes
@@ -223,10 +215,9 @@ class SessionManager:
                         kernel32.CloseHandle(handle)
                 return False
             else:
-                # Unix: Use kill with signal 0 to test if process exists
                 os.kill(pid, 0)
                 return True
-        except (OSError, PermissionError):
+        except OSError:
             return False
 
     def cleanup_zombie_sessions(self) -> List[int]:
@@ -257,7 +248,6 @@ class SessionManager:
         return {'sessions': sessions_info}
 
     def find_sessions_using_port(self, port: str) -> List[Dict[str, Any]]:
-        """Find all sessions using a specific port."""
         result = []
 
         with self._sessions_lock:

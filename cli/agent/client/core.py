@@ -59,7 +59,6 @@ class AgentClient:
 
         response = None
         
-        # For short timeouts (< 1s), don't retry to fail fast (e.g., ping/agent check)
         max_attempts = 1 if effective_timeout < 1.0 else self.MAX_RETRIES
 
         for attempt in range(max_attempts):
@@ -324,7 +323,6 @@ class AgentClient:
 
         if background:
             if sys.platform == 'win32':
-                # Windows: Use DETACHED_PROCESS to run without console
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = 0
@@ -337,7 +335,6 @@ class AgentClient:
                     startupinfo=startupinfo
                 )
             else:
-                # Unix: Use start_new_session for proper daemon behavior
                 subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
@@ -367,10 +364,9 @@ class AgentClient:
         except Exception:
             pass
 
-        # Wait for agent to stop, but with faster polling
         start_time = time.time()
         while time.time() - start_time < timeout:
-            time.sleep(0.05)  # Shorter sleep for faster response
+            time.sleep(0.05) 
             if not AgentClient.is_agent_running(port=port):
                 return True
 

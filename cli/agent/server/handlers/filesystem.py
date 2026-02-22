@@ -6,7 +6,6 @@ from ..command_dispatcher import CommandContext
 
 
 class DisconnectedError(RuntimeError):
-    """Raised when the serial port has been disconnected."""
     pass
 
 
@@ -34,17 +33,13 @@ class FilesystemCommandsMixin:
                         except TransportError:
                             raise
                         except FileSystemError as e:
-                            # Silently skip directories that can't be read (permissions, corruption, etc.)
-                            # but still continue with other directories
                             msg = str(e).lower()
                             if "enoent" in msg or "enotdir" in msg or "not found" in msg:
-                                pass  # Directory disappeared or is not accessible
+                                pass
                             else:
-                                # Log unexpected errors but continue
                                 import sys
                                 print(f"Warning: Failed to list {p}: {e}", file=sys.stderr)
                         except Exception as e:
-                            # Log unexpected errors but continue
                             import sys
                             print(f"Warning: Unexpected error listing {p}: {e}", file=sys.stderr)
                     recurse(real_path)
@@ -62,7 +57,6 @@ class FilesystemCommandsMixin:
             if "enoent" in lower_msg or "no such file" in lower_msg or "not found" in lower_msg:
                 raise RuntimeError(f"Path does not exist: {path}")
             if "enotdir" in lower_msg or "not a directory" in lower_msg or "ls failed: 20" in lower_msg:
-                # Path is a file; return file details for non-recursive listings
                 if not recursive:
                     is_dir = False
                     file_exists = None
@@ -118,28 +112,29 @@ class FilesystemCommandsMixin:
         try:
             real_path = self._to_real_path(path, conn)
             content = conn.file_system.get(real_path)
-            is_binary = b'\x00' in content
 
-            if is_binary:
+            if not isinstance(content, (bytes, bytearray)):
+                content = content.encode('utf-8') if isinstance(content, str) else bytes(content)
+
+            if b'\x00' in content:
+                text_content = None
+            else:
+                try:
+                    text_content = content.decode('utf-8')
+                except ValueError:
+                    text_content = None
+
+            if text_content is None:
                 return {
                     "content": content.hex(),
                     "is_binary": True,
                     "size": len(content)
                 }
-            else:
-                try:
-                    text_content = content.decode('utf-8')
-                except UnicodeDecodeError:
-                    return {
-                        "content": content.hex(),
-                        "is_binary": True,
-                        "size": len(content)
-                    }
 
-                if len(text_content) > MAX_PAYLOAD_SIZE - 1000:
-                    text_content = text_content[:MAX_PAYLOAD_SIZE - 1100] + "\n... [truncated]"
+            if len(text_content) > MAX_PAYLOAD_SIZE - 1000:
+                text_content = text_content[:MAX_PAYLOAD_SIZE - 1100] + "\n... [truncated]"
 
-                return {"content": text_content, "is_binary": False}
+            return {"content": text_content, "is_binary": False}
         except TransportError as e:
             raise DisconnectedError(f"Serial port disconnected: {e}")
         except Exception as e:

@@ -18,7 +18,6 @@ def _preprocess_connection_shortcut():
     if len(sys.argv) < 2:
         return
     
-    # Commands that accept --port global option
     commands_with_connection = {
         'setup', 'fg', 'disconnect',
         'repl', 'shell', 'exec', 'run',
@@ -27,13 +26,11 @@ def _preprocess_connection_shortcut():
         'install', 'update', 'search',
     }
     
-    # Commands that don't use connection (no shortcut conversion)
     commands_without_connection = {
         'scan', 'status', 'whoami', 'shutdown',
         'version', 'help',
     }
     
-    # All known commands (for recognition)
     known_commands = commands_with_connection | commands_without_connection | {'connect'}
     
     opts_with_value = {'--port', '-p', '--agent-port'}
@@ -56,27 +53,20 @@ def _preprocess_connection_shortcut():
     
     first_arg = sys.argv[first_arg_idx]
     
-    # If first arg is a known command, no conversion needed
     if first_arg.lower() in known_commands:
         return
     
-    # Check if there's a command after the potential port/target
-    # If the next arg is a command that doesn't use connection, don't convert
     if first_arg_idx + 1 < len(sys.argv):
         next_arg = sys.argv[first_arg_idx + 1]
         if next_arg.lower() in commands_without_connection:
             return
     
-    # Detect serial port patterns for all platforms
     is_port = False
     
-    # Windows: COM1, COM10, etc.
     if re.match(r'^com\d+$', first_arg, re.IGNORECASE):
         is_port = True
-    # Linux: /dev/ttyUSB0, /dev/ttyACM0, /dev/ttyAMA0, /dev/serial/by-id/*
     elif re.match(r'^/dev/(tty(USB|ACM|AMA)\d+|serial/by-id/.+)$', first_arg, re.IGNORECASE):
         is_port = True
-    # macOS: /dev/cu.usbmodem*, /dev/cu.usbserial*, /dev/tty.usbmodem*, /dev/tty.usbserial*
     elif re.match(r'^/dev/(cu|tty)\.(usbmodem|usbserial|wchusbserial).+$', first_arg, re.IGNORECASE):
         is_port = True
     
@@ -89,15 +79,11 @@ def _preprocess_cli_aliases():
     if len(sys.argv) < 2:
         return
     
-    # Handle -c alias for exec command
-    # -c must be followed by a command string
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg == '-c':
-            # Replace -c with exec
             sys.argv[i] = 'exec'
             return
     
-    # Regular command aliases
     aliases = {
         'connect': 'setup',
     }
@@ -159,10 +145,6 @@ import click
 from click.exceptions import UsageError
 
 _original_usage_error_format_message = UsageError.format_message
-_original_usage_error_show = UsageError.show
-
-_original_context_get_usage = click.Context.get_usage
-
 
 def _custom_context_get_usage(self):
     return ""
@@ -180,7 +162,7 @@ def _build_command_help(ctx) -> str:
     lines = []
     
     if cmd.help:
-        lines.append(cmd.help.split('\n')[0])  # First line only
+        lines.append(cmd.help.split('\n')[0])
         lines.append("")
     
     params_str = ""
@@ -238,7 +220,6 @@ def _custom_usage_error_show(self, output_file=None):
     error_msg = _original_usage_error_format_message(self)
     error_lines = []
     
-    # Check if this is a command-specific error (has context with command info)
     cmd_name = None
     if self.ctx and self.ctx.info_name and self.ctx.info_name != 'replx':
         cmd_name = self.ctx.info_name
@@ -252,12 +233,10 @@ def _custom_usage_error_show(self, output_file=None):
             error_lines.append("")
             error_lines.append(f"[red]{error_msg}[/red]")
         else:
-            # Fallback: show basic usage
             error_lines.append(f"[bold cyan]Usage:[/bold cyan] replx {cmd_name} [OPTIONS] [ARGS]...")
             error_lines.append("")
             error_lines.append(f"[red]{error_msg}[/red]")
     else:
-        # Unknown command or general error - add Usage line
         error_lines.append("[bold cyan]Usage:[/bold cyan] replx [OPTIONS] COMMAND [ARGS]...")
         error_lines.append("")
         error_lines.append(f"[red]{error_msg}[/red]")
@@ -290,12 +269,10 @@ def _handle_usage_error(e):
             error_lines.append("")
             error_lines.append(f"[red]{error_msg}[/red]")
         else:
-            # Fallback: show basic usage
             error_lines.append(f"[bold cyan]Usage:[/bold cyan] replx {cmd_name} [OPTIONS] [ARGS]...")
             error_lines.append("")
             error_lines.append(f"[red]{error_msg}[/red]")
     else:
-        # Unknown command or general error - add Usage line
         error_lines.append("[bold cyan]Usage:[/bold cyan] replx [OPTIONS] COMMAND [ARGS]...")
         error_lines.append("")
         error_lines.append(f"[red]{error_msg}[/red]")
@@ -334,7 +311,6 @@ def _print_main_help():
     lines.append("  [dim] 󱞩 [cyan]PORT[/cyan] can be used alone without the -p flag[/dim]")
     lines.append("  [dim] 󱞩 setup requires an explicit port[/dim]")
 
-    # Command groups - descriptions match first line of each command's help_text
     command_groups = [
         ("Connection & Session", [
             ("setup", "Initialize MicroPython development environment for VSCode"),
@@ -394,10 +370,6 @@ def _print_main_help():
     )
 
 
-# =============================================================================
-# App Callback
-# =============================================================================
-
 @app.callback(invoke_without_command=True)
 def cli(
     ctx: typer.Context,
@@ -421,46 +393,24 @@ def cli(
         help="Show this message and exit."
     )
 ):
-    """
-    MicroPython REPL tool for device management.
-    
-    Use 'replx --port PORT setup' to connect, then run commands.
-    """
-    
-    # Store global options in module-level storage for access by all commands
     _set_global_options(global_port, global_agent_port)
     
-    # Also store in context for subcommands that receive ctx
     ctx.ensure_object(dict)
     ctx.obj['global_port'] = global_port
     ctx.obj['global_agent_port'] = global_agent_port
     
-    # Handle help flag first
     if show_help:
         _print_main_help()
         raise typer.Exit()
     
-    # If no command provided, show help
     if ctx.invoked_subcommand is None:
         _print_main_help()
         raise typer.Exit()
 
 
-# =============================================================================
-# Import all commands to register them with the app
-# =============================================================================
 from .commands import file, device, exec, package, utility
 
-# These imports are for side-effect (command registration)
-_command_modules = (file, device, exec, package, utility)
-
-
-# =============================================================================
-# Main Entry Point
-# =============================================================================
-
 def main():
-    # Check if replx command is run without arguments
     if len(sys.argv) == 1:
         OutputHelper.print_panel(
             "Use [bright_blue]replx --help[/bright_blue] to see available commands.",
@@ -469,7 +419,6 @@ def main():
         )
         raise SystemExit()
     
-    # Handle -v / --version
     if len(sys.argv) == 2 and sys.argv[1] in ('--version', '-v'):
         OutputHelper.print_panel(
             f"[bright_blue]replx[/bright_blue] version [bright_green]{__version__}[/bright_green]",
@@ -478,7 +427,6 @@ def main():
         )
         sys.exit(0)
     
-    # Handle -c / --command
     if sys.argv[1] in ('-c', '--command'):
         if len(sys.argv) < 3:
             OutputHelper.print_panel(
@@ -516,13 +464,10 @@ def main():
             sys.exit(1)
         sys.exit(0)
     
-    # Check if replx --help is run (with only --help or -h flag)
     if len(sys.argv) == 2 and sys.argv[1] in ('--help', '-h'):
-        # Show custom main help (single box)
         _print_main_help()
         sys.exit(0)
 
-    # Normalize -ne and -en options
     try:
         out = [sys.argv[0]]
         for tok in sys.argv[1:]:
@@ -552,10 +497,8 @@ def main():
         "pkg","setup","init","firmware"
     }
 
-    # Options that take a value (skip the value when finding first non-option)
     opts_with_value = {'--port', '-p', '--agent-port'}
     
-    # Find first non-option argument (the command), skipping option values
     first_nonopt_idx = None
     skip_next = False
     for i, a in enumerate(sys.argv[1:], 1):
@@ -573,8 +516,6 @@ def main():
     run_opts = {'-n', '--non-interactive', '-e', '--echo', '-d', '--device'}
     has_device_opt = bool(run_opts & {'-d', '--device'} & set(args))
     
-    # Find script files: .py always, .mpy only with -d option
-    # Count how many .py/.mpy files exist (excluding option values)
     script_files = []
     skip_next = False
     for i, a in enumerate(sys.argv[1:], 1):
@@ -589,9 +530,6 @@ def main():
     
     script_arg_idx = script_files[0][0] if script_files else None
 
-    # Only inject 'run' if:
-    # - no command found (first_nonopt not in known)
-    # - exactly one .py file exists
     should_inject_run = (
         ('run' not in args) and
         (len(script_files) == 1) and
@@ -616,7 +554,6 @@ def main():
         app(standalone_mode=False)
         exit_code = 0
     except click.exceptions.UsageError as e:
-        # Handle UsageError with our custom formatter
         _handle_usage_error(e)
         exit_code = 2
     except click.exceptions.Abort:

@@ -6,14 +6,11 @@ from typing import Dict, Any, Optional, List
 
 from replx.utils.constants import MAX_PAYLOAD_SIZE
 
-# Protocol constants
 _MAGIC = b'RPLX'
 _VERSION = 1
 
 
 class AgentProtocol:
-    """UDP protocol for agent client-server communication."""
-
     @staticmethod
     def encode_message(msg: Dict[str, Any]) -> bytes:
         payload = json.dumps(msg).encode('utf-8')

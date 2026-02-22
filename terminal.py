@@ -3,6 +3,7 @@ import sys
 import platform
 import threading
 from typing import Callable
+import select
 
 from .utils.constants import EOF_MARKER
 
@@ -204,13 +205,10 @@ else:
     signal.signal(signal.SIGTERM, signal_handler)
 
     def kbhit() -> bool:
-        import select
         r, _, _ = select.select([sys.stdin], [], [], 0)
         return bool(r)
 
     def getch_nonblock() -> bytes | None:
-        """Non-blocking keyboard input for Unix."""
-        import select
         r, _, _ = select.select([sys.stdin], [], [], 0)
         if not r:
             return None

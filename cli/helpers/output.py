@@ -1,4 +1,3 @@
-"""Output formatting and display utilities."""
 import os
 import sys
 import re
@@ -9,20 +8,7 @@ from rich.panel import Panel
 from . import get_panel_box, CONSOLE_WIDTH, get_global_context
 
 
-def format_size(size_bytes: int) -> str:
-    """Format bytes to human readable string."""
-    if size_bytes < 1024:
-        return f"{size_bytes}B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f}KB"
-    else:
-        return f"{size_bytes / (1024 * 1024):.1f}MB"
-
-
 class OutputHelper:
-    """Output formatting and display utilities."""
-    
-    # Ensure stdout uses UTF-8 encoding
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     
@@ -31,10 +17,6 @@ class OutputHelper:
 
     @staticmethod
     def format_port(port: str) -> str:
-        """Format a serial port name for display.
-
-        Requirement: on Windows, always show port names in uppercase.
-        """
         if port is None:
             return ""
         p = str(port).strip()
@@ -42,7 +24,6 @@ class OutputHelper:
     
     @staticmethod
     def _get_panel_width():
-        """Get panel width."""
         if OutputHelper.PANEL_WIDTH is None:
             OutputHelper.PANEL_WIDTH = CONSOLE_WIDTH
         return OutputHelper.PANEL_WIDTH
@@ -56,11 +37,8 @@ class OutputHelper:
         height: int | None = None,
         **panel_kwargs,
     ):
-        """Print content in a rich panel box.
-        """
         width = OutputHelper._get_panel_width()
 
-        # Keep existing default alignment unless caller overrides it.
         if "title_align" not in panel_kwargs:
             panel_kwargs["title_align"] = "left"
 
@@ -79,19 +57,8 @@ class OutputHelper:
     
     @staticmethod
     def create_progress_panel(current: int, total: int, title: str = "Progress", message: str = "", counter_text: str = None):
-        """Create a progress panel for live updates with consistent width.
-        
-        Args:
-            current: Current progress value
-            total: Total progress value
-            title: Panel title
-            message: Optional message line above progress bar
-            counter_text: Optional custom counter text (default: '(current/total)')
-        """
         pct = 0 if total == 0 else min(1.0, current / total)
         
-        # Calculate bar length based on panel width
-        # Panel width - borders (4) - padding (2) - brackets (2) - percentage text (5) - space (1) - counter_text (~22)
         panel_width = OutputHelper._get_panel_width()
         bar_length = max(20, panel_width - 40)  # Minimum 20 chars for bar, leave room for counter
         
@@ -99,7 +66,6 @@ class OutputHelper:
         bar = "█" * block + "░" * (bar_length - block)
         percent = int(pct * 100)
         
-        # Use custom counter_text or default to (current/total)
         if counter_text is None:
             counter_text = f"({current}/{total})"
         
@@ -113,7 +79,6 @@ class OutputHelper:
     
     @staticmethod
     def create_spinner_panel(message: str, title: str = "Processing", spinner_frames: list = None, frame_idx: int = 0):
-        """Create a spinner panel for indeterminate progress."""
         if spinner_frames is None:
             spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         
@@ -123,17 +88,7 @@ class OutputHelper:
         return Panel(content, title=title, title_align="left", border_style="yellow", box=get_panel_box(), expand=True, width=width)
     
     @staticmethod
-    def print_progress_bar(current: int, total: int, bar_length: int = 40):
-        """Print a progress bar to stdout."""
-        pct = 0 if total == 0 else min(1.0, current / total)
-        block = min(bar_length, int(round(bar_length * pct)))
-        bar = "#" * block + "-" * (bar_length - block)
-        percent = int(pct * 100)
-        print(f"\r[{bar}] {percent}% ({current}/{total})", end="", flush=True)
-    
-    @staticmethod
     def format_error_output(out, local_file):
-        """Process the error output from the device and print it in a readable format."""
         _core, _device, _version, _device_root_fs, _device_path = get_global_context()
         
         OutputHelper._console.print(f"\r[dim]{'-'*40}Traceback{'-'*40}[/dim]")
@@ -181,16 +136,6 @@ class OutputHelper:
 
     @staticmethod
     def handle_error(error: Exception, context: str = "Error") -> bool:
-        """
-        Handle common errors with user-friendly messages.
-        
-        Args:
-            error: The exception to handle
-            context: Context string for the error (e.g., "Directory Listing")
-            
-        Returns:
-            True if error was handled, False if it should be re-raised
-        """
         error_msg = str(error)
         
         if 'is busy' in error_msg:
@@ -212,7 +157,6 @@ class OutputHelper:
                 )
                 return True
             
-            # Check if detached script is running
             detached_match = re.search(r'Connection (\S+) is busy.*detached script is running', error_msg)
             if detached_match:
                 port = detached_match.group(1)
@@ -228,8 +172,6 @@ class OutputHelper:
                 )
                 return True
             
-            # Parse connection and command from error message
-            # Format: "Connection {port} is busy. Another command ({command}) is currently running..."
             match = re.search(r'Connection (\S+) is busy.*Another command \((\w+)\)', error_msg)
             if match:
                 port = match.group(1)

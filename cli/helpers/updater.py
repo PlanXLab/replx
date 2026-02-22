@@ -10,7 +10,6 @@ from .store import StoreManager
 
 
 class UpdateChecker:
-    """Update checking utilities."""
     
     UPDATE_TIMESTAMP_FILE = StoreManager.HOME_STORE / "update_check"
     UPDATE_INTERVAL = int(os.environ.get("REPLX_UPDATE_INTERVAL_SEC", str(60 * 60 * 24)))
@@ -18,7 +17,6 @@ class UpdateChecker:
     
     @staticmethod
     def is_interactive_tty() -> bool:
-        """Check if running in interactive TTY."""
         try:
             return sys.stdin.isatty() and sys.stdout.isatty()
         except Exception:
@@ -26,7 +24,6 @@ class UpdateChecker:
     
     @staticmethod
     def check_for_updates(current_version: str, *, force: bool = False):
-        """Check PyPI for a newer version of replx and prompt the user to upgrade."""
         if os.environ.get(UpdateChecker.ENV_NO_UPDATE, "").strip():
             return
         if not force and not UpdateChecker.is_interactive_tty():
@@ -43,7 +40,6 @@ class UpdateChecker:
             return
         
         def _vt(v: str) -> tuple:
-            """Parse version string (X.Y format) into tuple for comparison."""
             parts = re.findall(r"\d+", str(v))
             return tuple(int(p) for p in parts) or (0,)
 

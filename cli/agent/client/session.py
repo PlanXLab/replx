@@ -3,7 +3,6 @@ from typing import Optional
 import psutil
 
 def _find_terminal_process() -> Optional[dict]:
-    # Prefer actual shell processes (per-terminal) over host IDE processes (shared).
     shell_names = {
         'powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash.exe', 'zsh.exe', 'sh.exe', 'fish.exe',
         'windowsterminal.exe',
@@ -15,7 +14,6 @@ def _find_terminal_process() -> Optional[dict]:
         'pycharm.exe', 'pycharm64.exe', 'idea.exe', 'idea64.exe',
     }
 
-    # Fast path: parent pid is typically the actual terminal/shell.
     try:
         parent_pid = os.getppid()
         if parent_pid and parent_pid > 0:
@@ -30,7 +28,6 @@ def _find_terminal_process() -> Optional[dict]:
                     'level': 0,
                 }
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
-        # Fall back to a broader traversal.
         pass
 
     try:
@@ -56,7 +53,6 @@ def _find_terminal_process() -> Optional[dict]:
                 }
 
             if name in ide_names and best_ide is None:
-                # Keep as last resort (may be shared across terminals).
                 try:
                     best_ide = {
                         'pid': current.pid,
@@ -87,7 +83,6 @@ def _find_terminal_process() -> Optional[dict]:
             return best_ide
 
     except Exception:
-        # Never allow session id discovery to fail hard.
         pass
 
     return None
@@ -121,26 +116,6 @@ def _find_jupyter_kernel() -> Optional[dict]:
         pass
 
     return None
-
-def _detect_environment() -> str:
-    try:
-        __IPYTHON__
-        return 'ipython'
-    except NameError:
-        pass
-
-    env = os.environ
-
-    if any(key.startswith('JPY_') or 'JUPYTER' in key for key in env):
-        return 'jupyter'
-
-    if env.get('TERM_PROGRAM') == 'vscode':
-        return 'vscode_terminal'
-
-    if env.get('SHELL') or env.get('TERM'):
-        return 'terminal'
-
-    return 'unknown'
 
 def get_session_id() -> int:
     terminal = _find_terminal_process()

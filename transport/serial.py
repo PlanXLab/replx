@@ -13,7 +13,6 @@ class SerialTransport(Transport):
     def __init__(self, port: str, baudrate: int = 115200, timeout: float = 1.0):
         self.port = port
         self.baudrate = baudrate
-        # Use shorter timeout on Unix (macOS/Linux) for faster failure on invalid ports
         if sys.platform != "win32" and timeout > 0.6:
             timeout = 0.6
         self._default_timeout = timeout
@@ -93,7 +92,6 @@ class SerialTransport(Transport):
     def close(self) -> None:
         if self._serial:
             try:
-                # Cancel any pending read/write operations
                 if self._serial.is_open:
                     try:
                         self._serial.cancel_read()
@@ -126,12 +124,9 @@ class SerialTransport(Transport):
             self._serial.reset_output_buffer()
     
     def check_connection(self) -> bool:
-        """Check if the serial port is still connected and accessible."""
         try:
             if not self._serial or not self._serial.is_open:
                 return False
-            # Actually test if the port is still accessible by reading in_waiting
-            # This will raise an exception if the device has been disconnected
             _ = self._serial.in_waiting
             return True
         except serial.SerialException as e:
@@ -145,11 +140,6 @@ class SerialTransport(Transport):
             return False
     
     def keep_alive(self) -> None:
-        """Keep the connection alive by probing the port.
-        
-        Raises:
-            TransportError: If the serial port has been disconnected.
-        """
         try:
             _ = self._serial.in_waiting
         except serial.SerialException as e:

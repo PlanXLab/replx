@@ -898,6 +898,7 @@ Scans all serial ports to detect MicroPython devices.
     
     if has_serial:
         temp_console.print(serial_table)
+        temp_console.print()
         temp_console.print("[dim]  󱓦 connected    󰷌 default[/dim]")
     else:
         temp_console.print("  [dim]No serial devices found[/dim]")

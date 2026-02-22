@@ -1,5 +1,4 @@
 def device_name_to_path(device_name: str) -> str:
-    """Convert device name to filesystem-safe path (replace hyphens with underscores)."""
     return device_name.replace('-', '_')
 
 

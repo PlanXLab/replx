@@ -35,18 +35,16 @@ class SessionCommandsMixin:
 
         session = self._get_or_create_session(ppid)
         
-        # Update session's workspace default - preserve original case
         if local_default:
             session.default_port = self._canon_port(local_default)
 
         existing_conn = self._get_connection(conn_key)
 
         if existing_conn:
-            # Pass original port to session, not normalized
             self.session_manager.add_connection_to_session(
                 ppid, port,
                 as_foreground=as_foreground,
-                default_port=self._default_port
+                default_port=session.default_port or self._default_port
             )
 
             if set_default:
@@ -77,7 +75,7 @@ class SessionCommandsMixin:
         self.session_manager.add_connection_to_session(
             ppid, port,
             as_foreground=as_foreground,
-            default_port=self._default_port
+            default_port=session.default_port or self._default_port
         )
 
         if set_default:
@@ -132,7 +130,12 @@ class SessionCommandsMixin:
             freed_port = session.foreground
 
         for conn_port in ports_to_close:
-            self.connection_manager.disconnect(conn_port)
+            other_sessions_using = [
+                s for sid, s in self.session_manager.get_all_sessions().items()
+                if sid != ppid and s.has_connection(conn_port)
+            ]
+            if not other_sessions_using:
+                self.connection_manager.disconnect(conn_port)
 
             for sess in self.session_manager.get_all_sessions().values():
                 if conn_port in sess.get_all_connections():
@@ -189,7 +192,7 @@ class SessionCommandsMixin:
         return {
             "success": True,
             "old_foreground": old_fg,
-            "new_foreground": port,  # Return original port
+            "new_foreground": port,
             "session_created": old_fg is None
         }
 
@@ -199,7 +202,6 @@ class SessionCommandsMixin:
         if port:
             self._set_default_port(port)
             
-            # Update session's local default if requested - preserve original case
             if update_session and ctx.ppid:
                 session = self._get_session(ctx.ppid)
                 if session:
