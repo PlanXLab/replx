@@ -17,11 +17,11 @@ def _detect_device_info(transport, core: str, device: str = None) -> Tuple[str, 
     delay3 = 0.1 if sys.platform != "win32" else 0.2
     
     try:
-        transport.write(b'\r\x03')
+        transport.write(b'\r' + CTRL_C)
         time.sleep(delay1)
         transport.reset_input_buffer()
 
-        transport.write(b'\r\x02')
+        transport.write(b'\r' + CTRL_B)
         time.sleep(delay2)
 
         res = transport.read_available()
