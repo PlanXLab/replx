@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List, Tuple
 
 from replx.protocol import ReplProtocol, create_storage
 from replx.utils import parse_device_banner
-from replx.utils.constants import CTRL_B
+from replx.utils.constants import CTRL_B, CTRL_C
 from replx.utils.exceptions import TransportError
 
 
@@ -430,9 +430,9 @@ class ConnectionManager:
             if conn and conn.repl_protocol:
                 try:
                     transport = conn.repl_protocol._transport
-                    transport.write(b'\x03')
+                    transport.write(CTRL_C)
                     time.sleep(0.05)
-                    transport.write(b'\x02')
+                    transport.write(CTRL_B)
                     time.sleep(0.1)
                     transport.reset_input_buffer()
                 except Exception:
