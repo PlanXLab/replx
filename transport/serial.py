@@ -1,6 +1,7 @@
+import gc
+import sys
 from .base import Transport
 from replx.utils.exceptions import TransportError
-import sys
 
 try:
     import serial
@@ -91,29 +92,33 @@ class SerialTransport(Transport):
     
     def close(self) -> None:
         if self._serial:
+            serial_obj = self._serial
+            self._serial = None
             try:
-                if self._serial.is_open:
+                if serial_obj.is_open:
                     try:
-                        self._serial.cancel_read()
+                        serial_obj.cancel_read()
                     except Exception:
                         pass
                     try:
-                        self._serial.cancel_write()
+                        serial_obj.cancel_write()
                     except Exception:
                         pass
                     try:
-                        self._serial.reset_input_buffer()
+                        serial_obj.reset_input_buffer()
                     except Exception:
                         pass
                     try:
-                        self._serial.reset_output_buffer()
+                        serial_obj.reset_output_buffer()
                     except Exception:
                         pass
-                    self._serial.close()
+                    serial_obj.close()
             except Exception:
                 pass
             finally:
-                self._serial = None
+                del serial_obj
+                if sys.platform == 'win32':
+                    gc.collect()
     
     def reset_input_buffer(self) -> None:
         if self._serial:

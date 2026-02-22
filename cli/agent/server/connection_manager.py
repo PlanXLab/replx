@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any, List, Tuple
 
 from replx.protocol import ReplProtocol, create_storage
 from replx.utils import parse_device_banner
+from replx.utils.constants import CTRL_B
 from replx.utils.exceptions import TransportError
 
 
@@ -464,11 +465,8 @@ class ConnectionManager:
                 transport = conn.repl_protocol._transport
                 if transport:
                     try:
-                        # Exit raw REPL mode before closing so the board is left
-                        # in normal REPL state for the next caller.
-                        transport.write(b'\x02')  # Ctrl+B
-                        delay = 0.1 if sys.platform == 'win32' else 0.05
-                        time.sleep(delay)
+                        transport.write(CTRL_B)
+                        time.sleep(0.1 if sys.platform == 'win32' else 0.05)
                     except Exception:
                         pass
                     transport.close()

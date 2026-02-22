@@ -793,8 +793,6 @@ Scans all serial ports to detect MicroPython devices.
             return (port[:match.start()], int(match.group(1)))
         return (port, 0)
     
-    # Deduplicate ports (same port may appear from agent and scan) -
-    # on Windows COM ports are case-insensitive.
     seen_ports_cmp = set()
     unique_results = []
     for result in serial_results:
@@ -809,8 +807,6 @@ Scans all serial ports to detect MicroPython devices.
 
     scanned_serial_ports_cmp = set(_serial_port_cmp_key(r[0]) for r in serial_results)
 
-    # Build OS-level port presence set so that history ports which the probe
-    # missed (e.g. briefly after disconnect) are not shown as dim history.
     os_port_cmp = set()
     try:
         from serial.tools.list_ports import comports as _lp_comports
@@ -837,13 +833,9 @@ Scans all serial ports to detect MicroPython devices.
         manufacturer = conn_data.get('manufacturer', '-') or '-'
 
         if port_cmp in os_port_cmp:
-            # Port IS present in OS but probe failed (e.g. just disconnected).
-            # Promote to normal results using cached history data so it is
-            # displayed without dimming.
             serial_results.append((_serial_port_display(conn_key), version, core, device, manufacturer))
             scanned_serial_ports_cmp.add(port_cmp)
         else:
-            # Port is truly absent from OS - show as dim history.
             serial_history_data.append((_serial_port_display(conn_key), version, core, device, manufacturer))
     
     serial_results.sort(key=port_sort_key)
