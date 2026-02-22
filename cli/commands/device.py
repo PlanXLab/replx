@@ -808,7 +808,17 @@ Scans all serial ports to detect MicroPython devices.
     serial_results.sort(key=port_sort_key)
 
     scanned_serial_ports_cmp = set(_serial_port_cmp_key(r[0]) for r in serial_results)
-    
+
+    # Build OS-level port presence set so that history ports which the probe
+    # missed (e.g. briefly after disconnect) are not shown as dim history.
+    os_port_cmp = set()
+    try:
+        from serial.tools.list_ports import comports as _lp_comports
+        for _lp in _lp_comports():
+            os_port_cmp.add(_serial_port_cmp_key(_lp.device))
+    except Exception:
+        pass
+
     serial_history_data = []
     
     history_keys_cmp = set(_serial_port_cmp_key(k) for k in history_connections.keys())
@@ -817,14 +827,26 @@ Scans all serial ports to detect MicroPython devices.
         if '.' in conn_key:
             continue
         
-        # Hide history entries when the same port is currently present (case-insensitive on Windows)
-        if _serial_port_cmp_key(conn_key) not in scanned_serial_ports_cmp:
-            version = conn_data.get('version', '-') or '-'
-            core = conn_data.get('core', '-') or '-'
-            device = conn_data.get('device', '-') or '-'
-            manufacturer = conn_data.get('manufacturer', '-') or '-'
+        port_cmp = _serial_port_cmp_key(conn_key)
+        if port_cmp in scanned_serial_ports_cmp:
+            continue
+
+        version = conn_data.get('version', '-') or '-'
+        core = conn_data.get('core', '-') or '-'
+        device = conn_data.get('device', '-') or '-'
+        manufacturer = conn_data.get('manufacturer', '-') or '-'
+
+        if port_cmp in os_port_cmp:
+            # Port IS present in OS but probe failed (e.g. just disconnected).
+            # Promote to normal results using cached history data so it is
+            # displayed without dimming.
+            serial_results.append((_serial_port_display(conn_key), version, core, device, manufacturer))
+            scanned_serial_ports_cmp.add(port_cmp)
+        else:
+            # Port is truly absent from OS - show as dim history.
             serial_history_data.append((_serial_port_display(conn_key), version, core, device, manufacturer))
     
+    serial_results.sort(key=port_sort_key)
     serial_history_data.sort(key=port_sort_key)
     
     def get_conn_marker(is_connected):

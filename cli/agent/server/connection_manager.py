@@ -463,6 +463,14 @@ class ConnectionManager:
             try:
                 transport = conn.repl_protocol._transport
                 if transport:
+                    try:
+                        # Exit raw REPL mode before closing so the board is left
+                        # in normal REPL state for the next caller.
+                        transport.write(b'\x02')  # Ctrl+B
+                        delay = 0.1 if sys.platform == 'win32' else 0.05
+                        time.sleep(delay)
+                    except Exception:
+                        pass
                     transport.close()
             except Exception:
                 pass
