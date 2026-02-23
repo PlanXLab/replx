@@ -178,15 +178,15 @@ class AgentClient:
                         except Exception:
                             pass
 
+                _pending_error = None
                 try:
                     data, addr = self.sock.recvfrom(MAX_UDP_SIZE)
                     msg = AgentProtocol.decode_message(data)
 
                     if msg and msg.get('seq') == seq:
                         if msg.get('type') == 'response' and msg.get('error'):
-                            raise RuntimeError(msg['error'])
-
-                        if msg.get('type') == 'stream':
+                            _pending_error = msg['error']
+                        elif msg.get('type') == 'stream':
                             output = msg.get('output', '')
                             if output and output_callback:
                                 output_callback(output.encode('utf-8'), 'stdout')
@@ -201,6 +201,9 @@ class AgentClient:
                     pass
                 except Exception:
                     pass
+
+                if _pending_error:
+                    raise RuntimeError(_pending_error)
 
         except KeyboardInterrupt:
             try:
