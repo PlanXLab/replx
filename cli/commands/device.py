@@ -1762,19 +1762,10 @@ print(json.dumps(results))
         table.add_column("Security", width=14)
         
         for ap in data:
-            rssi = ap["rssi"]
-            if rssi >= -50:
-                signal = f"[green]{rssi}dBm[/green]"
-            elif rssi >= -70:
-                signal = f"[yellow]{rssi}dBm[/yellow]"
-            else:
-                signal = f"[red]{rssi}dBm[/red]"
-            
             ssid_display = ap["ssid"] if ap["ssid"] else "[dim](hidden)[/dim]"
-            
             table.add_row(
                 ssid_display,
-                signal,
+                _signal_str(ap["rssi"]),
                 str(ap["channel"]),
                 ap["auth"]
             )
@@ -1794,6 +1785,29 @@ print(json.dumps(results))
             border_style="red"
         )
         raise typer.Exit(1)
+
+
+def _signal_str(rssi: int) -> str:
+    """Format RSSI as colored dBm string with Nerd Font signal icon.
+
+    Icons (nf-md-wifi_strength_*):
+      \uf0928  strength_4  >= -50 dBm  excellent
+      \uf0925  strength_3  >= -65 dBm  good
+      \uf0922  strength_2  >= -75 dBm  fair
+      \uf091f  strength_1  >= -85 dBm  weak
+      \uf092f  outline     <  -85 dBm  very weak
+    """
+    if rssi >= -50:
+        icon, color = "\uf0928", "green"
+    elif rssi >= -65:
+        icon, color = "\uf0925", "green"
+    elif rssi >= -75:
+        icon, color = "\uf0922", "yellow"
+    elif rssi >= -85:
+        icon, color = "\uf091f", "yellow"
+    else:
+        icon, color = "\uf092f", "red"
+    return f"[{color}]{icon} {rssi}dBm[/{color}]"
 
 
 def _ble_is_bt_addr(s: str) -> bool:
@@ -1977,8 +1991,13 @@ def _ble_scan(client: 'AgentClient', scan_sec: int = 5) -> None:
         "print(json.dumps(out))\n"
         "ble.active(False)\n"
     )
+    from rich.live import Live
+    from rich.spinner import Spinner
     try:
-        result = client.send_command('exec', code=code, timeout=scan_sec + 8)
+        _scan_console = Console()
+        _spinner = Spinner("dots", text=Text(f" Scanning for BLE devices ({scan_sec}s)...", style="bright_cyan"))
+        with Live(_spinner, console=_scan_console, refresh_per_second=10, transient=True):
+            result = client.send_command('exec', code=code, timeout=scan_sec + 8)
         if result.get('error'):
             raise RuntimeError(result['error'])
         data = _ble_parse_json_output(result.get('output', ''))
@@ -1993,16 +2012,14 @@ def _ble_scan(client: 'AgentClient', scan_sec: int = 5) -> None:
         table.add_column("Address", style="bright_white", width=18)
         table.add_column("Name", width=24)
         table.add_column("AddrType", justify="center", width=9)
-        table.add_column("RSSI", justify="right", width=8)
+        table.add_column("Signal", justify="right", width=14)
         for entry in data:
-            rssi = entry['rssi']
-            rssi_col = "green" if rssi >= -60 else ("yellow" if rssi >= -75 else "red")
             name = entry['name'] or "[dim](no-name)[/dim]"
             addr_type_str = "[bright_green]public[/bright_green]" if entry['at'] == 0 else "[bright_yellow]random[/bright_yellow]"
             table.add_row(
                 entry['addr'], name,
                 addr_type_str,
-                f"[{rssi_col}]{rssi}dBm[/{rssi_col}]"
+                _signal_str(entry['rssi'])
             )
         console = Console(width=CONSOLE_WIDTH)
         console.print(Panel(
