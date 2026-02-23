@@ -1791,23 +1791,22 @@ print(json.dumps(results))
 
 def _signal_icon(rssi: int) -> str:
     if rssi >= -50:
-        icon, color = chr(0xF0928), "green"
+        icon, color = chr(0xF04A2), "green"
     elif rssi >= -65:
-        icon, color = chr(0xF0925), "green"
+        icon, color = chr(0xF08BE), "green"
     elif rssi >= -75:
-        icon, color = chr(0xF0922), "yellow"
+        icon, color = chr(0xF08BD), "yellow"
     elif rssi >= -85:
-        icon, color = chr(0xF091F), "yellow"
+        icon, color = chr(0xF08BC), "yellow"
     else:
-        icon, color = chr(0xF092F), "red"
+        icon, color = chr(0xF08BF), "red"
     return f"[{color}]{icon}[/{color}]"
 
 
 def _signal_str(rssi: int) -> str:
-    """Return a colored dBm string (no icon)."""
     if rssi >= -65:
         color = "green"
-    elif rssi >= -75:
+    elif rssi >= -85:
         color = "yellow"
     else:
         color = "red"
