@@ -1790,16 +1790,6 @@ print(json.dumps(results))
 
 
 def _signal_icon(rssi: int) -> str:
-    """Return a colored Nerd Font wifi-strength icon for the given RSSI.
-
-    nf-md-wifi_strength_* (Material Design, Nerd Font range U+F0900+):
-      U+F0928  strength_4  >= -50 dBm  excellent
-      U+F0925  strength_3  >= -65 dBm  good
-      U+F0922  strength_2  >= -75 dBm  fair
-      U+F091F  strength_1  >= -85 dBm  weak
-      U+F092F  off_outline <  -85 dBm  very weak
-    Using chr() to avoid \u vs \U escape ambiguity.
-    """
     if rssi >= -50:
         icon, color = chr(0xF0928), "green"
     elif rssi >= -65:
