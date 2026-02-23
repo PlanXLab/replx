@@ -589,6 +589,8 @@ By default, runs a file from your computer. Use -d to run from device.
             title="Script Sent",
             border_style="green"
         )
+    except typer.Exit:
+        raise
     except Exception as e:
         error_msg = str(e)
         if 'Not connected' in error_msg:
