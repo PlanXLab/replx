@@ -1758,6 +1758,7 @@ print(json.dumps(results))
         table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
         table.add_column("SSID", style="bright_white", width=32)
         table.add_column("Signal", justify="right", width=8)
+        table.add_column("", justify="left", width=2)
         table.add_column("Ch", justify="center", width=4)
         table.add_column("Security", width=14)
         
@@ -1766,6 +1767,7 @@ print(json.dumps(results))
             table.add_row(
                 ssid_display,
                 _signal_str(ap["rssi"]),
+                _signal_icon(ap["rssi"]),
                 str(ap["channel"]),
                 ap["auth"]
             )
@@ -1787,27 +1789,39 @@ print(json.dumps(results))
         raise typer.Exit(1)
 
 
-def _signal_str(rssi: int) -> str:
-    """Format RSSI as colored dBm string with Nerd Font signal icon.
+def _signal_icon(rssi: int) -> str:
+    """Return a colored Nerd Font wifi-strength icon for the given RSSI.
 
-    Icons (nf-md-wifi_strength_*):
-      \uf0928  strength_4  >= -50 dBm  excellent
-      \uf0925  strength_3  >= -65 dBm  good
-      \uf0922  strength_2  >= -75 dBm  fair
-      \uf091f  strength_1  >= -85 dBm  weak
-      \uf092f  outline     <  -85 dBm  very weak
+    nf-md-wifi_strength_* (Material Design, Nerd Font range U+F0900+):
+      U+F0928  strength_4  >= -50 dBm  excellent
+      U+F0925  strength_3  >= -65 dBm  good
+      U+F0922  strength_2  >= -75 dBm  fair
+      U+F091F  strength_1  >= -85 dBm  weak
+      U+F092F  off_outline <  -85 dBm  very weak
+    Using chr() to avoid \u vs \U escape ambiguity.
     """
     if rssi >= -50:
-        icon, color = "\uf0928", "green"
+        icon, color = chr(0xF0928), "green"
     elif rssi >= -65:
-        icon, color = "\uf0925", "green"
+        icon, color = chr(0xF0925), "green"
     elif rssi >= -75:
-        icon, color = "\uf0922", "yellow"
+        icon, color = chr(0xF0922), "yellow"
     elif rssi >= -85:
-        icon, color = "\uf091f", "yellow"
+        icon, color = chr(0xF091F), "yellow"
     else:
-        icon, color = "\uf092f", "red"
-    return f"[{color}]{icon} {rssi}dBm[/{color}]"
+        icon, color = chr(0xF092F), "red"
+    return f"[{color}]{icon}[/{color}]"
+
+
+def _signal_str(rssi: int) -> str:
+    """Return a colored dBm string (no icon)."""
+    if rssi >= -65:
+        color = "green"
+    elif rssi >= -75:
+        color = "yellow"
+    else:
+        color = "red"
+    return f"[{color}]{rssi}dBm[/{color}]"
 
 
 def _ble_is_bt_addr(s: str) -> bool:
@@ -2012,14 +2026,16 @@ def _ble_scan(client: 'AgentClient', scan_sec: int = 5) -> None:
         table.add_column("Address", style="bright_white", width=18)
         table.add_column("Name", width=24)
         table.add_column("AddrType", justify="center", width=9)
-        table.add_column("Signal", justify="right", width=14)
+        table.add_column("Signal", justify="right", width=8)
+        table.add_column("", justify="left", width=2)
         for entry in data:
             name = entry['name'] or "[dim](no-name)[/dim]"
             addr_type_str = "[bright_green]public[/bright_green]" if entry['at'] == 0 else "[bright_yellow]random[/bright_yellow]"
             table.add_row(
                 entry['addr'], name,
                 addr_type_str,
-                _signal_str(entry['rssi'])
+                _signal_str(entry['rssi']),
+                _signal_icon(entry['rssi'])
             )
         console = Console(width=CONSOLE_WIDTH)
         console.print(Panel(
