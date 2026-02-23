@@ -1998,7 +1998,7 @@ def _ble_scan(client: 'AgentClient', scan_sec: int = 5) -> None:
             rssi = entry['rssi']
             rssi_col = "green" if rssi >= -60 else ("yellow" if rssi >= -75 else "red")
             name = entry['name'] or "[dim](no-name)[/dim]"
-            addr_type_str = "public" if entry['at'] == 0 else "random"
+            addr_type_str = "[bright_green]public[/bright_green]" if entry['at'] == 0 else "[bright_yellow]random[/bright_yellow]"
             table.add_row(
                 entry['addr'], name,
                 addr_type_str,
