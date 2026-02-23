@@ -153,7 +153,6 @@ class BoardConnection:
     version: str = "?"
     device_root_fs: str = "/"
     
-    # Unique board ID from machine.unique_id().hex() - lazy evaluated on first command
     board_id: Optional[str] = None
 
     busy: bool = False

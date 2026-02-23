@@ -154,7 +154,6 @@ class AgentClient:
         self.sock.settimeout(0.01)
         input_interval = 0.001
         last_input_time = 0
-        error_check_until = time.time() + 0.1
 
         try:
             while True:
@@ -184,7 +183,7 @@ class AgentClient:
                     msg = AgentProtocol.decode_message(data)
 
                     if msg and msg.get('seq') == seq:
-                        if now < error_check_until and msg.get('type') == 'response' and msg.get('error'):
+                        if msg.get('type') == 'response' and msg.get('error'):
                             raise RuntimeError(msg['error'])
 
                         if msg.get('type') == 'stream':
