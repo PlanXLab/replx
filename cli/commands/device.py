@@ -930,7 +930,7 @@ Scans all serial ports to detect MicroPython devices.
     )
 
 
-@app.command(rich_help_panel="Device Management")
+@app.command(rich_help_panel="Connectivity")
 def wifi(
     args: list[str] = typer.Argument(None, help="WiFi arguments"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
@@ -1989,18 +1989,20 @@ def _ble_scan(client: 'AgentClient', scan_sec: int = 5) -> None:
             OutputHelper.print_panel("No BLE devices found.", title="BLE Scan", border_style="yellow")
             return
 
-        table = Table(show_header=True, header_style="bold cyan", box=get_panel_box(), expand=True)
-        table.add_column("Address", width=18)
-        table.add_column("T", width=2, justify="center")
-        table.add_column("RSSI", width=7, justify="right")
-        table.add_column("Name")
+        table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+        table.add_column("Address", style="bright_white", width=18)
+        table.add_column("Name", width=24)
+        table.add_column("AddrType", justify="center", width=9)
+        table.add_column("RSSI", justify="right", width=8)
         for entry in data:
             rssi = entry['rssi']
             rssi_col = "green" if rssi >= -60 else ("yellow" if rssi >= -75 else "red")
             name = entry['name'] or "[dim](no-name)[/dim]"
+            addr_type_str = "public" if entry['at'] == 0 else "random"
             table.add_row(
-                entry['addr'], str(entry['at']),
-                f"[{rssi_col}]{rssi}[/{rssi_col}]", name
+                entry['addr'], name,
+                addr_type_str,
+                f"[{rssi_col}]{rssi}dBm[/{rssi_col}]"
             )
         console = Console(width=CONSOLE_WIDTH)
         console.print(Panel(
@@ -2257,7 +2259,7 @@ def _ble_notify(target: str, uuid_info: dict, notify_sec: int = 10,
             pass
 
 
-@app.command(rich_help_panel="Device Management")
+@app.command(rich_help_panel="Connectivity")
 def ble(
     args: list[str] = typer.Argument(None, help="BLE arguments"),
     time_opt: int = typer.Option(0, "--time", "-t", help="Duration in seconds (scan default:5, notify default:10)"),
