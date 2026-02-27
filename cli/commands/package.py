@@ -117,36 +117,34 @@ Package management for MicroPython devices.
   [yellow]clean[/yellow]                   Remove current core/device from local store
 
 [bold cyan]Update Targets:[/bold cyan]
-  [green]core/[/green]                   Install core libraries for connected board
-  [green]device/[/green]                 Install device libraries for connected board
-  [green]file.py[/green]                 Single .py file → /lib/file.mpy
-  [green]file.bin[/green]                Other files → /lib/file.bin (as-is)
-  [green]*.py[/green] | [green]a.py b.py[/green]        Multiple files → /lib/
-  [green]folder[/green]                  Folder → /lib/folder/ (with structure)
-  [green]https://...[/green]             Download from URL and install
+    [green]core.all[/green]                 Install all core libs for connected board
+    [green]device.all[/green]               Install all device libs for connected board
+    [green]core.<file>[/green]              Install one core file (e.g., core.termio.py)
+    [green]device.<file>[/green]            Install one device file (e.g., device.termio.py)
+    [green]https://...[/green]              Download from URL and install
 
 [bold cyan]Update Options:[/bold cyan]
-  [green]--target[/green] [dim]PATH[/dim]           Specify board target path (e.g., lib/ticle, /lib/ticle)
-                          [dim]Applies to file/folder/URL targets[/dim]
+    [green]--target[/green] [dim]PATH[/dim]           Specify board target path (e.g., lib/ticle, /lib/ticle)
+                            [dim]Applies to core/device targets and URL target[/dim]
 
 [bold cyan]Examples:[/bold cyan]
-  replx pkg search                               [dim]List all libraries[/dim]
-  replx pkg search audio                         [dim]Search by name[/dim]
-  replx pkg download                             [dim]Download for connected board[/dim]
-  replx pkg update core/                         [dim]Install core libs[/dim]
-  replx pkg update slip.py                       [dim]→ /lib/slip.mpy[/dim]
-  replx pkg update *.py                          [dim]All .py files → /lib/[/dim]
-  replx pkg update upaho                         [dim]→ /lib/upaho/[/dim]
-  replx pkg update ws2812 --target lib/ticle     [dim]→ /lib/ticle/ws2812/[/dim]
-  replx pkg update https://... --target lib/ext  [dim]→ /lib/ext/[/dim]
-  replx pkg clean                                [dim]Remove current core/device[/dim]
+  replx pkg search                                   [dim]List all libraries[/dim]
+  replx pkg search audio                             [dim]Search by name[/dim]
+  replx pkg download                                 [dim]Download for connected board[/dim]
+  replx pkg update core.all                          [dim]Install all core libs[/dim]
+  replx pkg update device.all                        [dim]Install all device libs[/dim]
+  replx pkg update core.termio.py                    [dim]→ /lib/termio.mpy[/dim]
+  replx pkg update device.termio.py                  [dim]→ /lib/<device>/termio.mpy[/dim]
+  replx pkg update core.termio.py --target lib/ext   [dim]→ /lib/ext/termio.mpy[/dim]
+  replx pkg update https://... --target lib/ext      [dim]→ /lib/ext/[/dim]
+  replx pkg clean                                    [dim]Remove current core/device[/dim]
 
-[bold cyan]Workflow:[/bold cyan] search → download → update core/
+[bold cyan]Workflow:[/bold cyan] search → download → update core.all
 
 [bold cyan]Note:[/bold cyan]
   • Device connection required (--port or default)
   • Core/device auto-detected from connected board
-  • Options --owner/--repo/--ref are for search/download only
+    • Options --owner/--repo/--ref are for search/download/update only
   • URL format for GitHub: [green]https://GITHUB/OWNER/REPO/BRANCH/path/file.py[/green]
     [dim]• GITHUB: raw.githubusercontent.com [/dim]
     [dim]• e.g. OWNER: micropython | REPO: micropython-lib | BRANCH: master[/dim]
@@ -179,7 +177,7 @@ Package management for MicroPython devices.
     elif cmd == "download":
         _pkg_download(cmd_args, owner, repo, ref)
     elif cmd == "update":
-        _pkg_update(cmd_args, target_path)
+        _pkg_update(cmd_args, target_path, owner, repo, ref)
     elif cmd == "clean":
         _pkg_clean(cmd_args)
     else:
@@ -404,7 +402,9 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
     )
 
 
-def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
+def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
+                  scope_filter: Optional[str] = None,
+                  file_filter: Optional[str] = None):
     _ensure_connected()
     
     StoreManager.ensure_home_store()
@@ -436,6 +436,12 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
         raise typer.BadParameter(f"Failed to load remote meta: {e}")
 
     cores, devices = RegistryHelper.root_sections(remote)
+
+    if scope_filter not in (None, "core", "device"):
+        raise typer.BadParameter(f"Invalid scope_filter: {scope_filter}")
+
+    include_core = scope_filter in (None, "core")
+    include_device = scope_filter in (None, "device")
     
     core_exists_remote = core in cores if core else False
     device_exists_remote = (device_name_to_path(dev) in devices if dev else False) and (dev != core)
@@ -627,9 +633,16 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
     download_targets = []
     
     # Check core for updates (always check, even if already downloaded)
-    if core_exists_remote:
+    if core_exists_remote and include_core:
         core_src_files = _plan_for_core(core, "src")
         core_hints_files = _plan_for_core(core, "typehints")
+
+        if file_filter:
+            core_src_files = [
+                item for item in core_src_files
+                if os.path.basename(item[0]) == file_filter
+            ]
+            core_hints_files = []
         
         for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in core_src_files:
             plan.append(("core", core, "src", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
@@ -649,9 +662,16 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str):
             download_targets.append(f"core/{core}")
     
     # Check device for updates (always check, even if already downloaded)
-    if device_exists_remote:
+    if device_exists_remote and include_device:
         device_src_files = _plan_for_device(device_name_to_path(dev), "src")
         device_hints_files = _plan_for_device(device_name_to_path(dev), "typehints")
+
+        if file_filter:
+            device_src_files = [
+                item for item in device_src_files
+                if os.path.basename(item[0]) == file_filter
+            ]
+            device_hints_files = []
         
         for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in device_src_files:
             plan.append(("device", device_name_to_path(dev), "src", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
@@ -815,8 +835,8 @@ SPEC can be:
 """
 
 
-def _install_spec_internal(spec: str, live=None, update_callback=None):
-    if spec.startswith("core/") or spec.startswith("device/"):
+def _install_spec_internal(spec: str, live=None, update_callback=None, target_path: Optional[str] = None):
+    if spec.startswith("core.") or spec.startswith("device."):
         scope, rest = InstallHelper.resolve_spec(spec)
         base, local_list = InstallHelper.list_local_py_targets(scope, rest)
         if not local_list:
@@ -849,7 +869,10 @@ def _install_spec_internal(spec: str, live=None, update_callback=None):
                 parts = rel.split("/")
                 if len(parts) >= 3:
                     rel_dir = "ext"
-                    remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
+                    if target_path:
+                        remote_dir = target_path.rstrip("/") + "/"
+                    else:
+                        remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
                     
                     if is_python:
                         CompilerHelper.compile_to_staging(abs_file, base)
@@ -864,7 +887,10 @@ def _install_spec_internal(spec: str, live=None, update_callback=None):
                     unique_dirs.add(remote_dir)
                     continue
             
-            remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
+            if target_path:
+                remote_dir = target_path.rstrip("/") + ("/" + rel_dir + "/" if rel_dir else "/")
+            else:
+                remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
             
             if is_python:
                 # Python file: compile to .mpy
@@ -992,107 +1018,26 @@ def _install_spec_internal(spec: str, live=None, update_callback=None):
         raise typer.BadParameter(f"Invalid spec format: {spec}")
 
 
-def _pkg_update(args: list[str], target_path: Optional[str] = None):
+def _pkg_update(args: list[str], target_path: Optional[str] = None,
+                owner: str = "PlanXLab", repo: str = "replx_libs", ref: str = "main"):
     _ensure_connected()
 
     StoreManager.ensure_home_store()
-    
-    expanded_args = []
-    for arg in args:
-        if '*' in arg or '?' in arg:
-            matches = glob.glob(arg)
-            if matches:
-                expanded_args.extend(matches)
-            else:
-                expanded_args.append(arg)  # Keep original if no matches
-        else:
-            expanded_args.append(arg)
-    
-    spec = expanded_args[0] if expanded_args else None
-    
-    if len(expanded_args) > 1:
-        py_files = [f for f in expanded_args if f.endswith('.py') and os.path.isfile(os.path.abspath(f))]
-        if not py_files:
-            OutputHelper.print_panel(
-                f"No valid .py files found in: [yellow]{' '.join(expanded_args)}[/yellow]",
-                title="Update Error",
-                border_style="red"
-            )
-            raise typer.Exit(1)
-        
-        if target_path:
-            target_dir = target_path
-        else:
-            target_dir = "lib"
-        
-        compiled_files = []
-        total_size = 0
-        for py_file in py_files:
-            ap = os.path.abspath(py_file)
-            CompilerHelper.compile_to_staging(ap, os.path.dirname(ap))
-            name = os.path.basename(ap)
-            remote = f"/{target_dir}/{name[:-3]}.mpy"
-            out_mpy = CompilerHelper.staging_out_for(ap, os.path.dirname(ap), CompilerHelper.mpy_arch_tag())
-            file_size = os.path.getsize(out_mpy)
-            compiled_files.append((out_mpy, remote, target_dir, file_size))
-            total_size += file_size
-        
-        client = _create_agent_client()
-        
-        total_files = len(compiled_files)
-        
-        progress_state = {"cumulative": 0, "current": 0}
-        progress_lock = threading.Lock()
-        
-        def progress_callback(data):
-            with progress_lock:
-                if isinstance(data, dict):
-                    progress_state["current"] = data.get("current", 0)
-        
-        with Live(OutputHelper.create_progress_panel(0, total_size, title=f"Updating {total_files} files to {STATE.device}", message=f"Preparing...", counter_text=f"0/{_format_size(total_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
-            for idx, (local_mpy, remote, _, file_size) in enumerate(compiled_files):
-                filename = os.path.basename(local_mpy)
-                
-                with progress_lock:
-                    progress_state["current"] = 0
-                
-                upload_result = [None]
-                def do_upload(lp=local_mpy, rp=remote):
-                    try:
-                        upload_result[0] = client.send_command_streaming(
-                            'put_from_local_streaming',
-                            progress_callback=progress_callback,
-                            local_path=lp,
-                            remote_path=rp
-                        )
-                    except Exception as e:
-                        upload_result[0] = {"error": str(e)}
-                
-                upload_thread = threading.Thread(target=do_upload, daemon=True)
-                upload_thread.start()
-                
-                while upload_thread.is_alive():
-                    with progress_lock:
-                        current_bytes = progress_state["current"]
-                        cumulative = progress_state["cumulative"]
-                    total_sent = cumulative + current_bytes
-                    live.update(OutputHelper.create_progress_panel(total_sent, total_size, title=f"Updating {total_files} files to {STATE.device}", message=f"[{idx+1}/{total_files}] {filename} ({_format_size(file_size)})", counter_text=f"{_format_size(total_sent)}/{_format_size(total_size)}"))
-                    time.sleep(0.05)
-                
-                upload_thread.join()
-                
-                with progress_lock:
-                    progress_state["cumulative"] += file_size
-            
-            live.update(OutputHelper.create_progress_panel(total_size, total_size, title=f"Updating {total_files} files to {STATE.device}", message="Complete", counter_text=f"{_format_size(total_size)}/{_format_size(total_size)}"))
-        
-        target_display = f"/{target_dir}/" if target_path else "/lib/"
+    spec = args[0].strip() if args else None
+
+    if len(args) > 1:
         OutputHelper.print_panel(
-            f"[green]{total_files}[/green] file(s) ([cyan]{_format_size(total_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
-            title="Update Complete",
-            border_style="green"
+            "Only one TARGET is supported for [bright_blue]pkg update[/bright_blue].\n\n"
+            "Valid targets:\n"
+            "  [bright_blue]core.all[/bright_blue]\n"
+            "  [bright_blue]device.all[/bright_blue]\n"
+            "  [bright_blue]core.<file>[/bright_blue]\n"
+            "  [bright_blue]device.<file>[/bright_blue]\n"
+            "  [bright_blue]https://...[/bright_blue]",
+            title="Update Error",
+            border_style="red"
         )
-        return
+        raise typer.Exit(1)
 
     def _install_local_folder(abs_dir: str, target_path: Optional[str] = None):
         py_files = []
@@ -1285,16 +1230,18 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None):
         )
         return 1
 
-    if spec and (spec == "core/" or spec == "device/"):
-        if target_path:
-            OutputHelper.print_panel(
-                "[yellow]--target[/yellow] option is not supported for [cyan]core/[/cyan] or [cyan]device/[/cyan] targets.\n\n"
-                "The target path is automatically determined for these targets.",
-                title="Update Warning",
-                border_style="yellow"
-            )
-        _install_spec_internal(spec)
-        return
+    if spec in ("core/", "device/", "core", "device"):
+        OutputHelper.print_panel(
+            f"Unsupported target: [red]{spec}[/red]\n\n"
+            "Use the new target format:\n"
+            "  [bright_blue]core.all[/bright_blue]\n"
+            "  [bright_blue]device.all[/bright_blue]\n"
+            "  [bright_blue]core.<file>[/bright_blue]\n"
+            "  [bright_blue]device.<file>[/bright_blue]",
+            title="Update Error",
+            border_style="red"
+        )
+        raise typer.Exit(1)
 
     if spec and InstallHelper.is_url(spec):
         u = urlparse(spec)
@@ -1333,42 +1280,56 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None):
     if not spec:
         OutputHelper.print_panel(
             "Specify a target:\n\n"
-            "  [bright_blue]core/[/bright_blue]         Install core libraries for connected board\n"
-            "  [bright_blue]device/[/bright_blue]       Install device libraries for connected board\n"
-            "  [bright_blue]<file>[/bright_blue]        Upload single file to /lib/ (.py → .mpy)\n"
-            "  [bright_blue]<folder>[/bright_blue]      Upload folder to /lib/<folder>/\n"
+            "  [bright_blue]core.all[/bright_blue]        Install all core libraries\n"
+            "  [bright_blue]device.all[/bright_blue]      Install all device libraries\n"
+            "  [bright_blue]core.<file>[/bright_blue]     Install one core file\n"
+            "  [bright_blue]device.<file>[/bright_blue]   Install one device file\n"
             "  [bright_blue]<URL>[/bright_blue]         Download and install from URL\n\n"
             "Options:\n"
-            "  [bright_blue]--target PATH[/bright_blue] Specify board target path (for file/folder)\n\n"
-            "Use [bright_blue]replx init[/bright_blue] to install all core and device libraries.",
+            "  [bright_blue]--target PATH[/bright_blue] Specify board target path\n\n"
+            "Examples:\n"
+            "  [bright_blue]replx pkg update core.all[/bright_blue]\n"
+            "  [bright_blue]replx pkg update core.termio.py[/bright_blue]",
             title="Update Error",
             border_style="red"
         )
         raise typer.Exit(1)
 
-    target = spec
-    ap = os.path.abspath(target)
-    if os.path.isdir(ap):
-        _install_local_folder(ap, target_path)
-        return
-    if os.path.isfile(ap):
-        _install_single_file(ap, target_path)
-        return
+    try:
+        scope, rest = InstallHelper.resolve_spec(spec)
+    except typer.BadParameter:
+        OutputHelper.print_panel(
+            f"Invalid target: [red]{spec}[/red]\n\n"
+            "Valid targets:\n"
+            "  [bright_blue]core.all[/bright_blue]\n"
+            "  [bright_blue]device.all[/bright_blue]\n"
+            "  [bright_blue]core.<file>[/bright_blue]\n"
+            "  [bright_blue]device.<file>[/bright_blue]\n"
+            "  [bright_blue]https://...[/bright_blue]",
+            title="Update Error",
+            border_style="red"
+        )
+        raise typer.Exit(1)
 
-    OutputHelper.print_panel(
-        f"Target not found: [red]{spec}[/red]\n\n"
-        "Valid targets:\n"
-        "  [bright_blue]core/[/bright_blue]         Install core libraries for connected board\n"
-        "  [bright_blue]device/[/bright_blue]       Install device libraries for connected board\n"
-        "  [bright_blue]<file>[/bright_blue]        Upload single file to /lib/ (.py → .mpy)\n"
-        "  [bright_blue]<folder>[/bright_blue]      Upload folder to /lib/<folder>/\n"
-        "  [bright_blue]<URL>[/bright_blue]         Download and install from URL\n\n"
-        "Options:\n"
-        "  [bright_blue]--target PATH[/bright_blue] Specify board target path (for file/folder only)",
-        title="Update Error",
-        border_style="red"
+    _pkg_download(
+        [], owner, repo, ref,
+        scope_filter=scope,
+        file_filter=rest if rest else None,
     )
-    raise typer.Exit(1)
+
+    if rest:
+        _, local_list = InstallHelper.list_local_py_targets(scope, rest)
+        if not local_list:
+            OutputHelper.print_panel(
+                f"Target file not found in local store: [red]{spec}[/red]\n\n"
+                "Run [bright_blue]replx pkg search[/bright_blue] to inspect available modules.",
+                title="Update Error",
+                border_style="red"
+            )
+            raise typer.Exit(1)
+
+    _install_spec_internal(spec, target_path=target_path)
+    return
 
 
 def _pkg_clean(args: list[str]):

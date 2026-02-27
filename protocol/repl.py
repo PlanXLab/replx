@@ -745,6 +745,7 @@ class ReplProtocol:
         PROMPT_COLOR = b"\033[92m"
         CONT_COLOR = b"\033[93m"
         RESET_COLOR = b"\033[0m"
+        read_errors = 0
         
         try:
             while self.serial_reader_running:
@@ -754,6 +755,7 @@ class ReplProtocol:
                     break
 
                 if not count:
+                    read_errors = 0
                     time.sleep(0.01)
                     continue
 
@@ -764,6 +766,8 @@ class ReplProtocol:
 
                 if not data:
                     continue
+
+                read_errors = 0
 
                 if b">>> " in data:
                     self._repl_prompt_detected = True
@@ -855,6 +859,23 @@ class ReplProtocol:
  
     def repl(self):
         import time
+
+        def _write_with_timeout(data: bytes, timeout_sec: float = 1.5) -> bool:
+            result = {"ok": False, "err": None}
+
+            def _writer():
+                try:
+                    self.transport.write(data)
+                    result["ok"] = True
+                except Exception as e:
+                    result["err"] = e
+
+            t = threading.Thread(target=_writer, daemon=True)
+            t.start()
+            t.join(timeout=timeout_sec)
+            if t.is_alive():
+                return False
+            return bool(result["ok"]) and result["err"] is None
         
         self.serial_reader_running = True
         self.serial_out_put_enable = False 
@@ -866,9 +887,15 @@ class ReplProtocol:
         
         time.sleep(0.05)
 
-        self.transport.write(CTRL_B)
+        if not _write_with_timeout(CTRL_B):
+            self.serial_reader_running = False
+            print('')
+            return
         time.sleep(0.05)
-        self.transport.write(CTRL_C)
+        if not _write_with_timeout(CTRL_C):
+            self.serial_reader_running = False
+            print('')
+            return
         time.sleep(0.1)
         
         drain_timeout = time.time() + 0.5
@@ -883,7 +910,10 @@ class ReplProtocol:
         
         self.serial_out_put_enable = True
         self.serial_out_put_count = 1
-        self.transport.write(b'\r')
+        if not _write_with_timeout(b'\r'):
+            self.serial_reader_running = False
+            print('')
+            return
         
         prompt_timeout = time.time() + 1.0
         while time.time() < prompt_timeout:
@@ -895,7 +925,12 @@ class ReplProtocol:
         recent_len = 0
         
         while True:
+            if self.serial_reader_running and not repl_thread.is_alive():
+                break
+
             char = getch()
+            if not char:
+                continue
 
             if char == b'\x07': 
                 self.serial_out_put_enable = False
@@ -925,9 +960,15 @@ class ReplProtocol:
                     recent_chars[5] = char[0]
             
             try:
-                self.transport.write(b'\r' if char == b'\n' else char)
-            except (OSError, Exception):
+                if not _write_with_timeout(b'\r' if char == b'\n' else char):
+                    break
+            except Exception:
                 break
             
         self.serial_reader_running = False
+        if repl_thread.is_alive():
+            try:
+                repl_thread.join(timeout=0.2)
+            except Exception:
+                pass
         print('')

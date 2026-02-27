@@ -2,6 +2,7 @@ import re
 import sys
 import time
 import threading
+from concurrent.futures import Future as ConcurrentFuture
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -105,6 +106,7 @@ class InteractiveSessionState:
 class ReplSessionState:
     active: bool = False
     ppid: Optional[int] = None
+    reader_future: Optional[ConcurrentFuture] = None
     reader_thread: Optional[threading.Thread] = None
     output_buffer: bytes = b""
     buffer_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -118,6 +120,9 @@ class ReplSessionState:
     def stop(self):
         self.active = False
         self.ppid = None
+        if self.reader_future is not None:
+            self.reader_future.cancel()
+            self.reader_future = None
         if self.reader_thread:
             self.reader_thread.join(timeout=1)
             self.reader_thread = None
@@ -428,7 +433,7 @@ class ConnectionManager:
             conn = self.get_connection(port)
             if conn and conn.repl_protocol:
                 try:
-                    transport = conn.repl_protocol._transport
+                    transport = conn.repl_protocol.transport
                     transport.write(CTRL_C)
                     time.sleep(0.05)
                     transport.write(CTRL_B)
@@ -461,7 +466,7 @@ class ConnectionManager:
 
         if conn.repl_protocol:
             try:
-                transport = conn.repl_protocol._transport
+                transport = conn.repl_protocol.transport
                 if transport:
                     try:
                         transport.write(CTRL_B)

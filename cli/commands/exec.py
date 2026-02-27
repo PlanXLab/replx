@@ -15,7 +15,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from replx.terminal import IS_WINDOWS, getch
+from replx.terminal import IS_WINDOWS, getch, disable_quick_edit_mode, restore_console_mode
 from replx.utils.constants import CTRL_C, CTRL_D
 from ..helpers import (
     OutputHelper, StoreManager,
@@ -313,7 +313,7 @@ By default, runs a file from your computer. Use -d to run from device.
                 border_style="red"
             )
             raise typer.Exit(1)
-        local_file = script_file
+        local_file = os.path.abspath(script_file)
     
     client = _create_agent_client()
     
@@ -726,25 +726,36 @@ Start a live MicroPython session where you can type code line by line.
     reader_client = [None]
     
     def reader_thread_func():
-        """Background thread that reads agent output and prints to stdout."""
+        """Background thread that reads agent output and prints to stdout.
+
+        Adaptive polling:
+        - Reset to 5 ms when output arrives (keep up with bursty data).
+        - Back off up to 50 ms when idle to reduce UDP traffic / GIL pressure.
+        - Use a short timeout (0.5 s) for repl_read so stale socket state
+          never causes a multi-second stall.
+        """
         try:
             reader_client[0] = _create_agent_client()
+            sleep_time = 0.005
             while repl_running[0]:
                 try:
-                    result = reader_client[0].send_command('repl_read')
+                    result = reader_client[0].send_command('repl_read', timeout=0.5)
                     output = result.get('output', '')
                     if output:
+                        sleep_time = 0.005
                         output = colorize_prompt(output)
                         if IS_WINDOWS:
                             sys.stdout.buffer.write(output.encode('utf-8').replace(b'\r', b''))
                         else:
                             sys.stdout.buffer.write(output.encode('utf-8'))
                         sys.stdout.buffer.flush()
+                    else:
+                        sleep_time = min(sleep_time * 1.5, 0.05)
                 except Exception:
                     if not repl_running[0]:
                         break
-                    time.sleep(0.05)
-                time.sleep(0.005)
+                    sleep_time = 0.05
+                time.sleep(sleep_time)
         finally:
             if reader_client[0]:
                 try:
@@ -756,7 +767,21 @@ Start a live MicroPython session where you can type code line by line.
     reader.start()
     
     writer_client = _create_agent_client()
-    
+
+    # Windows Quick Edit Mode 비활성화 ─────────────────────────────────────
+    # Quick Edit / Mark Mode가 활성화된 상태에서 사용자가 터미널 창을
+    # 클릭하면 Windows가 콘솔 I/O(ReadConsoleInput 포함)를 일시 정지시켜
+    # getch()가 무기한 블로킹된다. REPL 사용 중에는 비활성화하고
+    # 종료 시 반드시 복원한다.
+    _old_console_mode = disable_quick_edit_mode()
+
+    def _restore_console():
+        restore_console_mode(_old_console_mode)
+
+    import atexit as _atexit
+    _atexit.register(_restore_console)
+    # ──────────────────────────────────────────────────────────────────────
+
     input_buffer = ""
     
     try:
@@ -774,20 +799,20 @@ Start a live MicroPython session where you can type code line by line.
                     repl_running[0] = False
                     reader.join(timeout=0.3)
                     try:
-                        writer_client.send_command('repl_write', data='\x03')
+                        writer_client.send_command('repl_write', data='\x03', timeout=1.5, max_retries=1)
                     except Exception:
                         pass
                     break
                 input_buffer = ""
                 try:
-                    writer_client.send_command('repl_write', data='\r')
+                    writer_client.send_command('repl_write', data='\r', timeout=1.5, max_retries=1)
                 except Exception:
                     break
             elif char == b'\x7f' or char == b'\x08':
                 if input_buffer:
                     input_buffer = input_buffer[:-1]
                 try:
-                    writer_client.send_command('repl_write', data=char.decode('utf-8', errors='replace'))
+                    writer_client.send_command('repl_write', data=char.decode('utf-8', errors='replace'), timeout=1.5, max_retries=1)
                 except Exception:
                     break
             else:
@@ -797,7 +822,7 @@ Start a live MicroPython session where you can type code line by line.
                     except UnicodeDecodeError:
                         pass
                 try:
-                    writer_client.send_command('repl_write', data=char.decode('utf-8', errors='replace'))
+                    writer_client.send_command('repl_write', data=char.decode('utf-8', errors='replace'), timeout=1.5, max_retries=1)
                 except Exception:
                     break
                 
@@ -805,6 +830,9 @@ Start a live MicroPython session where you can type code line by line.
         pass
     finally:
         repl_running[0] = False
+        # Quick Edit Mode 즉시 복원 (atexit 중복 실행 방지)
+        restore_console_mode(_old_console_mode)
+        _atexit.unregister(_restore_console)
         reader.join(timeout=0.5)
         
         try:
@@ -1540,7 +1568,7 @@ def _reset_soft(device: str, status: dict):
         if status.get('core') == 'EFR32MG':
             try:
                 client = _create_agent_client()
-                client.send_command('free')
+                client.send_command('release')
             except Exception:
                 pass
         

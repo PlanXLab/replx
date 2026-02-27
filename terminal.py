@@ -112,6 +112,46 @@ def utf8_need_follow(b0: int) -> int:
 
 if IS_WINDOWS:
     import msvcrt
+    import ctypes
+    import atexit as _atexit
+
+    _ENABLE_QUICK_EDIT    = 0x0040
+    _ENABLE_EXTENDED_FLAGS = 0x0080
+    _STD_INPUT_HANDLE     = -10
+
+    def disable_quick_edit_mode() -> int | None:
+        """Quick Edit / Mark Mode를 비활성화하고 이전 콘솔 모드 값을 반환한다.
+
+        반환값을 restore_console_mode()에 전달하면 원래 상태로 복원된다.
+        VS Code 터미널 등 ConsoleAPI를 사용하지 않는 환경(ConPTY)에서는
+        GetConsoleMode가 ERROR_INVALID_HANDLE을 반환하므로 None을 반환한다.
+        """
+        try:
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.GetStdHandle(_STD_INPUT_HANDLE)
+            if handle == ctypes.c_void_p(-1).value:
+                return None
+            old_mode = ctypes.c_ulong(0)
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(old_mode)):
+                return None
+            new_mode = (old_mode.value & ~_ENABLE_QUICK_EDIT) | _ENABLE_EXTENDED_FLAGS
+            kernel32.SetConsoleMode(handle, new_mode)
+            return old_mode.value
+        except Exception:
+            return None
+
+    def restore_console_mode(old_mode: int | None) -> None:
+        """disable_quick_edit_mode()가 반환한 값으로 콘솔 모드를 복원한다."""
+        if old_mode is None:
+            return
+        try:
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.GetStdHandle(_STD_INPUT_HANDLE)
+            if handle == ctypes.c_void_p(-1).value:
+                return
+            kernel32.SetConsoleMode(handle, old_mode)
+        except Exception:
+            pass
 
     def kbhit() -> bool:
         return msvcrt.kbhit()
@@ -151,6 +191,12 @@ if IS_WINDOWS:
             _PUTW(data.decode("utf-8", "strict"))
 
 else:
+    def disable_quick_edit_mode() -> None:
+        return None
+
+    def restore_console_mode(old_mode) -> None:
+        pass
+
     import tty
     import termios
     import atexit

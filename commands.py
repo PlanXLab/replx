@@ -7,7 +7,7 @@ class Cmd:
     SESSION_SWITCH_FG = 'session_switch_fg'
     SESSION_INFO = 'session_info'
     SET_DEFAULT = 'set_default'
-    FREE = 'free'
+    RELEASE = 'release'
 
     STATUS = 'status'
     SHUTDOWN = 'shutdown'
@@ -54,7 +54,7 @@ class Cmd:
 
 class CmdGroups:
     NON_REPL = frozenset({
-        Cmd.CONNECT, Cmd.FREE, Cmd.DISCONNECT_PORT,
+        Cmd.CONNECT, Cmd.RELEASE, Cmd.DISCONNECT_PORT,
         Cmd.STATUS, Cmd.SHUTDOWN, Cmd.PING, Cmd.RUN_STOP,
         Cmd.SESSION_INFO, Cmd.SESSION_SETUP, Cmd.SESSION_DISCONNECT,
         Cmd.SESSION_SWITCH_FG, Cmd.SET_DEFAULT
@@ -90,7 +90,7 @@ class CmdGroups:
     DETACHED_ALLOW = frozenset({
         Cmd.RUN_STOP, Cmd.RESET, Cmd.STATUS, Cmd.PING,
         Cmd.SHUTDOWN, Cmd.SESSION_INFO,
-        Cmd.SESSION_DISCONNECT, Cmd.DISCONNECT_PORT, Cmd.FREE
+        Cmd.SESSION_DISCONNECT, Cmd.DISCONNECT_PORT, Cmd.RELEASE
     })
 
 NON_REPL_COMMANDS = CmdGroups.NON_REPL

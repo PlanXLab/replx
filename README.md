@@ -4,11 +4,11 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-`replx`는 MicroPython 개발 환경에서 에이전트 기반 아키텍처를 통해 여러 CLI 세션과 여러 보드를 동시에 연결·관리하여 연결 효율성과 병렬 작업성을 높인 CLI 도구입니다.
+`replx` is a CLI tool for MicroPython development that uses an agent-based architecture to connect and manage multiple CLI sessions and multiple boards simultaneously, improving connection efficiency and enabling parallel workflows.
 
 ---
 
-## 전체 핵심 흐름
+## Core Architecture
 
 ```mermaid
 flowchart LR
@@ -24,227 +24,229 @@ flowchart LR
   classDef note fill:#f8f9fa,stroke:#c9ccd1,color:#444;
 ```
 
-위 다이어그램은 `replx`의 핵심 구조를 보여줍니다. 사용자가 실행한 CLI 명령은 먼저 백그라운드의 Agent Server와 UDP/IPC로 통신하고, Agent Server가 실제 보드와 시리얼 통신을 담당합니다. 이 구조 덕분에 여러 터미널 세션에서 연결 상태를 공유하면서 FG/BG 전환, 상태 조회, 명령 실행을 일관되게 처리할 수 있습니다.
+Each CLI command communicates with a background Agent Server over UDP/IPC. The Agent Server handles all serial communication with the boards. This design allows multiple terminal sessions to share connection state while consistently handling FG/BG switching, status queries, and command execution.
 
 ### Session / FG / BG / Default
 
-- **Session(SID)**: 터미널마다 생성되는 고유 작업 컨텍스트
-- **FG(Foreground) 연결**: 현재 세션에서 기본 대상으로 사용하는 보드
-- **BG(Background) 연결**: FG 외에 같은 세션에 추가로 붙인 보드
-- **Default 연결**: `setup`으로 저장된 기본 보드 정보(포트 생략 시 재사용)
+- **Session (SID)**: A unique work context created per terminal
+- **FG (Foreground) connection**: The board used as the default target in the current session
+- **BG (Background) connection**: Additional boards attached to the same session alongside FG
+- **Default connection**: Board info saved by `setup`, reused when no port is specified
 
 ```mermaid
 flowchart TB
   SID[Session SID]
-  FG[FG Board<br/>현재 세션 기본 보드]
+  FG[FG Board<br/>Default board for session]
   BG1[BG Board 1]
   BG2[BG Board 2]
-  DEF[Default Connection<br/>setup으로 저장]
+  DEF[Default Connection<br/>saved by setup]
 
   SID --> FG
   SID --> BG1
   SID --> BG2
-  DEF -. FG가 없을 때 선택 기준 .-> FG
+  DEF -. Used when no FG exists .-> FG
 ```
 
-핵심 규칙은 간단합니다.
+Key rules:
 
-1. 한 세션에는 **FG 1개 + BG 여러 개**가 있을 수 있습니다.
-2. FG 보드는 일반 명령에서 포트를 생략해도 사용할 수 있습니다.
-3. BG 보드 대상으로 실행할 때는 반드시 포트를 명시해야 합니다.
-4. `setup` 이후에는 저장된 기본 연결 정보를 기반으로 포트 생략 실행이 쉬워집니다.
+1. A session can have **one FG + multiple BG** boards.
+2. The FG board can be used without specifying a port in most commands.
+3. To target a BG board, the port must be specified explicitly.
+4. After `setup`, the saved default connection makes port-omitted execution straightforward.
 
-### setup과 작업공간(Workspace) 범위
+### setup and Workspace Scope
 
-`setup`은 단순 연결 명령이 아니라, **현재 VS Code 작업공간 기준**으로 개발 환경을 초기화하는 명령입니다.
+`setup` is not just a connect command — it initializes the development environment relative to the **current VS Code workspace**.
 
 ```mermaid
 flowchart TB
   ROOT[Filesystem Root<br/>C:\\ or /]
-  WSA[Workspace A<br/>.vscode/.replx 존재]
-  WSB[Workspace B<br/>상위 설정 없음]
+  WSA[Workspace A<br/>.vscode/.replx exists]
+  WSB[Workspace B<br/>no parent config]
   SUB1[Subfolder A-1]
   SUB2[Subfolder A-2]
-  NOTE_ROOT[최상위 루트는<br/>작업공간으로 사용 불가]
+  NOTE_ROOT[Filesystem root<br/>cannot be a workspace]
 
   ROOT --> WSA
   ROOT --> WSB
   WSA --> SUB1
   WSA --> SUB2
 
-  SUB1 -. setup 실행 .-> WSA
-  SUB2 -. setup 실행 .-> WSA
-  WSB -. setup 실행 .-> WSB
-  ROOT -. 규칙 .-> NOTE_ROOT
+  SUB1 -. run setup .-> WSA
+  SUB2 -. run setup .-> WSA
+  WSB -. run setup .-> WSB
+  ROOT -. rule .-> NOTE_ROOT
 ```
 
-1. `setup`을 실행하면 해당 작업공간에 대해 MicroPython 타입힌트, VS Code 설정, 기본 포트(Default 연결)가 설정됩니다.
-2. 파일시스템 최상위 루트(`C:\`, `/`)는 작업공간으로 사용할 수 없습니다.
-3. 작업공간은 하위 폴더를 가질 수 있으며, 하위 폴더에서 `setup`을 실행해도 설정은 상위 작업공간 범위에 반영됩니다.
-4. 상위 경로에 작업공간 설정이 없으면 하위 경로들은 서로 다른 작업공간으로 취급됩니다. 따라서 각 작업공간은 각각 `setup`할 수 있고 기본 포트도 서로 다를 수 있습니다.
+1. Running `setup` configures MicroPython type hints, VS Code settings, and the default port (Default connection) for that workspace.
+2. The filesystem root (`C:\`, `/`) cannot be used as a workspace.
+3. A workspace can contain subfolders — running `setup` from a subfolder applies settings to the parent workspace scope.
+4. If no workspace config exists in a parent path, each subdirectory is treated as an independent workspace with its own default port.
 
-### 명령이 어느 보드로 실행되는가?
+### Which board does a command target?
 
-일반 명령(`run`, `ls`, `usage` 등)은 다음 흐름으로 대상을 결정합니다.
+General commands (`run`, `ls`, `usage`, etc.) resolve the target board using the following flow:
 
 ```mermaid
 flowchart TB
-  CMD[일반 명령 실행<br/>run / ls / usage ...]
-  HASPORT{명령에 포트 지정?}
-  HASFG{현재 세션 FG 존재?}
-  HASDEF{저장된 Default 연결 존재?}
-  USEPORT[지정 포트 보드 사용]
-  USEFG[FG 보드 사용]
-  USEDEF[Default 보드로 연결 시도 후 사용]
-  ERR[연결 대상 없음<br/>setup 필요]
+  CMD[Command<br/>run / ls / usage ...]
+  HASPORT{Port specified?}
+  HASFG{Session FG exists?}
+  HASDEF{Saved Default exists?}
+  USEPORT[Use specified port]
+  USEFG[Use FG board]
+  USEDEF[Connect via Default and use]
+  ERR[No target<br/>run setup first]
 
   CMD --> HASPORT
-  HASPORT -- 예 --> USEPORT
-  HASPORT -- 아니오 --> HASFG
-  HASFG -- 예 --> USEFG
-  HASFG -- 아니오 --> HASDEF
-  HASDEF -- 예 --> USEDEF
-  HASDEF -- 아니오 --> ERR
+  HASPORT -- yes --> USEPORT
+  HASPORT -- no --> HASFG
+  HASFG -- yes --> USEFG
+  HASFG -- no --> HASDEF
+  HASDEF -- yes --> USEDEF
+  HASDEF -- no --> ERR
 ```
 
-1. 명령에 포트를 명시했다면 해당 포트를 우선 사용
-2. 포트가 없으면 현재 세션의 FG 보드를 사용
-3. FG가 없으면 저장된 Default를 바탕으로 연결 시도
+1. If a port is specified in the command, that port takes priority.
+2. Otherwise, the session's FG board is used.
+3. If no FG exists, a connection is attempted using the saved Default.
 
-즉, **자주 쓰는 보드는 `setup`으로 기본화하고**, 필요할 때만 포트를 명시하면 됩니다.
+The recommended approach: **use `setup` to make a board the default**, and only specify a port when needed.
 
-포트 지정 예시는 다음 두 방식이 동일하게 동작합니다.
+Both of the following forms work identically:
 
 - `replx --port PORT setup`
-- `replx PORT setup` (포트 단축 입력)
+- `replx PORT setup` (shorthand)
 
-여기서 `PORT`는 OS에 따라 다릅니다.
+`PORT` depends on the OS:
 - Windows: `COM4`
-- Linux: `/dev/ttyACM0` 또는 `/dev/ttyUSB0`
-- macOS: `/dev/cu.usbmodem14101` 또는 `/dev/cu.usbserial-0001`
+- Linux: `/dev/ttyACM0` or `/dev/ttyUSB0`
+- macOS: `/dev/cu.usbmodem14101` or `/dev/cu.usbserial-0001`
 
-### 두 가지 명령군
+### Two command groups
 
-#### 포트 없이 동작하는 특수 명령
-아래 명령은 보드 직접 조작보다 조회/관리 성격이 강해, 포트 없이 독립적으로 또는 세션 기준으로 동작합니다. 이 명령들에 `-p/--port`를 지정하면 오류로 처리됩니다.
+#### Commands that work without a port
+These commands are primarily for querying or managing state, not direct board interaction. They operate independently or based on session context. Using `-p/--port` with these commands is an error.
 
-- `replx scan` : 연결 가능한 보드 탐색(연결하지 않음)
-- `replx status` : 세션/FG/BG 연결 상태 확인
-- `replx whoami` : 현재 세션의 FG 보드 확인
-- `replx shutdown` : 에이전트/연결 전체 종료
-- `replx --help`, `replx COMMAND --help` : 도움말
-- `replx -v` : 버전
+- `replx scan` — discover connectable boards (no connection made)
+- `replx status` — check session/FG/BG connection state
+- `replx whoami` — show the FG board for the current session
+- `replx shutdown` — shut down the agent and all connections
+- `replx --help`, `replx COMMAND --help` — help
+- `replx -v` — version
 
-#### 보드 연결이 필요한 일반 명령
-아래 명령은 실제 보드와 통신합니다. `setup`을 제외하고, FG 또는 Default(FG로 자동 연결 시도)가 있으면 포트 생략이 가능합니다.
+#### Commands that require a board connection
+These commands communicate with the board. Except for `setup`, the port can be omitted if an FG or Default connection exists.
 
-- 연결/세션: `setup`, `fg`, `disconnect`
-- 실행/인터랙션: `exec`, `run`, `repl`, `shell`
-- 파일: `ls`, `cat`, `get`, `put`, `cp`, `mv`, `rm`, `mkdir`, `touch`
-- 보드: `usage`, `reset`, `format`, `init`, `wifi`, `firmware`
-- 패키지/컴파일: `pkg`, `mpy`
-
----
-
-### 사용 흐름
-
-#### 시나리오 #1 새 프로젝트 시작
-1. `replx scan`으로 포트 확인
-2. `replx PORT setup`으로 워크스페이스 초기화 및 기본 연결 저장
-3. `replx ls`로 기본 동작 확인
-
-#### 시나리오 #2 여러 터미널/여러 보드 동시 사용
-1. 터미널 A/B에서 각각 필요한 보드 연결
-2. `replx status`로 SID별 FG/BG 상태 확인
-3. 필요 시 `replx fg` 또는 `replx PORT fg`로 전환
-
-#### 시나리오 #3 코드 빠르게 실험
-- 한 줄 실행: `replx -c "print('hello')"`
-- 파일 실행: `replx run app.py`
-- REPL 실행: `replx repl`
-
-#### 시나리오 #4 파일/라이브러리 정리
-- 파일 동기화: `put/get/ls/cat/...`
-- 파일 작업용 보드 셸: `replx shell` (리눅스 셸 유사)
-- 라이브러리 갱신: `replx pkg search` → `replx pkg download` → `replx pkg update core/`
-
-#### 시나리오 #5 작업 종료/정리
-- 포트만 해제: `replx disconnect`
-- 전체 종료: `replx shutdown`
+- Connection/session: `setup`, `fg`, `disconnect`
+- Execution/interaction: `exec`, `run`, `repl`, `shell`
+- Files: `ls`, `cat`, `get`, `put`, `cp`, `mv`, `rm`, `mkdir`, `touch`
+- Board: `usage`, `reset`, `format`, `init`, `wifi`, `firmware`
+- Package/compile: `pkg`, `mpy`
 
 ---
 
-## 기능별 명령 상세
+### Usage Scenarios
 
-### 전체 명령 요약
+#### Scenario #1 — Start a new project
+1. Run `replx scan` to identify the port
+2. Run `replx PORT setup` to initialize the workspace and save the default connection
+3. Run `replx ls` to confirm basic operation
 
-#### 연결/세션
+#### Scenario #2 — Multiple terminals / multiple boards
+1. Connect the required boards from terminals A and B
+2. Run `replx status` to check FG/BG state per SID
+3. Use `replx fg` or `replx PORT fg` to switch as needed
 
-| 명령 | 용도 |
+#### Scenario #3 — Quick code experimentation
+- One-liner: `replx -c "print('hello')"`
+- Run a file: `replx run app.py`
+- Start REPL: `replx repl`
+
+#### Scenario #4 — File and library management
+- File sync: `put/get/ls/cat/...`
+- Interactive file shell: `replx shell`
+- Library update: `replx pkg search` → `replx pkg download` → `replx pkg update core.all`
+
+#### Scenario #5 — End of session / cleanup
+- Release port only: `replx disconnect`
+- Full shutdown: `replx shutdown`
+
+---
+
+## Command Reference
+
+### Command Summary
+
+#### Connection / Session
+
+| Command | Description |
 |---|---|
-| `setup` | 작업 보드를 기본 대상으로 등록하고 개발 환경을 초기화합니다. |
-| `scan` | 연결 가능한 포트와 보드 정보를 확인합니다. |
-| `status` | 세션별 FG/BG 및 기본 연결 상태를 확인합니다. |
-| `fg` | 현재 세션의 FG 보드를 전환합니다. |
-| `whoami` | 현재 세션에서 바라보는 FG 보드를 확인합니다. |
-| `disconnect` | 현재 세션의 보드 연결을 해제합니다. |
-| `shutdown` | 에이전트와 모든 세션 연결을 정리합니다. |
+| `setup` | Register the board as the default target and initialize the development environment. |
+| `scan` | Discover available ports and board information. |
+| `status` | Show FG/BG connection state per session. |
+| `fg` | Switch the FG board for the current session. |
+| `whoami` | Show the FG board the current session is targeting. |
+| `disconnect` | Release the board connection for the current session. |
+| `shutdown` | Shut down the agent and clean up all session connections. |
 
-#### 실행/인터랙션
+#### Execution / Interaction
 
-| 명령 | 용도 |
+| Command | Description |
 |---|---|
-| `exec` (`-c`) | 짧은 Python 코드를 즉시 실행합니다. |
-| `run` | 로컬 Python 파일을 보드에서 실행합니다. |
-| `repl` | 인터랙티브 REPL 세션을 시작합니다. |
-| `shell` | 보드 파일시스템 작업용 셸을 엽니다. |
+| `exec` (`-c`) | Execute a short Python snippet immediately. |
+| `run` | Run a local Python file on the board. |
+| `repl` | Start an interactive REPL session. |
+| `shell` | Open an interactive shell for board filesystem operations. |
 
-#### 파일 작업
+#### File Operations
 
-| 명령 | 용도 |
+| Command | Description |
 |---|---|
-| `ls` | 보드 경로의 파일/디렉터리 목록을 확인합니다. |
-| `cat` | 보드 파일 내용을 출력합니다. |
-| `get` | 보드 파일을 로컬로 내려받습니다. |
-| `put` | 로컬 파일을 보드로 업로드합니다. |
-| `cp` | 보드 내부에서 파일/디렉터리를 복사합니다. |
-| `mv` | 보드 내부에서 파일/디렉터리를 이동/이름변경합니다. |
-| `rm` | 보드 파일/디렉터리를 삭제합니다. |
-| `mkdir` | 보드에 디렉터리를 생성합니다. |
-| `touch` | 빈 파일 생성 또는 타임스탬프 갱신을 수행합니다. |
+| `ls` | List files and directories at a board path. |
+| `cat` | Print the contents of a board file. |
+| `get` | Download a file or directory from the board to local. |
+| `put` | Upload a local file or directory to the board. |
+| `cp` | Copy files or directories within the board. |
+| `mv` | Move or rename files or directories within the board. |
+| `rm` | Delete files or directories on the board. |
+| `mkdir` | Create a directory on the board. |
+| `touch` | Create an empty file or update its timestamp. |
 
-#### 보드 관리
+#### Board Management
 
-| 명령 | 용도 |
+| Command | Description |
 |---|---|
-| `usage` | 저장공간 사용량과 여유 공간을 확인합니다. |
-| `reset` | 보드를 소프트 리셋합니다. |
-| `format` | 보드 파일시스템을 포맷합니다. |
-| `init` | 보드에서 초기 설정 스크립트를 실행합니다. |
-| `wifi` | Wi-Fi 설정/연결 상태를 관리합니다. |
-| `firmware` | 펌웨어 정보 확인, 다운로드, 업데이트를 수행합니다. |
+| `usage` | Show storage and RAM usage with free space. |
+| `reset` | Soft-reset the board. |
+| `format` | Format the board filesystem. |
+| `init` | Run initial setup scripts on the board. |
+| `wifi` | Manage Wi-Fi configuration and connection state. |
+| `firmware` | Check, download, or update board firmware. |
 
-#### 패키지/컴파일
+#### Package / Compile
 
-| 명령 | 용도 |
+| Command | Description |
 |---|---|
-| `pkg` | 패키지 검색/다운로드/업데이트를 수행합니다. |
-| `mpy` | `.py` 파일을 `.mpy`로 컴파일합니다. |
+| `pkg` | Search, download, and update MicroPython packages. |
+| `mpy` | Compile `.py` files to `.mpy` bytecode. |
 
-### 연결/세션 관리
+---
+
+### Connection / Session
 
 #### `setup`
-새 프로젝트를 시작할 때 가장 먼저 실행하는 명령입니다. 보드 연결 확인 후 `.vscode/tasks.json`, `.vscode/settings.json`, `.vscode/launch.json`을 생성하고, Pylance용 typehint 경로를 구성한 뒤 현재 포트를 작업공간 Default로 저장합니다. `setup`은 포트 지정이 필수이며, `clean`을 함께 사용하면 기존 연결 이력을 모두 지우고 현재 포트만 남깁니다.
-`setup` 설정은 현재 작업공간 단위로 적용되며, 하위 폴더에서 실행해도 상위 작업공간 범위에 반영됩니다. 상위 경로에 설정이 없으면 각 하위 경로는 독립 작업공간으로 동작해 기본 포트가 서로 다를 수 있습니다.
-파일시스템 최상위 루트(`C:\`, `/`)는 작업공간으로 사용할 수 없습니다.
+The first command to run when starting a new project. After confirming the board connection, it creates `.vscode/tasks.json`, `.vscode/settings.json`, and `.vscode/launch.json`, configures the Pylance typehint path, and saves the current port as the workspace Default. A port is required. Using `clean` clears all existing connection history and keeps only the current port.
+Settings apply at the workspace level; running from a subfolder applies them to the parent workspace scope. If no config exists in a parent path, each path is treated as an independent workspace with its own default port.
+The filesystem root (`C:\`, `/`) cannot be used as a workspace.
 
-사용:
+Usage:
 ```sh
 replx PORT setup
 replx PORT setup clean
 ```
 
-예제:
+Examples:
 ```sh
 replx COM3 setup
 replx /dev/ttyACM0 setup
@@ -253,50 +255,49 @@ replx COM3 setup clean
 ```
 
 #### `scan`
-연결 전에 어떤 포트가 어떤 보드인지 확인할 때 사용합니다. 에이전트에 이미 연결된 포트와 새로 스캔된 포트를 합쳐 Port / Version / Core / Device / Manufacturer를 보여주며, 연결 중과 Default 상태를 함께 표시합니다.
+Use this to identify which port belongs to which board before connecting. Combines already-connected agent ports with freshly scanned ports and displays Port / Version / Core / Device / Manufacturer along with connected and Default status.
 
-사용:
+Usage:
 ```sh
 replx scan
 ```
 
-예제:
+Examples:
 ```sh
 replx scan
-replx COM3 setup                  # scan에서 확인한 포트로 setup
-replx /dev/ttyACM0 setup          # Linux 예시
-replx /dev/cu.usbmodem14101 setup # macOS 예시
+replx COM3 setup                  # setup using port found by scan
+replx /dev/ttyACM0 setup          # Linux example
+replx /dev/cu.usbmodem14101 setup # macOS example
 ```
 
-참고:
-- `scan`은 보드에 연결하지 않고 탐지만 수행합니다.
-- `-p/--port` 옵션을 함께 사용하면 오류가 발생합니다.
+Notes:
+- `scan` only detects boards; it does not establish a connection.
+- Using `-p/--port` with `scan` is an error.
 
 #### `status`
-멀티 터미널 환경에서 세션별 FG/BG 연결을 한 번에 점검할 때 사용합니다. 현재 세션, 각 세션의 foreground/background 포트, 기본 포트 표시를 함께 보여줍니다.
+Use this in a multi-terminal environment to inspect FG/BG connections per session at a glance. Shows the current session, foreground/background ports for each session, and the default port.
 
-사용:
+Usage:
 ```sh
 replx status
 ```
 
-예제:
+Examples:
 ```sh
 replx status
-replx status                    # 현재 세션/전체 세션 연결 상태 확인
-replx fg                        # 상태를 보고 foreground 전환
+replx fg                        # switch foreground after checking status
 ```
 
 #### `fg`
-현재 세션의 foreground 보드를 전환할 때 사용합니다. `replx fg`는 대화형 목록에서 선택하고, `replx PORT fg`는 지정 포트를 바로 FG로 올립니다. 전환 후 이후 명령(`ls`, `run`, `cat` 등)은 새 FG를 기준으로 동작합니다.
+Switch the foreground board for the current session. `replx fg` presents an interactive list to choose from; `replx PORT fg` immediately promotes the specified port to FG. Subsequent commands (`ls`, `run`, `cat`, etc.) will target the new FG board.
 
-사용:
+Usage:
 ```sh
 replx fg
 replx PORT fg
 ```
 
-예제:
+Examples:
 ```sh
 replx fg
 replx COM19 fg
@@ -305,30 +306,30 @@ replx /dev/cu.usbmodem14101 fg
 ```
 
 #### `whoami`
-현재 터미널 세션의 FG가 무엇인지 즉시 확인할 때 사용합니다.
+Instantly shows what FG board the current terminal session is targeting.
 
-사용:
+Usage:
 ```sh
 replx whoami
 ```
 
-예제:
+Examples:
 ```sh
 replx whoami
-replx COM3 fg && replx whoami   # FG 전환 후 대상 보드 재확인
+replx COM3 fg && replx whoami   # confirm target after switching FG
 ```
 
 #### `disconnect`
-에이전트 프로세스는 유지한 채 특정 포트 연결만 끊고 싶을 때 사용합니다. `replx disconnect`는 현재 세션의 FG를 대상으로 하고, `replx PORT disconnect`는 지정 포트를 해제합니다. 연결이 해제되면 해당 포트는 참조 중이던 모든 세션에서 제거됩니다.
-FG가 제거되면, BG 중 하나가 FG가 됩니다. 더이상 포트가 존재하지 않으면 에이전트가 종료합니다.
+Disconnects a specific port while keeping the agent process running. `replx disconnect` targets the current session's FG; `replx PORT disconnect` releases the specified port. When a connection is released, it is removed from all sessions that were referencing it.
+If the FG is removed, one of the BG boards becomes FG. If no ports remain, the agent shuts down.
 
-사용:
+Usage:
 ```sh
 replx disconnect
 replx PORT disconnect
 ```
 
-예제:
+Examples:
 ```sh
 replx disconnect
 replx COM3 disconnect
@@ -337,33 +338,33 @@ replx /dev/cu.usbmodem14101 disconnect
 ```
 
 #### `shutdown`
-작업이 끝나서 세션/연결/에이전트를 한 번에 정리할 때 사용합니다. 실행 결과는 상태에 따라 달라지며, 정상 종료 시 `Shutdown Complete`, 이미 꺼진 상태면 `Already Shutdown`, 실패 시 `Shutdown Failed`를 표시합니다. 이후 명령을 실행하면 에이전트는 필요 시 다시 시작됩니다.
+Use this when you are done working and want to clean up sessions, connections, and the agent in one step. The result varies by state: `Shutdown Complete` on success, `Already Shutdown` if already stopped, `Shutdown Failed` on error. The agent will restart automatically the next time a command requires it.
 
-사용:
+Usage:
 ```sh
 replx shutdown
 ```
 
-예제:
+Examples:
 ```sh
 replx shutdown
-replx shutdown && replx status  # 종료 후 상태 확인
+replx shutdown && replx status  # confirm state after shutdown
 ```
 
 ---
 
-### 실행/인터랙션
+### Execution / Interaction
 
-#### `exec` (`-c` 별칭)
-짧은 MicroPython 코드를 파일 없이 즉시 실행할 때 사용합니다. 내부적으로 `exec` 명령을 보드에 1회 전송하고 표준 출력을 바로 반환합니다. 여러 문장을 실행할 때는 세미콜론(`;`)으로 이어서 사용할 수 있습니다.
+#### `exec` (`-c` alias)
+Run a short MicroPython snippet without a file. Sends the `exec` command to the board once and returns standard output immediately. Multiple statements can be chained with semicolons (`;`).
 
-사용:
+Usage:
 ```sh
 replx exec "CODE"
 replx -c "CODE"
 ```
 
-예제:
+Examples:
 ```sh
 replx -c "print('hello')"
 replx -c "import os; print(os.listdir())"
@@ -372,69 +373,69 @@ replx -c "import time; time.sleep(1); print('done')"
 ```
 
 #### `run`
-스크립트를 실행할 때 쓰는 기본 명령입니다. 기본 모드는 로컬 파일을 보드에 전송해 대화형으로 실행하고, `-d/--device`를 주면 보드 저장소의 파일을 직접 대화형으로 실행합니다. `-n/--non-interactive`는 입출력 대기 없이 분리된 비대화형 실행이고, `-e/--echo`는 대화형 실행에서 입력을 터미널에 에코합니다. `--non-interactive`와 `--echo`는 동시에 사용할 수 없습니다.
+The primary command for running scripts. Default mode transfers a local file to the board and runs it interactively. `-d/--device` runs a file already stored on the board interactively. `-n/--non-interactive` detaches execution without waiting for I/O. `-e/--echo` echoes input to the terminal during interactive runs. `--non-interactive` and `--echo` cannot be used together.
 
-사용:
+Usage:
 ```sh
 replx run SCRIPT
 replx run -d SCRIPT
 replx SCRIPT
 ```
 
-예제:
+Examples:
 ```sh
-replx run main.py      
-replx main.py          # .py 파일 단축 실행
-replx run -d /test.py  # 보드의 /test.py 대화형 실행
-replx run -n server.py # 비대화형 실행(입출력 대기 없음)
-replx run -dn /main.py # 보드의 /main.py 비대화형 실행
+replx run main.py
+replx main.py          # shorthand for .py files
+replx run -d /test.py  # run board's /test.py interactively
+replx run -n server.py # non-interactive (no I/O wait)
+replx run -dn /main.py # run board's /main.py non-interactively
 ```
 
 #### `repl`
-보드의 Friendly REPL에 직접 들어가 줄 단위로 코드를 실험할 때 사용합니다. 출력은 실시간으로 표시되며, `exit()` 입력으로 REPL 세션을 종료할 수 있습니다.
+Enter the board's Friendly REPL to experiment with code line by line. Output is displayed in real time. Type `exit()` to end the REPL session.
 
-사용:
+Usage:
 ```sh
 replx repl
 ```
 
-예제:
+Examples:
 ```sh
 replx repl
-# REPL 내부 예시
+# Inside REPL:
 >>> import os
 >>> os.listdir()
 >>> exit()
 ```
 
-핵심 키:
-- `Ctrl+C`: 실행 중 코드 인터럽트
+Key bindings:
+- `Ctrl+C`: interrupt running code
 - `Ctrl+D`: soft reset
 
 #### `shell`
-보드 파일을 연속으로 관리할 때 쓰는 대화형 셸입니다. `ls/cat/cp/mv/rm/mkdir/touch`와 `cd/pwd`를 현재 경로 기준으로 빠르게 실행할 수 있습니다. 이 모드는 Python REPL이 아니며, `run`은 항상 보드 파일 기준(`-d`)으로 동작하고 `-n/-e` 옵션은 셸 내부에서 사용할 수 없습니다.
+An interactive shell for continuous board filesystem management. Supports `ls/cat/cp/mv/rm/mkdir/touch` and `cd/pwd` relative to the current path. This is not a Python REPL. Inside the shell, `run` always operates on board files (`-d` mode), and `-n/-e` options are unavailable.
 
-사용:
+Usage:
 ```sh
 replx shell
 ```
 
-셸 내부 주요 명령:
+Available commands inside the shell:
 ```sh
-# 파일
+# Files
 ls cat cp mv rm mkdir touch
 
-# 탐색
+# Navigation
 cd pwd clear
 
-# 실행 보조
+# Execution
 exec run repl
 
-# 기타
+# Other
 usage wifi help exit
 ```
 
-예제:
+Examples:
 ```sh
 replx shell
 :/ > ls
@@ -442,20 +443,21 @@ replx shell
 :/lib > cat boot.py
 :/lib > exit
 ```
+
 ---
 
-### 파일 작업
+### File Operations
 
 #### `ls`
-보드 디렉터리 내용을 조회할 때 사용합니다. 기본은 단일 경로 목록, `-r/--recursive`는 트리 형태로 하위 경로까지 출력합니다. 폴더/파일 타입 아이콘과 크기 정보가 함께 표시되어 배포 전후 비교에 유용합니다.
+List the contents of a board directory. Default shows a single-path listing; `-r/--recursive` outputs the full tree. Folder/file type icons and size information are shown, making it useful for pre/post-deploy comparisons.
 
-사용:
+Usage:
 ```sh
 replx ls [PATH]
 replx ls -r [PATH]
 ```
 
-예제:
+Examples:
 ```sh
 replx ls
 replx ls /lib
@@ -464,16 +466,16 @@ replx ls -r /lib
 ```
 
 #### `cat`
-보드 파일 내용을 확인할 때 사용합니다. 텍스트 파일은 그대로 표시하고, 바이너리 파일은 hex 덤프로 표시합니다. `-n/--number`는 텍스트 줄 번호 표시, `-L/--lines`는 텍스트에서는 줄 범위(`N:M`), 바이너리에서는 바이트 범위(`N:M`, `N:+M`)로 동작합니다.
+View the contents of a board file. Text files are shown as-is; binary files are displayed as a hex dump. `-n/--number` adds line numbers for text. `-L/--lines` selects a line range (`N:M`) for text or a byte range (`N:M`, `N:+M`) for binary.
 
-사용:
+Usage:
 ```sh
 replx cat FILE
 replx cat -n FILE
 replx cat -L N:M FILE
 ```
 
-예제:
+Examples:
 ```sh
 replx cat main.py
 replx cat -n /lib/audio.py
@@ -482,32 +484,32 @@ replx cat -L 100:+64 app.mpy
 ```
 
 #### `get`
-보드 파일/디렉터리를 로컬로 내려받을 때 사용합니다. 원격 패턴(`*`, `?`)은 보드 측에서 해석되며, 디렉터리는 재귀 다운로드됩니다. 여러 소스를 한 번에 받는 경우 마지막 인자 `LOCAL`은 반드시 디렉터리여야 합니다.
+Download files or directories from the board to local. Remote patterns (`*`, `?`) are resolved on the board side; directories are downloaded recursively. When downloading multiple sources, the last argument `LOCAL` must be a directory.
 
-사용:
+Usage:
 ```sh
 replx get REMOTE LOCAL
 replx get REMOTE... LOCAL
 ```
 
-예제:
+Examples:
 ```sh
 replx get main.py ./
-replx get / ./backup            # 보드 파일시스템 전체 백업
+replx get / ./backup            # full board filesystem backup
 replx get /a.py /b.py ./
 replx get /lib/*.mpy ./compiled
 ```
 
 #### `put`
-로컬 파일/폴더를 보드로 업로드할 때 사용합니다. 로컬 와일드카드(`*`, `?`)를 확장해 업로드하며, 디렉터리는 재귀로 전송됩니다. 마지막 인자는 항상 원격 대상 경로이며, 필요 시 원격 디렉터리를 자동 생성합니다.
+Upload local files or directories to the board. Local wildcards (`*`, `?`) are expanded before upload; directories are transferred recursively. The last argument is always the remote destination path; remote directories are created automatically if needed.
 
-사용:
+Usage:
 ```sh
 replx put LOCAL REMOTE
 replx put LOCAL... REMOTE
 ```
 
-예제:
+Examples:
 ```sh
 replx put main.py /
 replx put ./lib/audio.py /lib
@@ -516,15 +518,15 @@ replx put *.py /lib
 ```
 
 #### `cp`
-보드 내부에서 복사할 때 사용합니다. 단일 파일/디렉터리뿐 아니라 다중 소스와 패턴 복사도 지원합니다. 디렉터리를 포함하면 `-r/--recursive`가 필수이며, 다중 소스 복사에서는 목적지가 디렉터리여야 합니다.
+Copy files or directories within the board. Supports single files, directories, multiple sources, and patterns. `-r/--recursive` is required for directories; the destination must be a directory when copying multiple sources.
 
-사용:
+Usage:
 ```sh
 replx cp SRC DEST
 replx cp -r DIR DEST
 ```
 
-예제:
+Examples:
 ```sh
 replx cp /main.py /backup.py
 replx cp x.py y.py /backup
@@ -533,15 +535,15 @@ replx cp -r /lib /lib_backup
 ```
 
 #### `mv`
-보드 내부 경로 이동과 이름 변경에 사용합니다. 단일 이동뿐 아니라 다중 소스/패턴 이동도 가능하며, 디렉터리 이동 시 `-r/--recursive`가 필요합니다. 다중 소스 이동에서는 목적지가 디렉터리인지 먼저 확인해야 합니다.
+Move or rename files and directories within the board. Supports single moves, multiple sources, and patterns. `-r/--recursive` is required for directories. When moving multiple sources, verify the destination is a directory first.
 
-사용:
+Usage:
 ```sh
 replx mv SRC DEST
 replx mv -r DIR DEST
 ```
 
-예제:
+Examples:
 ```sh
 replx mv /old.py /new.py
 replx mv /main.py /backup
@@ -550,16 +552,16 @@ replx mv -r /lib/audio /lib/sound
 ```
 
 #### `rm`
-보드 파일/디렉터리를 삭제할 때 사용합니다. 기본 동작은 삭제 전 확인 프롬프트를 띄우고, `-f/--force`를 주면 확인 없이 삭제합니다. 디렉터리 삭제는 `-r/--recursive`가 필요하며, 패턴 삭제(`*.py`, `/lib/*.mpy`)도 지원합니다.
+Delete files or directories on the board. By default, a confirmation prompt is shown before deletion; `-f/--force` skips the prompt. `-r/--recursive` is required for directories. Pattern deletion (`*.py`, `/lib/*.mpy`) is supported.
 
-사용:
+Usage:
 ```sh
 replx rm FILE
 replx rm -r DIR
 replx rm -f FILE
 ```
 
-예제:
+Examples:
 ```sh
 replx rm /main.py
 replx rm -f /main.py
@@ -569,15 +571,15 @@ replx rm -rf /tmp
 ```
 
 #### `mkdir`
-보드에 디렉터리 구조를 미리 만들 때 사용합니다. 여러 경로를 한 번에 생성할 수 있고, 중첩 경로도 생성됩니다. 이미 존재하는 디렉터리는 경고 없이 유지됩니다.
+Pre-create a directory structure on the board. Multiple paths can be created at once, including nested paths. Existing directories are silently retained.
 
-사용:
+Usage:
 ```sh
 replx mkdir DIR
 replx mkdir DIR...
 ```
 
-예제:
+Examples:
 ```sh
 replx mkdir /lib
 replx mkdir /tests
@@ -586,15 +588,15 @@ replx mkdir /a/b/c
 ```
 
 #### `touch`
-빈 파일을 만들거나 파일 존재 상태를 맞출 때 사용합니다. 여러 파일을 한 번에 처리할 수 있어 초기 템플릿 구성 시 유용합니다.
+Create an empty file or ensure a file exists. Useful for setting up initial project templates with multiple files at once.
 
-사용:
+Usage:
 ```sh
 replx touch FILE
 replx touch FILE...
 ```
 
-예제:
+Examples:
 ```sh
 replx touch /config.py
 replx touch /a.py /b.py /c.py
@@ -603,18 +605,18 @@ replx touch /lib/__init__.py
 
 ---
 
-### 보드 관리
+### Board Management
 
 #### `usage`
-RAM(`mem`)과 파일시스템(`df`) 사용량을 동시에 확인할 때 사용합니다. 사용률 막대와 Used/Free/Total 수치를 함께 보여주므로 업로드 전 용량 점검에 적합합니다.
+Check RAM (`mem`) and filesystem (`df`) usage simultaneously. Shows a usage bar alongside Used/Free/Total values, making it ideal for capacity checks before uploading.
 
-사용:
+Usage:
 ```sh
 replx usage
 replx PORT usage
 ```
 
-예제:
+Examples:
 ```sh
 replx usage
 replx COM3 usage
@@ -623,35 +625,35 @@ replx /dev/cu.usbmodem14101 usage
 ```
 
 #### `reset`
-실행 상태를 초기화할 때 사용합니다. 기본은 `--soft`(인터프리터 재시작)이며, `--hard`는 하드웨어 리셋 후 재연결 흐름을 사용합니다. `--soft`와 `--hard`를 동시에 지정하면 에러가 발생합니다.
+Reset the board's execution state. Default is `--soft` (restart the interpreter); `--hard` performs a hardware reset followed by automatic reconnection. Using `--soft` and `--hard` together is an error.
 
-사용:
+Usage:
 ```sh
 replx reset
 replx reset --soft
 replx reset --hard
 ```
 
-예제:
+Examples:
 ```sh
 replx reset
 replx reset --soft
 replx reset --hard
 ```
 
-옵션 요약:
-- `--soft`: Python 인터프리터 재시작(기본)
-- `--hard`: 하드웨어 리셋 + 자동 재연결
+Options:
+- `--soft`: restart the Python interpreter (default)
+- `--hard`: hardware reset + auto-reconnect
 
 #### `format`
-보드 파일시스템을 완전히 비우고 다시 시작할 때 사용합니다. `boot.py`, `main.py`, `lib/`를 포함한 사용자 파일이 모두 삭제됩니다. 일부 보드는 포맷 명령을 지원하지 않을 수 있으므로 실패 메시지를 확인해야 합니다.
+Completely wipe the board filesystem and start fresh. All user files including `boot.py`, `main.py`, and `lib/` are deleted. Some boards may not support the format command — check the error message if it fails.
 
-사용:
+Usage:
 ```sh
 replx format
 ```
 
-예제:
+Examples:
 ```sh
 replx get /*.py ./backup
 replx get /lib ./backup
@@ -659,28 +661,28 @@ replx format
 ```
 
 #### `init`
-보드를 초기 상태로 복구하면서 필수 라이브러리까지 다시 설치할 때 사용합니다. 내부적으로 `format` 후 core/device 패키지 설치를 순차 수행합니다. 실행 전 로컬 패키지 저장소가 준비되어 있어야 하므로, 처음 환경에서는 `replx pkg download`를 먼저 실행해야 합니다.
+Restore a board to its initial state and reinstall required libraries. Internally runs `format` followed by sequential core/device package installation. The local package store must be prepared first — run `replx pkg download` before using this for the first time.
 
-사용:
+Usage:
 ```sh
 replx init
 ```
 
-예제:
+Examples:
 ```sh
 replx pkg download
 replx init
 ```
 
-동작 순서:
-1. 파일시스템 포맷
-2. core 라이브러리 설치
-3. device 라이브러리 설치
+Operation order:
+1. Format filesystem
+2. Install core libraries
+3. Install device libraries
 
 #### `wifi`
-보드의 Wi-Fi 상태 조회/연결/부팅 자동연결을 관리할 때 사용합니다. `wifi connect SSID PW`는 자격 정보를 보드(`wifi_config.py`)에 저장하고 즉시 연결하며, `wifi connect`는 저장된 설정으로 재연결합니다. `wifi boot on|off`는 `boot.py`의 자동 연결 동작을 켜거나 끕니다.
+Manage the board's Wi-Fi status, connection, and boot auto-connect. `wifi connect SSID PW` saves credentials to the board (`wifi_config.py`) and connects immediately. `wifi connect` reconnects using saved settings. `wifi boot on|off` controls whether `boot.py` auto-connects on startup.
 
-사용:
+Usage:
 ```sh
 replx wifi
 replx wifi connect SSID PW
@@ -690,7 +692,7 @@ replx wifi off
 replx wifi boot on|off
 ```
 
-예제:
+Examples:
 ```sh
 replx wifi
 replx wifi scan
@@ -701,19 +703,19 @@ replx wifi off
 ```
 
 #### `firmware`
-지원 보드의 펌웨어를 로컬에 다운로드하거나 UF2 방식으로 업데이트할 때 사용합니다. `download`는 로컬 저장소 갱신만 수행하고, `update`는 보드를 부트로더 모드로 전환한 뒤 UF2 드라이브를 찾아 설치를 진행합니다. `-f/--force`는 버전이 같아도 재설치하며, 현재 공식 지원 대상은 `ticle-lite`, `ticle-sensor`입니다.
+Download firmware locally or update via UF2 for supported boards. `download` only refreshes the local store; `update` puts the board into bootloader mode, locates the UF2 drive, and installs the firmware. `-f/--force` reinstalls even when the version matches. Currently officially supported boards: `ticle-lite`, `ticle-sensor`.
 
-사용:
+Usage:
 ```sh
 replx firmware download
 replx firmware update
 replx firmware update -f
 ```
 
-옵션 요약:
-- `-f, --force`: 현재 버전과 동일해도 강제 재설치
+Options:
+- `-f, --force`: force reinstall even if version is unchanged
 
-예제:
+Examples:
 ```sh
 replx firmware download
 replx firmware update
@@ -722,43 +724,44 @@ replx firmware update --force
 
 ---
 
-### 패키지/컴파일
+### Package / Compile
 
 #### `pkg`
-깃허브 원격 저장소와 로컬 저장소 및 보드 사이 패키지 워크플로(`search → download → update`)를 관리하는 명령입니다. `search [QUERY]`는 현재 연결된 보드의 core/device 범위에서 결과를 보여주고, `download`는 원격 레지스트리를 로컬 저장소로 받습니다. `update TARGET`은 core/device/파일/폴더/URL 대상을 보드 경로로 반영하며, `clean`은 현재 보드 기준 로컬 저장소 항목을 정리합니다. args 중 `--owner/--repo/--ref`는 깃허브 원격 저장소 정보로 `search/download` 전용이며, `-t/--target`은 `update` 대상 경로 지정에 사용됩니다.
+Manages the package workflow (`search → download → update`) between the GitHub remote registry, local store, and board. `search [QUERY]` shows results scoped to the connected board's core/device. `download` fetches the remote registry to the local store. `update TARGET` installs packages to the board using `core.all`, `device.all`, `core.<file>`, `device.<file>`, or URL format. `clean` removes the current core/device entries from the local store. `--owner/--repo/--ref` specify the GitHub remote and apply to `search/download/update`. `-t/--target` specifies the board destination path for `update`.
 
-사용:
+Usage:
 ```sh
 replx pkg SUBCOMMAND [args]
 ```
 
-예제:
+Examples:
 ```sh
 replx pkg search
 replx pkg search audio
 replx pkg search --owner PlanXLab --repo replx_libs --ref main
 replx pkg download
 replx pkg download --owner PlanXLab --repo replx_libs --ref main
-replx pkg update core/
-replx pkg update device/
-replx pkg update slip.py
-replx pkg update ws2812 --target lib/ticle
+replx pkg update core.all
+replx pkg update device.all
+replx pkg update core.slip.py
+replx pkg update device.termio.py
+replx pkg update core.termio.py --target lib/ext
 replx pkg update https://raw.githubusercontent.com/.../driver.py --target lib/ext
 replx pkg clean
 ```
 
-> 참고: `pkg search/download`는 **현재 연결 보드의 core/device 범위**를 기준으로 동작합니다.
+> Note: `pkg search/download/update` operates within the **core/device scope of the currently connected board**.
 
 #### `mpy`
-`.py`를 `.mpy` 바이트코드로 컴파일할 때 사용합니다. 연결된 보드의 `core`/버전을 기반으로 타깃 아키텍처를 자동 선택하고, 단일 파일일 때만 `-o/--output`으로 출력 경로를 지정할 수 있습니다. 로컬에 `mpy-cross`가 없으면 컴파일 전에 설치가 필요합니다.
+Compile `.py` files to `.mpy` bytecode. Automatically selects the target architecture based on the connected board's `core` and version. `-o/--output` can only be used when compiling a single file. `mpy-cross` must be installed locally before use.
 
-사용:
+Usage:
 ```sh
 replx mpy FILES...
 replx mpy main.py -o out.mpy
 ```
 
-예제:
+Examples:
 ```sh
 replx mpy main.py
 replx mpy main.py -o build/main.mpy
@@ -768,50 +771,50 @@ replx mpy src/
 
 ---
 
-## 트러블슈팅
+## Troubleshooting
 
-#### 연결/세션
+#### Connection / Session
 
-| 증상 | 원인 후보 | 해결 절차 |
+| Symptom | Likely Cause | Resolution |
 |---|---|---|
-| `No active connections` | setup 미실행, 에이전트 중지 | `replx scan` → `replx PORT setup` → `replx status` |
-| `Not connected` | 현재 세션 FG 없음 | `replx status`로 SID 확인 후 `replx fg` 또는 `replx PORT fg` |
-| 다른 터미널에서 보드가 바쁘다고 표시 | 다른 SID가 FG/BG로 사용 중 | 해당 터미널에서 작업 종료 또는 `disconnect`, 필요 시 `shutdown` |
-| 포트가 계속 점유됨 | 에이전트 유지 상태 | `replx disconnect`(개별) 또는 `replx shutdown`(전체) |
+| `No active connections` | `setup` not run, agent stopped | `replx scan` → `replx PORT setup` → `replx status` |
+| `Not connected` | No FG in current session | Check SID with `replx status`, then run `replx fg` or `replx PORT fg` |
+| Board shows busy in another terminal | Another SID has it as FG/BG | Finish work in that terminal, or `disconnect`; use `shutdown` if needed |
+| Port remains occupied | Agent still running | `replx disconnect` (individual) or `replx shutdown` (all) |
 
-#### 실행 (`exec/run/repl/shell`)
+#### Execution (`exec/run/repl/shell`)
 
-| 증상 | 원인 후보 | 해결 절차 |
+| Symptom | Likely Cause | Resolution |
 |---|---|---|
-| `run`이 즉시 실패 | 파일 경로 오입력 | 로컬 실행은 `run file.py`, 보드 파일은 `run -d /path/file.py` 구분 |
-| `--non-interactive`와 `--echo` 충돌 | 옵션 조합 오류 | 둘 중 하나만 사용 |
-| REPL에서 빠져나오기 어려움 | 종료 명령 미인지 | `exit()` 입력 또는 `Ctrl+D` |
-| shell에서 예상 경로가 아님 | 현재 디렉터리 혼동 | `pwd` 확인 후 `cd` 이동 |
+| `run` fails immediately | Wrong file path | Local file: `run file.py`; board file: `run -d /path/file.py` |
+| `--non-interactive` and `--echo` conflict | Invalid option combination | Use only one of the two |
+| Hard to exit REPL | Unaware of exit method | Type `exit()` or press `Ctrl+D` |
+| Unexpected path in shell | Current directory confusion | Check with `pwd`, navigate with `cd` |
 
-#### 파일 작업
+#### File Operations
 
-| 증상 | 원인 후보 | 해결 절차 |
+| Symptom | Likely Cause | Resolution |
 |---|---|---|
-| wildcard가 기대와 다름 | 로컬 확장/보드 확장 차이 | `put`은 로컬 기준, `get/rm/cp/mv`는 보드 측 패턴 처리 확인 |
-| 디렉터리 복사/이동 실패 | `-r` 누락 | `cp -r`, `mv -r`, `rm -r` 사용 |
-| 여러 파일 대상인데 목적지가 파일 | 마지막 인자 규칙 미숙지 | 마지막 인자는 항상 DEST, 다중 소스일 때 DEST는 디렉터리 |
-| 삭제 후 복구 불가 | 백업 부재 | 삭제 전 `replx get`으로 백업 습관화 |
+| Wildcard behaves unexpectedly | Local vs. board expansion difference | `put` expands locally; `get/rm/cp/mv` resolve patterns on the board |
+| Directory copy/move fails | Missing `-r` | Use `cp -r`, `mv -r`, `rm -r` |
+| Multiple sources but destination is a file | Misunderstanding of last-arg rule | The last argument is always DEST; it must be a directory for multiple sources |
+| Cannot recover after deletion | No backup | Back up with `replx get` before deleting |
 
-#### 패키지/컴파일
+#### Package / Compile
 
-| 증상 | 원인 후보 | 해결 절차 |
+| Symptom | Likely Cause | Resolution |
 |---|---|---|
-| `pkg search` 결과가 없음 | 현재 보드 core/device 범위에 없음 | 현재 보드 확인(`whoami`), 보드 전환 후 재검색 |
-| `pkg update` 실패 | local store 미준비 | `replx pkg download` 선행 후 `replx pkg update ...` |
-| `mpy` 실패 | `mpy-cross` 미설치 | `pip install mpy-cross` |
-| 아키텍처 오류 | 보드 연결 정보 누락 | 먼저 연결 상태 확보(`setup` 또는 자동 연결 확인) |
+| No `pkg search` results | Outside current board's core/device scope | Check board with `whoami`, switch board and search again |
+| `pkg update` fails | Local store not prepared | Run `replx pkg download` first, then retry `replx pkg update ...` |
+| `mpy` fails | `mpy-cross` not installed | `pip install mpy-cross` |
+| Architecture error | Missing board connection info | Ensure connection is established (`setup` or auto-connect) |
 
-#### 포맷/초기화/펌웨어
+#### Format / Init / Firmware
 
-| 증상 | 원인 후보 | 해결 절차 |
+| Symptom | Likely Cause | Resolution |
 |---|---|---|
-| `format/init` 후 코드 소실 | 정상 동작(전체 삭제) | 포맷 전 `get`으로 백업, 이후 `put/pkg update`로 복원 |
-| `firmware` 미지원 오류 | 보드 비지원 | 지원 보드인지 확인 후 사용 (`ticle-*` 계열 중심) |
-| `wifi connect` 실패 | SSID/PW 오류, AP 가시성 문제 | `wifi scan` → 재입력 → 필요 시 `wifi off` 후 재시도 |
+| Files lost after `format/init` | Expected behavior (full wipe) | Back up with `get` before formatting; restore with `put`/`pkg update` |
+| `firmware` unsupported error | Board not supported | Confirm board is a supported model (`ticle-*` series) |
+| `wifi connect` fails | Wrong SSID/PW, AP not visible | `wifi scan` → re-enter credentials → try `wifi off` then retry |
 
 ---

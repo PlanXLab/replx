@@ -408,7 +408,7 @@ def cli(
         raise typer.Exit()
 
 
-from .commands import file, device, exec, package, utility
+from .commands import file, device, exec, package, utility, firmware
 
 def main():
     if len(sys.argv) == 1:

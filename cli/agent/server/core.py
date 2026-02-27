@@ -1,9 +1,12 @@
+import asyncio
+import contextlib
 import gc
 import os
 import sys
 import socket
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 
 from replx.utils.constants import (
@@ -37,6 +40,59 @@ from .handlers import (
 
 gc.set_threshold(*GC_THRESHOLD)
 
+_LOOP_COMMANDS: frozenset[str] = frozenset({
+    'ping',
+    'status',
+    'session_info',
+})
+
+_FAST_COMMANDS: frozenset[str] = frozenset({
+    'repl_read',
+})
+
+_FAST_POOL_WORKERS = 4
+_SLOW_POOL_WORKERS = 16
+
+
+class _AgentDatagramProtocol(asyncio.DatagramProtocol):
+    __slots__ = ('_server',)
+
+    def __init__(self, server: 'AgentServer') -> None:
+        self._server = server
+
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+        send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._server.server_socket = send_sock
+
+    def datagram_received(self, data: bytes, addr: tuple) -> None:
+        server = self._server
+        if not server.running:
+            return
+        try:
+            msg = AgentProtocol.decode_message(data)
+            command = msg.get('command') if msg else None
+        except Exception:
+            command = None
+            msg = None
+
+        if msg is not None and command in _LOOP_COMMANDS:
+            server._handle_direct(msg, addr)
+            return
+
+        executor = (
+            server._fast_executor
+            if command in _FAST_COMMANDS
+            else server._slow_executor
+        )
+        executor.submit(server._handle_request, data, addr)
+
+    def error_received(self, exc: Exception) -> None:
+        if self._server.running:
+            print(f'UDP protocol error: {exc}', file=sys.stderr)
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        pass
+
 
 class AgentServer(
     SessionCommandsMixin,
@@ -49,18 +105,28 @@ class AgentServer(
         self.agent_port = port or DEFAULT_AGENT_PORT
         self.server_socket: Optional[socket.socket] = None
         self.running = False
-        
+
         self.connection_manager = ConnectionManager()
         self.session_manager = SessionManager()
-        
-        self.last_seq = {}
-        
-        self._heartbeat_thread: Optional[threading.Thread] = None
-        
-        self._command_in_progress = False
+
+        self.last_seq: dict = {}
+
         self._last_command_time = time.time()
-        self._command_lock = threading.Lock()
         self._command_handlers = self._build_command_handlers()
+
+        self._fast_executor = ThreadPoolExecutor(
+            max_workers=_FAST_POOL_WORKERS,
+            thread_name_prefix='agent-fast',
+        )
+        self._slow_executor = ThreadPoolExecutor(
+            max_workers=_SLOW_POOL_WORKERS,
+            thread_name_prefix='agent-slow',
+        )
+
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop_event: asyncio.Event | None = None
+        self._datagram_transport: asyncio.DatagramTransport | None = None
+        self._cleaned_up: bool = False
     
     @property
     def _default_port(self) -> Optional[str]:
@@ -232,107 +298,114 @@ class AgentServer(
         
         return board_conn
     
-    def start(self):
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.server_socket.settimeout(AGENT_SOCKET_TIMEOUT)
-        self.server_socket.bind((AGENT_HOST, self.agent_port))
-        
-        self.running = True
-        print(f"replx agent started (PID {os.getpid()})")
-        print(f"Listening on {AGENT_HOST}:{self.agent_port} (UDP)")
-        
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
-        self._heartbeat_thread.start()
-        
+    def start(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._cleaned_up = False
+        print(f'replx agent starting (PID {os.getpid()})')
+        print(f'UDP {AGENT_HOST}:{self.agent_port}')
+
         try:
-            self._serve()
+            loop.run_until_complete(self._async_main())
+        except (KeyboardInterrupt, SystemExit):
+            print('\nShutting down...')
         finally:
-            self.cleanup()
-    
-    def _serve(self):
-        while self.running:
-            try:
-                data, client_addr = self.server_socket.recvfrom(MAX_UDP_SIZE)
-                
-                thread = threading.Thread(
-                    target=self._handle_request,
-                    args=(data, client_addr),
-                    daemon=True
-                )
-                thread.start()
-                
-            except socket.timeout:
-                continue
-            except OSError as e:
-                if not self.running:
-                    break
-                print(f"Socket error: {e}", file=sys.stderr)
-            except Exception as e:
-                if self.running:
-                    print(f"Server error: {e}", file=sys.stderr)
-    
-    def _heartbeat_loop(self):
-        zombie_check_counter = 0
+            self._do_cleanup_resources()
+            if not loop.is_closed():
+                loop.close()
+            self._loop = None
+            self._stop_event = None
+
+    async def _async_main(self) -> None:
+        loop = asyncio.get_running_loop()
+        self._stop_event = asyncio.Event()
+
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _AgentDatagramProtocol(self),
+            local_addr=(AGENT_HOST, self.agent_port),
+        )
+        self._datagram_transport = transport
+        self.running = True
+        print(f'replx agent started — listening on {AGENT_HOST}:{self.agent_port} (UDP)')
+
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_coro(), name='replx-heartbeat'
+        )
+        try:
+            await self._stop_event.wait()
+        finally:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(heartbeat_task), timeout=2.0)
+            transport.close()
+            self._do_cleanup_resources()
+
+    async def _heartbeat_coro(self) -> None:
+        loop = asyncio.get_running_loop()
+        zombie_counter = 0
         gc_counter = 0
         while self.running:
-            time.sleep(HEARTBEAT_INTERVAL)
-            all_conns = self.connection_manager.get_all_connections()
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            zombie_counter, gc_counter = await loop.run_in_executor(
+                self._slow_executor,
+                self._heartbeat_tick,
+                zombie_counter,
+                gc_counter,
+            )
 
-            zombie_check_counter += 1
-            gc_counter += 1
+    def _heartbeat_tick(self, zombie_counter: int, gc_counter: int) -> tuple[int, int]:
+        all_conns = self.connection_manager.get_all_connections()
+        zombie_counter += 1
+        gc_counter += 1
 
-            if zombie_check_counter >= ZOMBIE_CHECK_INTERVAL:
-                self._cleanup_zombie_sessions()
-                zombie_check_counter = 0
+        if zombie_counter >= ZOMBIE_CHECK_INTERVAL:
+            self._cleanup_zombie_sessions()
+            zombie_counter = 0
 
-            if gc_counter >= GC_COLLECT_INTERVAL:
-                gc.collect()
-                gc_counter = 0
+        if gc_counter >= GC_COLLECT_INTERVAL:
+            gc.collect()
+            gc_counter = 0
 
-            if not all_conns:
+        if not all_conns:
+            return zombie_counter, gc_counter
+
+        elapsed = time.time() - self._last_command_time
+        if elapsed < IDLE_COMMAND_THRESHOLD:
+            return zombie_counter, gc_counter
+
+        failed_ports = []
+        for port, conn in all_conns.items():
+            if not self.connection_manager.has_connection(port):
                 continue
-            
-            with self._command_lock:
-                elapsed = time.time() - self._last_command_time
-                if self._command_in_progress or elapsed < IDLE_COMMAND_THRESHOLD:
-                    continue
-            
-            failed_ports = []
-            for port, conn in all_conns.items():
+            if conn.repl.active or conn.interactive.active:
+                continue
+            if conn.is_detached() or conn.busy:
+                continue
+            if not conn.acquire_for_command(session_id=0, command='heartbeat'):
+                continue
+            try:
                 if not self.connection_manager.has_connection(port):
                     continue
-                
                 if conn.repl.active or conn.interactive.active:
                     continue
-                
-                if conn.is_detached() or conn.busy:
-                    continue
-                
-                if not conn.acquire_for_command(session_id=0, command='heartbeat'):
-                    continue
-                
-                try:
-                    if not self.connection_manager.has_connection(port):
-                        continue
-                    if conn.repl.active or conn.interactive.active:
-                        continue
-                    if conn.repl_protocol:
-                        conn.repl_protocol.exec("pass")
-                except Exception:
-                    failed_ports.append(port)
-                finally:
-                    conn.release() 
-            
-            for port in failed_ports:
-                self.connection_manager.disconnect(port)
-                self.session_manager.remove_connection_from_all_sessions(port)
-            
-            if not self.connection_manager.get_connected_ports():
-                self.running = False
-                continue
-            
-            with self._command_lock:
-                self._last_command_time = time.time()
+                if conn.repl_protocol:
+                    conn.repl_protocol.exec('pass')
+            except Exception:
+                failed_ports.append(port)
+            finally:
+                conn.release()
+
+        for port in failed_ports:
+            self.connection_manager.disconnect(port)
+            self.session_manager.remove_connection_from_all_sessions(port)
+
+        if not self.connection_manager.get_connected_ports():
+            self.running = False
+
+        self._last_command_time = time.time()
+
+        return zombie_counter, gc_counter
     
     def _start_drain_thread(self, conn: BoardConnection):
         conn.set_detached(True)
@@ -389,6 +462,47 @@ class AgentServer(
                 if c.is_detached():
                     self._stop_detached_script(c)
     
+    def _handle_direct(self, msg: dict, client_addr: tuple) -> None:
+        seq = msg.get('seq', 0)
+        command = msg.get('command')
+
+        if client_addr in self.last_seq and seq <= self.last_seq[client_addr]:
+            return
+        self.last_seq[client_addr] = seq
+
+        try:
+            self.server_socket.sendto(
+                AgentProtocol.encode_message(AgentProtocol.create_ack(seq)),
+                client_addr,
+            )
+        except Exception:
+            pass
+
+        try:
+            ppid = msg.get('ppid')
+            explicit_port = msg.get('port')
+            args = msg.get('args', {})
+            ctx = CommandContext(
+                connection=None,
+                ppid=ppid,
+                explicit_port=explicit_port,
+                seq=seq,
+                client_addr=client_addr,
+            )
+            handler, use_args = self._command_handlers[command]
+            result = handler(ctx, **args) if use_args else handler(ctx)
+            response = AgentProtocol.create_response(seq=seq, result=result)
+        except Exception as exc:
+            response = AgentProtocol.create_response(seq=seq, error=str(exc))
+
+        try:
+            self.server_socket.sendto(
+                AgentProtocol.encode_message(response),
+                client_addr,
+            )
+        except Exception:
+            pass
+
     def _handle_request(self, data: bytes, client_addr: tuple):
         try:
             msg = AgentProtocol.decode_message(data)
@@ -434,7 +548,7 @@ class AgentServer(
     
     def _build_command_handlers(self) -> dict:
         return {
-            'free': (self._cmd_free, False),
+            'release': (self._cmd_release, False),
             'disconnect_port': (self._cmd_disconnect_port, True),
             'exec': (self._cmd_exec, True),
             'status': (self._cmd_status, False),
@@ -570,31 +684,22 @@ class AgentServer(
             seq=seq,
             client_addr=client_addr
         )
-        
-        with self._command_lock:
-            self._command_in_progress = True
-        
+
         if command not in NON_REPL_COMMANDS and active_conn:
             if active_conn.repl.active and command not in CmdGroups.REPL:
                 if not active_conn.repl.is_owner(ppid):
-                    with self._command_lock:
-                        self._command_in_progress = False
                     return AgentProtocol.create_response(
                         seq=seq,
                         error=f"Connection {active_conn.port} is busy. REPL session is active from another terminal. Exit REPL first with exit() or Ctrl+D."
                     )
-        
+
         if command not in NON_REPL_COMMANDS and active_conn:
             if not active_conn.is_connected():
-                with self._command_lock:
-                    self._command_in_progress = False
                 return AgentProtocol.create_response(
                     seq=seq,
                     error=f"Connection {active_conn.port} was disconnected."
                 )
             if not active_conn.acquire_for_command(ppid, command, client_addr):
-                with self._command_lock:
-                    self._command_in_progress = False
                 return AgentProtocol.create_response(
                     seq=seq,
                     error=f"Connection {active_conn.port} is busy. Another command ({active_conn.busy_command}) is currently running. Please wait for it to complete or press Ctrl+C to cancel."
@@ -643,37 +748,53 @@ class AgentServer(
             if command not in NON_REPL_COMMANDS and command not in PERSISTENT_BUSY_COMMANDS and command not in STREAMING_COMMANDS:
                 if active_conn:
                     active_conn.release()
-            
-            with self._command_lock:
-                self._command_in_progress = False
-                self._last_command_time = time.time()
+            self._last_command_time = time.time()
     
-    def cleanup(self):
+    def cleanup(self) -> None:
         self.running = False
-        
+        loop = self._loop
+        stop_event = self._stop_event
+        if loop is not None and not loop.is_closed() and stop_event is not None:
+            loop.call_soon_threadsafe(stop_event.set)
+        else:
+            self._do_cleanup_resources()
+
+    def _do_cleanup_resources(self) -> None:
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
+
         for conn in self.connection_manager.get_all_connections().values():
             if conn.is_detached():
                 conn.stop_detached()
-        
+
         for conn in self.connection_manager.get_all_connections().values():
             if conn.repl.active:
                 conn.repl.stop()
             if conn.interactive.active:
                 conn.interactive.stop()
-        
-        self.connection_manager.disconnect_all()        
+
+        self.connection_manager.disconnect_all()
         self.session_manager.clear_all_sessions()
-        
-        if self.server_socket:
+
+        transport = self._datagram_transport
+        if transport is not None:
+            try:
+                if not transport.is_closing():
+                    transport.close()
+            except Exception:
+                pass
+        elif self.server_socket:
             try:
                 self.server_socket.close()
             except Exception:
-                pass 
-        
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=2)
-        
-        print("replx agent stopped")
+                pass
+        self.server_socket = None
+
+        self._fast_executor.shutdown(wait=False, cancel_futures=True)
+        self._slow_executor.shutdown(wait=False, cancel_futures=True)
+
+        print('replx agent stopped')
 
 
 def main():
@@ -682,18 +803,14 @@ def main():
         try:
             port = int(sys.argv[1])
         except ValueError:
-            print(f"Invalid port: {sys.argv[1]}", file=sys.stderr)
+            print(f'Invalid port: {sys.argv[1]}', file=sys.stderr)
             sys.exit(1)
-    
+
     server = AgentServer(port=port)
-    
     try:
-        server.start()
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-        server.cleanup()
+        server.start() 
     except Exception as e:
-        print(f"Fatal error: {e}", file=sys.stderr)
+        print(f'Fatal error: {e}', file=sys.stderr)
         sys.exit(1)
 
 

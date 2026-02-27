@@ -1,15 +1,48 @@
+import asyncio
 import time
 import threading
 
 from replx.utils.constants import REPL_PROMPT
+from replx.utils.exceptions import TransportError
 from ..command_dispatcher import CommandContext
 from ..connection_manager import BoardConnection
 
 class ReplCommandsMixin:
+    async def _repl_reader_task(self, conn: BoardConnection) -> None:
+        loop = asyncio.get_running_loop()
+        repl = conn.repl_protocol
+        consecutive_transient = 0
+        try:
+            while conn.repl.active and conn.repl_protocol:
+                try:
+                    count = await loop.run_in_executor(
+                        self._slow_executor, repl.in_waiting
+                    )
+                    if count > 0:
+                        data = await loop.run_in_executor(
+                            self._slow_executor, repl.read_bytes, count
+                        )
+                        if data:
+                            conn.repl.append_output(data)
+                        consecutive_transient = 0
+                    else:
+                        consecutive_transient = 0
+                        await asyncio.sleep(0.01)
+                except TransportError:
+                    consecutive_transient += 1
+                    if consecutive_transient >= 20:
+                        break
+                    await asyncio.sleep(0.005)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
     def _repl_reader_loop(self, conn: BoardConnection):
         if not conn or not conn.repl_protocol:
             return
         repl = conn.repl_protocol
+        consecutive_transient = 0
         while conn.repl.active and conn.repl_protocol:
             try:
                 count = repl.in_waiting()
@@ -17,8 +50,15 @@ class ReplCommandsMixin:
                     data = repl.read_bytes(count)
                     if data:
                         conn.repl.append_output(data)
+                    consecutive_transient = 0
                 else:
+                    consecutive_transient = 0
                     time.sleep(0.01)
+            except TransportError:
+                consecutive_transient += 1
+                if consecutive_transient >= 20:
+                    break
+                time.sleep(0.005)
             except Exception:
                 break
 
@@ -68,13 +108,19 @@ class ReplCommandsMixin:
 
         if prompt_found:
             conn.repl.start(ctx.ppid)
-            conn.repl.reader_thread = threading.Thread(
-                target=self._repl_reader_loop,
-                args=(conn,),
-                daemon=True,
-                name=f'REPL-Reader-{conn.port}'
-            )
-            conn.repl.reader_thread.start()
+            loop = getattr(self, '_loop', None)
+            if loop is not None and not loop.is_closed():
+                conn.repl.reader_future = asyncio.run_coroutine_threadsafe(
+                    self._repl_reader_task(conn), loop
+                )
+            else:
+                conn.repl.reader_thread = threading.Thread(
+                    target=self._repl_reader_loop,
+                    args=(conn,),
+                    daemon=True,
+                    name=f'REPL-Reader-{conn.port}'
+                )
+                conn.repl.reader_thread.start()
 
         return {
             "entered": prompt_found,

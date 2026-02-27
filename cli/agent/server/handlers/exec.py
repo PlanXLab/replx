@@ -373,9 +373,7 @@ class ExecCommandsMixin:
                 input_thread.join(timeout=0.5)
             conn.interactive.stop()
             conn.release()
-            with self._command_lock:
-                self._command_in_progress = False
-                self._last_command_time = time.time()
+            self._last_command_time = time.time()
     
     def _cmd_run_stop(self, ctx: CommandContext) -> dict:
         conn = ctx.connection

@@ -22,16 +22,34 @@ class InstallHelper:
     
     @staticmethod
     def resolve_spec(spec: str) -> Tuple[str, str]:
-        if spec == "core":
+        if spec in ("core/", "device/", "core", "device"):
+            raise typer.BadParameter(
+                f"Invalid spec: {spec} (deprecated; use core.all/device.all/core.<file>/device.<file>)"
+            )
+
+        if spec == "core.all":
             return "core", ""
-        if spec == "device":
+        if spec == "device.all":
             return "device", ""
-        if spec.startswith("core/"):
-            return "core", spec[len("core/"):]
-        if spec.startswith("device/"):
-            return "device", spec[len("device/"):]
+
+        if spec.startswith("core."):
+            rest = spec[len("core."):]
+            if not rest:
+                raise typer.BadParameter("Invalid spec: core.<file> requires a filename")
+            if rest.count(".") > 1:
+                raise typer.BadParameter(f"Invalid spec: {spec} (nested dotted filename is not supported)")
+            return "core", rest
+
+        if spec.startswith("device."):
+            rest = spec[len("device."):]
+            if not rest:
+                raise typer.BadParameter("Invalid spec: device.<file> requires a filename")
+            if rest.count(".") > 1:
+                raise typer.BadParameter(f"Invalid spec: {spec} (nested dotted filename is not supported)")
+            return "device", rest
+
         raise typer.BadParameter(
-            f"Invalid spec: {spec} (expect 'core[/...]' or 'device[/...]')"
+            f"Invalid spec: {spec} (expect core.all/device.all/core.<file>/device.<file>)"
         )
     
     @staticmethod

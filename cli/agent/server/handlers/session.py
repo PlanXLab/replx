@@ -130,16 +130,11 @@ class SessionCommandsMixin:
             freed_port = session.foreground
 
         for conn_port in ports_to_close:
-            other_sessions_using = [
-                s for sid, s in self.session_manager.get_all_sessions().items()
-                if sid != ppid and s.has_connection(conn_port)
-            ]
-            if not other_sessions_using:
-                self.connection_manager.disconnect(conn_port)
-
             for sess in self.session_manager.get_all_sessions().values():
                 if conn_port in sess.get_all_connections():
                     sess.remove_connection(conn_port)
+
+            self.connection_manager.disconnect(conn_port)
 
         self.session_manager.cleanup_empty_sessions()
 
@@ -212,7 +207,7 @@ class SessionCommandsMixin:
             self._default_port = None
             return {"default": None, "set": False}
 
-    def _cmd_free(self, ctx: CommandContext) -> dict:
+    def _cmd_release(self, ctx: CommandContext) -> dict:
         if ctx.ppid:
             if ctx.explicit_port:
                 return self._cmd_session_disconnect(ctx, port=ctx.explicit_port)

@@ -33,7 +33,7 @@ class AgentClient:
             self.sock.close()
             self.sock = None
 
-    def send_command(self, command: str, timeout: float = None, **args) -> Dict[str, Any]:
+    def send_command(self, command: str, timeout: float = None, max_retries: int = None, **args) -> Dict[str, Any]:
         if not self.sock:
             self.connect()
 
@@ -58,8 +58,11 @@ class AgentClient:
         request_data = AgentProtocol.encode_message(request)
 
         response = None
-        
-        max_attempts = 1 if effective_timeout < 1.0 else self.MAX_RETRIES
+
+        if max_retries is not None:
+            max_attempts = max(1, max_retries)
+        else:
+            max_attempts = 1 if effective_timeout < 1.0 else self.MAX_RETRIES
 
         for attempt in range(max_attempts):
             try:
