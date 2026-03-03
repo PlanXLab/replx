@@ -326,13 +326,14 @@ class AgentClient:
         if port:
             cmd.append(str(port))
 
+        proc = None
         if background:
             if sys.platform == 'win32':
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = 0
 
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
                     stdout=subprocess.DEVNULL,
@@ -340,7 +341,7 @@ class AgentClient:
                     startupinfo=startupinfo
                 )
             else:
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -349,10 +350,12 @@ class AgentClient:
                     close_fds=True
                 )
         else:
-            subprocess.Popen(cmd)
+            proc = subprocess.Popen(cmd)
 
-        for i in range(30):
+        for _ in range(100):
             time.sleep(0.1)
+            if proc is not None and proc.poll() is not None:
+                raise RuntimeError(f"Failed to start agent (process exited with code {proc.returncode})")
             if AgentClient.is_agent_running(port=port):
                 return True
 
