@@ -141,12 +141,9 @@ class SessionCommandsMixin:
         if not self.session_manager.has_sessions():
             def delayed_shutdown():
                 time.sleep(0.3)
-                self.running = False
-                if self.server_socket:
-                    try:
-                        self.server_socket.close()
-                    except Exception:
-                        pass
+                # cleanup() properly sets _stop_event to stop the asyncio loop
+                # and releases the UDP port so a new agent can bind it immediately.
+                self.cleanup()
 
             shutdown_thread = threading.Thread(target=delayed_shutdown, daemon=True)
             shutdown_thread.start()

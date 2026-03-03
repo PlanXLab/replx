@@ -143,11 +143,14 @@ class ExecCommandsMixin:
         self.connection_manager.disconnect_all()        
         self.session_manager.clear_all_sessions()
         
-        if self.server_socket:
-            try:
-                self.server_socket.close()
-            except Exception:
-                pass
+        # Defer actual cleanup so the response can be sent before the transport closes.
+        # cleanup() properly sets _stop_event, which stops the asyncio loop and
+        # releases the UDP port — preventing "Address already in use" on next start.
+        def _deferred_cleanup():
+            time.sleep(0.2)
+            self.cleanup()
+        
+        threading.Thread(target=_deferred_cleanup, daemon=True).start()
         
         return {"shutdown": True}
     

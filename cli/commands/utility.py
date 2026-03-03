@@ -978,7 +978,8 @@ Format (erase) the filesystem on the connected device.
 
 [bold cyan]After formatting:[/bold cyan]
   • Device has empty filesystem
-  • Reinstall libraries: [green]replx pkg update[/green]
+    • Reinstall libraries: [green]replx pkg update core.all[/green]
+    • Install device libs: [green]replx pkg update device.all[/green]
   • Or use [green]replx init[/green] instead (format + install)
 
 [bold cyan]Related:[/bold cyan]
@@ -1088,8 +1089,6 @@ def init(
         help_text = """\
 Completely reset device: format filesystem and install all libraries.
 
-[bold yellow]⚠ WARNING: This deletes ALL files and reinstalls from scratch![/bold yellow]
-
 [bold cyan]Usage:[/bold cyan]
   replx init
 
@@ -1114,13 +1113,15 @@ Completely reset device: format filesystem and install all libraries.
   • Or set up workspace: [green]replx setup[/green]
 
 [bold cyan]Equivalent to:[/bold cyan]
-  replx pkg download      [dim]# Download libraries (if needed)[/dim]
-  replx format            [dim]# Erase device storage[/dim]
-  replx pkg update        [dim]# Install to device[/dim]
+  replx pkg download          [dim]# Download libraries (if needed)[/dim]
+  replx format                [dim]# Erase device storage[/dim]
+  replx pkg update core.all   [dim]# Install all core libs[/dim]
+  replx pkg update device.all [dim]# Install all device libs[/dim]
 
 [bold cyan]Related:[/bold cyan]
-  replx format            [dim]# Just erase (no install)[/dim]
-  replx pkg update        [dim]# Just install (no format)[/dim]"""
+  replx format                [dim]# Just erase (no install)[/dim]
+  replx pkg update core.all   [dim]# Just install core (no format)[/dim]
+  replx pkg update device.all [dim]# Just install device (no format)[/dim]"""
         OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
@@ -1270,11 +1271,11 @@ Completely reset device: format filesystem and install all libraries.
     install_stats = {}
     
     try:
-        specs_to_install = ["core/"]
+        specs_to_install = ["core.all"]
         
         dev_src = os.path.join(StoreManager.pkg_root(), "device", device_name_to_path(STATE.device), "src")
         if os.path.isdir(dev_src):
-            specs_to_install.append("device/")
+            specs_to_install.append("device.all")
         
         from rich.panel import Panel as RichPanel
         initial_panel = RichPanel(
@@ -1290,11 +1291,10 @@ Completely reset device: format filesystem and install all libraries.
                     install_stats[spec_item] = result
             
             summary_parts = []
-            for spec_key in ["core/", "device/"]:
+            for spec_key in ["core.all", "device.all"]:
                 if spec_key in install_stats:
                     stats = install_stats[spec_key]
-                    label = spec_key.rstrip("/")
-                    summary_parts.append(f"🔧 {label}/ {stats['files']} file(s) {format_bytes(stats['bytes'])}")
+                    summary_parts.append(f"🔧 {spec_key} {stats['files']} file(s) {format_bytes(stats['bytes'])}")
             
             summary_line = "    ".join(summary_parts)
             live.update(RichPanel(
