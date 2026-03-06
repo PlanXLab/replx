@@ -344,22 +344,11 @@ By default, runs a file from your computer. Use -d to run from device.
                     if stream_type == "stderr":
                         stderr_buffer.extend(data)
                     else:
-                        # Normalize line endings for all platforms.
-                        # 'replx run' puts the terminal in raw mode (tty.setraw) on
-                        # Unix/macOS.  In raw mode \n alone only moves the cursor DOWN
-                        # without returning to column 0, so every line is indented one
-                        # extra position compared to the previous one.
-                        # We must emit \r\n so that \r returns to col-0 before \n
-                        # moves down.  Windows terminal handles \r\n natively; stripping
-                        # \r avoids duplicate blank lines there.
                         if not IS_WINDOWS:
-                            # Collapse all line-ending variants to \n first, then
-                            # expand every \n to \r\n for raw-mode display.
                             data = data.replace(b'\r\n', b'\n')  # CRLF -> LF
                             data = data.replace(b'\r', b'\n')    # lone CR -> LF
                             data = data.replace(b'\n', b'\r\n')  # LF -> CRLF
                         else:
-                            # Windows: strip \r to avoid double carriage returns.
                             data = data.replace(b'\r', b'')
                         
                         if data:
