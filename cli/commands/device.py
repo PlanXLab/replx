@@ -35,11 +35,6 @@ from ..app import app
 
 
 def _normalize_path_for_comparison(path: str) -> str:
-    """Normalize file path for comparison.
-    
-    Windows: case-insensitive
-    Linux/macOS: case-sensitive
-    """
     path = os.path.normpath(path)
     if sys.platform.startswith("win"):
         return path.lower()
@@ -48,12 +43,6 @@ def _normalize_path_for_comparison(path: str) -> str:
 
 
 def _serial_port_cmp_key(port: str) -> str:
-    """Comparison key for serial ports.
-
-    Policy:
-    - Display: keep OS-provided casing.
-    - Compare: on Windows, treat COM ports case-insensitively.
-    """
     if port is None:
         return ""
     p = str(port).strip()
@@ -61,10 +50,6 @@ def _serial_port_cmp_key(port: str) -> str:
 
 
 def _serial_port_display(port: str) -> str:
-    """Format a serial port name for display.
-
-    Requirement: on Windows, always show port names in uppercase.
-    """
     if port is None:
         return ""
     p = str(port).strip()
@@ -72,12 +57,6 @@ def _serial_port_display(port: str) -> str:
 
 
 def _resolve_os_serial_port_name(port: str) -> str:
-    """Resolve port name to the OS-enumerated spelling (best-effort).
-
-    This is mainly for Windows where users might type `com1` but the OS reports
-    `COM1`. We keep display as OS-provided and use case-insensitive comparison
-    separately.
-    """
     if not port:
         return port
     p = str(port).strip()
@@ -158,7 +137,6 @@ def _create_vscode_files_and_typehints(vscode_dir: str, core: str, device: str, 
     
     extra_paths = []
     
-    # 1. MicroPython standard library typehints (included in replx tool)
     from replx.utils.device_info import is_std_micropython
     if is_std_micropython(core):
         comm_path = StoreManager.comm_typehints_path()
@@ -167,27 +145,22 @@ def _create_vscode_files_and_typehints(vscode_dir: str, core: str, device: str, 
     if comm_path and os.path.isdir(comm_path):
         extra_paths.append(comm_path)
     
-    # 2. Core builtin typehints (included in replx tool)
     if core:
         core_builtin = StoreManager.core_typehints_path(core)
         if core_builtin and os.path.isdir(core_builtin):
             extra_paths.append(core_builtin)
     
-    # 3. Core library typehints (downloaded via 'replx pkg download')
     if core:
         core_lib_typehints = os.path.join(StoreManager.pkg_root(), "core", core, "typehints")
         if os.path.isdir(core_lib_typehints):
             extra_paths.append(core_lib_typehints)
     
-    # 4. Device builtin typehints (included in replx tool)
     if device:
         device_path = device_name_to_path(device)
         device_builtin = StoreManager.device_typehints_path(device_path)
         if device_builtin and os.path.isdir(device_builtin):
             extra_paths.append(device_builtin)
     
-    # 5. Device library typehints (downloaded via 'replx pkg download')
-    # Note: device name like 'ticle-lite' becomes 'ticle_lite' in filesystem
     if device:
         device_path = device_name_to_path(device)
         device_typehints = os.path.join(StoreManager.pkg_root(), "device", device_path, "typehints")
@@ -290,7 +263,6 @@ Run this once per project folder to set up your workspace.
     port = global_opts.get('port')
     agent_port = global_opts.get('agent_port')
 
-    # Store/use the OS-enumerated port spelling when possible.
     port = _resolve_os_serial_port_name(port)
 
     if not port:
@@ -306,7 +278,6 @@ Run this once per project folder to set up your workspace.
     
     env_path = _find_env_file()
     if agent_port is None:
-        # Use original port for connection lookup
         if env_path and port:
             existing_config = _get_connection_config(env_path, port)
             if existing_config and existing_config.get('agent_port'):
@@ -356,7 +327,6 @@ Run this once per project folder to set up your workspace.
                     env_path = os.path.join(vscode_dir, ".replx")
                     workspace = os.path.dirname(vscode_dir)
                     
-                    # Use original port for storing connection
                     _update_connection_config(
                         env_path, port,
                         version=version, core=core, device=device,
@@ -391,7 +361,6 @@ Run this once per project folder to set up your workspace.
                     )
                     raise typer.Exit()
                 else:
-                    # Use original port for session setup
                     try:
                         with AgentClient(port=agent_port, device_port=port) as client:
                             result = client.send_command(
@@ -410,7 +379,6 @@ Run this once per project folder to set up your workspace.
                         vscode_dir = _find_or_create_vscode_dir()
                         env_path = os.path.join(vscode_dir, ".replx")
                         
-                        # Use original port for storing connection
                         _update_connection_config(
                             env_path, port,
                             version=STATE.version, core=STATE.core, device=STATE.device,
@@ -478,7 +446,6 @@ Run this once per project folder to set up your workspace.
         )
         raise typer.Exit(1)
     
-    # Use original port for session setup
     try:
         with AgentClient(port=agent_port, device_port=port) as client:
             result = client.send_command('session_setup', 
@@ -542,7 +509,6 @@ Run this once per project folder to set up your workspace.
             except Exception:
                 pass
     
-    # Use original port for storing connection
     set_as_default = True
     
     if clean_mode:

@@ -120,12 +120,6 @@ if IS_WINDOWS:
     _STD_INPUT_HANDLE     = -10
 
     def disable_quick_edit_mode() -> int | None:
-        """Quick Edit / Mark Mode를 비활성화하고 이전 콘솔 모드 값을 반환한다.
-
-        반환값을 restore_console_mode()에 전달하면 원래 상태로 복원된다.
-        VS Code 터미널 등 ConsoleAPI를 사용하지 않는 환경(ConPTY)에서는
-        GetConsoleMode가 ERROR_INVALID_HANDLE을 반환하므로 None을 반환한다.
-        """
         try:
             kernel32 = ctypes.windll.kernel32
             handle = kernel32.GetStdHandle(_STD_INPUT_HANDLE)
@@ -141,7 +135,6 @@ if IS_WINDOWS:
             return None
 
     def restore_console_mode(old_mode: int | None) -> None:
-        """disable_quick_edit_mode()가 반환한 값으로 콘솔 모드를 복원한다."""
         if old_mode is None:
             return
         try:

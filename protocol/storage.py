@@ -17,7 +17,6 @@ class DeviceStorage:
 
     def __init__(self, repl_protocol, core: str = "RP2350", device: str = "", device_root_fs: str = "/"):
         self.repl = repl_protocol
-        # Normalize core name (e.g., RP2350B -> RP2350)
         self.core = normalize_core(core)
         self.device = device
         self.device_root_fs = device_root_fs
@@ -38,11 +37,6 @@ class DeviceStorage:
             self._ls_recursive_func = self._ls_recursive_standard
 
     def ls(self, path: str = "/") -> List[str]:
-        """List directory contents.
-        
-        Raises:
-            TransportError: If the serial port has been disconnected.
-        """
         safe_path = path.replace("'", "\\'")
         command = f"""
 import os
@@ -51,7 +45,6 @@ try:
 except Exception as e:
     print('__ERROR__:' + str(e))
 """
-        # Let TransportError propagate - this indicates disconnection
         result = self.repl.exec(command).decode('utf-8').strip()
         if result.startswith("__ERROR__:"):
             raise FileSystemError(f"ls failed: {result[len('__ERROR__:'):].strip()}")
@@ -61,26 +54,15 @@ except Exception as e:
             return []
 
     def ls_detailed(self, path: str = "/") -> List[list]:
-        """List directory contents with details.
-        
-        Raises:
-            TransportError: If the serial port has been disconnected.
-        """
         return self._ls_detailed_func(path)
 
     def ls_recursive(self, path: str = "/") -> List[dict]:
-        """List directory contents recursively.
-        
-        Raises:
-            TransportError: If the serial port has been disconnected.
-        """
         return self._ls_recursive_func(path)
 
     def _ls_detailed_standard(self, dir: str = "/") -> List[list]:
         dir = self._normalize_remote_path(dir)
         if not dir.startswith("/"):
             dir = "/" + dir
-        # Remove trailing slash for path concatenation (but keep '/' as is)
         if dir != '/' and dir.endswith('/'):
             dir = dir.rstrip('/')
         
@@ -109,7 +91,6 @@ def get_detailed_listing(path):
 print(json.dumps(get_detailed_listing('{dir}')))
 """
         try:
-            # Let TransportError propagate - this indicates disconnection
             out = self.repl.exec(command)
             result_str = out.decode("utf-8", errors='replace').strip()
             result = json.loads(result_str)
@@ -117,7 +98,6 @@ print(json.dumps(get_detailed_listing('{dir}')))
                 raise FileSystemError(f"ls failed: {result['__error__']}")
             return result
         except TransportError:
-            # Re-raise transport errors (serial port disconnected)
             raise
         except (json.JSONDecodeError, ProtocolError):
             pass
@@ -169,7 +149,6 @@ print(json.dumps(get_detailed_listing('{dir}')))
                 raise FileSystemError(f"ls failed: {result['__error__']}")
             return result
         except TransportError:
-            # Re-raise transport errors (serial port disconnected)
             raise
         except (json.JSONDecodeError, ProtocolError):
             return []
@@ -233,7 +212,6 @@ print(json.dumps(get_recursive_listing('{dir}')))
                 raise FileSystemError(f"ls_recursive failed: {result['__error__']}")
             return result
         except TransportError:
-            # Re-raise transport errors (serial port disconnected)
             raise
         except (json.JSONDecodeError, ProtocolError):
             return self._ls_recursive_fallback(dir)
@@ -302,7 +280,6 @@ print(json.dumps(get_recursive_listing('{dir}')))
                 raise FileSystemError(f"ls_recursive failed: {result['__error__']}")
             return result
         except TransportError:
-            # Re-raise transport errors (serial port disconnected)
             raise
         except (json.JSONDecodeError, ProtocolError):
             return self._ls_recursive_fallback(dir)
@@ -424,7 +401,6 @@ except Exception:
 
     def mkdir(self, dir: str) -> bool:
         """Create directory on device. Uses forward slashes for device paths."""
-        # Normalize to forward slashes for device
         dir = dir.replace('\\', '/')
         command = f"""
 import os
@@ -617,7 +593,6 @@ print(get_fs_info())
         return ast.literal_eval(out.decode("utf-8").strip())
 
     def format(self) -> bool:
-        # Normalize core name (e.g., RP2350B -> RP2350)
         normalized_core = normalize_core(self.core)
         
         if normalized_core in ("ESP32S3", "ESP32C6", "ESP32C5", "ESP32P4"):
@@ -712,7 +687,6 @@ if chunk:
                     
                     if encoded_data:
                         try:
-                            # Strip whitespace/newlines that may be added by REPL output
                             cleaned_data = encoded_data.strip().replace(b'\r', b'').replace(b'\n', b'')
                             chunk_data = binascii_module.a2b_base64(cleaned_data)
                         except Exception as e:
@@ -805,7 +779,6 @@ if chunk:
                         progress_callback(total, total)
                         
                 except Exception:
-                    # Ensure file handle is closed on error
                     if file_opened:
                         try:
                             self.repl._exec("try:\n  f.close()\nexcept:\n  pass")
@@ -863,20 +836,12 @@ if chunk:
             progress_callback(total, total, "Complete")
 
     def putdir(self, local: str, remote: str):
-        """Upload directory from local to device.
-        
-        Args:
-            local: Local directory path (OS-specific separators)
-            remote: Remote path on device (uses forward slashes)
-        """
         import posixpath
         
         base_local = os.path.abspath(local)
-        # Normalize remote to forward slashes for device
         base_remote = remote.replace("\\", "/")
         
         for parent, child_dirs, child_files in os.walk(base_local, followlinks=True):
-            # Convert local relative path to device path (forward slashes)
             rel = os.path.relpath(parent, base_local).replace("\\", "/")
             remote_parent = posixpath.normpath(
                 posixpath.join(base_remote, "" if rel == "." else rel)
@@ -888,16 +853,13 @@ if chunk:
 
             for filename in child_files:
                 local_path = os.path.join(parent, filename)
-                # Ensure remote path uses forward slashes
                 remote_path = posixpath.join(remote_parent, filename)
                 self.put(local_path, remote_path)
 
     def _normalize_remote_path(self, path: str) -> str:
-        # Check both with and without trailing slash
         root_with_slash = self.device_root_fs
         root_without_slash = self.device_root_fs.rstrip('/')
         
-        # If path already starts with device_root_fs (with or without slash), return as-is
         if path.startswith(root_with_slash) or path == root_without_slash or path.startswith(root_without_slash + '/'):
             return path
         
@@ -927,6 +889,6 @@ SerialStorage = DeviceStorage
 
 __all__ = [
     'DeviceStorage',
-    'SerialStorage',      # Backward compatibility
+    'SerialStorage',
     'create_storage',
 ]

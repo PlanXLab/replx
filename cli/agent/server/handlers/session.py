@@ -71,7 +71,6 @@ class SessionCommandsMixin:
 
         self._add_connection(conn_key, new_conn)
 
-        # Pass original port to session
         self.session_manager.add_connection_to_session(
             ppid, port,
             as_foreground=as_foreground,
@@ -113,7 +112,6 @@ class SessionCommandsMixin:
             ports_to_close = list(session.get_all_connections())
             freed_port = "all"
         elif port:
-            # Find port in session
             found = None
             for conn in session.get_all_connections():
                 if conn == port:
@@ -141,8 +139,6 @@ class SessionCommandsMixin:
         if not self.session_manager.has_sessions():
             def delayed_shutdown():
                 time.sleep(0.3)
-                # cleanup() properly sets _stop_event to stop the asyncio loop
-                # and releases the UDP port so a new agent can bind it immediately.
                 self.cleanup()
 
             shutdown_thread = threading.Thread(target=delayed_shutdown, daemon=True)
@@ -178,7 +174,6 @@ class SessionCommandsMixin:
 
         old_fg = session.foreground
 
-        # Pass original port, not normalized
         session.add_connection(port, as_foreground=True)
 
         return {

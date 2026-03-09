@@ -45,15 +45,6 @@ def _upload_file_with_progress(client, local_path: str, remote_path: str, progre
 
 
 def _find_local_pkg_version(local_meta: dict, *, scope: str, target: str, source_path: str, pkg_name: str) -> tuple[float, bool]:
-    """Resolve local registry version for a package.
-
-    Local registry keys are not always a simple `${scope}:${target}:${name}`:
-    - device-specific packages may be stored as `${scope}:${target}:${name}@_variant`
-    - some historical entries may have a different `${name}` but the same `source`
-
-    This helper prefers direct-key lookup, then variant-key lookup, then falls back
-    to matching by `source` within the target scope.
-    """
     if not local_meta or not isinstance(local_meta, dict):
         return 0.0, True
 
@@ -66,11 +57,9 @@ def _find_local_pkg_version(local_meta: dict, *, scope: str, target: str, source
 
     base_key = f"{scope}:{target}:{pkg_name}"
 
-    # 1) Exact match
     if base_key in local_packages:
         return RegistryHelper.get_version(local_packages[base_key]), False
 
-    # 2) Variant match (device only)
     if scope == "device":
         best = None
         for key, meta in local_packages.items():
@@ -82,8 +71,6 @@ def _find_local_pkg_version(local_meta: dict, *, scope: str, target: str, source
         if best is not None:
             return best, False
 
-    # 3) Fallback: match by source path within the same target scope
-    # (handles cases like key name mismatch but source is stable)
     prefix_lower = f"{scope}:{target}:".lower()
     for key, meta in local_packages.items():
         if not isinstance(key, str) or not isinstance(meta, dict):
@@ -207,7 +194,6 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
 
     cores, devices = RegistryHelper.root_sections(remote)
 
-    # Nerd Font icons for status column (display only)
     STAT_ICON_NEW = ""
     STAT_ICON_UPD = ""
 
@@ -223,9 +209,6 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
         if not source_path or not target:
             return 0.0, True
 
-        # Extract package name from source path
-        # e.g., "core/_std/src/i2c.py" -> "i2c"
-        # e.g., "core/_std/src/upaho/__init__.py" -> "upaho"
         filename = source_path.split("/")[-1] if "/" in source_path else source_path
         name = filename.replace(".py", "").replace(".pyi", "").replace("__init__", "")
         if not name and "/" in source_path:
@@ -242,9 +225,7 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
             source = pkg_meta.get("source", "")
             lver, missing = local_ver(source, core_name, "core")
             stat = status_label(rver, lver, missing)
-            # Extract package name from source (e.g., "slip" from "core/_std/src/slip.py")
             pkg_name = pkg_meta.get("source", "").split("/")[-1].replace(".py", "")
-            # Display folder name for __init__.py files
             display_path = f"src/{relpath}"
             if relpath.endswith("/__init__.py"):
                 display_path = display_path.replace("/__init__.py", "/")
@@ -258,18 +239,13 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
             source = pkg_meta.get("source", "")
             lver, missing = local_ver(source, dev_name, "device")
             stat = status_label(rver, lver, missing)
-            # Extract package name from source
             pkg_name = pkg_meta.get("source", "").split("/")[-1].replace(".py", "")
-            # Display folder name for __init__.py files
             display_path = f"src/{relpath}"
             if relpath.endswith("/__init__.py"):
                 display_path = display_path.replace("/__init__.py", "/")
             rows.append(("device", dev_name, stat, f"{rver:.1f}", display_path, pkg_name))
 
     def resolve_current_dev_core() -> tuple[Optional[str], Optional[str]]:
-        """Get current device and core from status returned by _ensure_connected()."""
-        # Use status values from _ensure_connected() to ensure correct device/core
-        # for the specified port (e.g., --port com1)
         if not status or not status.get('connected'):
             return None, None
         
@@ -279,7 +255,6 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
         if not cur_core:
             return None, None
         
-        # Convert device name to filesystem path format for matching GitHub metadata
         dk = SearchHelper.key_ci(devices, device_name_to_path(cur_dev)) if cur_dev else None
         ck = SearchHelper.key_ci(cores, cur_core) if cur_core else None
         
@@ -292,34 +267,26 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
     cur_dev_key, cur_core_key = resolve_current_dev_core()
 
     if lib_name:
-        # Try both original name and converted name for device matching
         dkey = SearchHelper.key_ci(devices, device_name_to_path(lib_name))
         ckey = SearchHelper.key_ci(cores, lib_name)
 
         if dkey and cur_dev_key and dkey == cur_dev_key:
-            # Device found, add device packages
             add_device_rows(dkey, rows)
         elif ckey and cur_core_key and ckey == cur_core_key:
-            # Core found, add core packages
             add_core_rows(ckey, rows)
         else:
-            # Search by name within current core/device packages
             q = lib_name.lower()
             temp_rows = []
             
-            # Get all packages for current core/device
             if cur_core_key:
                 add_core_rows(cur_core_key, temp_rows)
                 if cur_dev_key and cur_dev_key != cur_core_key:
                     add_device_rows(cur_dev_key, temp_rows)
             
-            # Filter by search query
             for scope, target, stat, ver_str, shown_path, pkg_name in temp_rows:
-                # Check if query matches package name or file path
                 if (q in pkg_name.lower()) or (q in shown_path.lower()):
                     rows.append((scope, target, stat, ver_str, shown_path, pkg_name))
     else:
-        # No search query - list only for current core/device
         if cur_core_key:
             add_core_rows(cur_core_key, rows)
             if cur_dev_key and cur_dev_key != cur_core_key:
@@ -371,7 +338,6 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
         return padded
 
     def _color_file(padded: str, stat: str) -> str:
-        # De-emphasize unchanged entries; keep NEW/UPD entries readable.
         if stat in ("NEW", "UPD"):
             return padded
         return f"[dim]{padded}[/dim]"
@@ -461,10 +427,8 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
     except Exception:
         local = {}
 
-    # Initialize local packages structure
     local_packages = local.setdefault("packages", {})
     
-    # Copy only the platform_cores and device_configs for the current core/device
     if "platform_cores" in remote and core:
         remote_platform_cores = remote.get("platform_cores", {})
         if core in remote_platform_cores:
@@ -484,13 +448,11 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
         local["schema_version"] = remote.get("schema_version")
 
     def _local_touch_package(pkg_name: str, pkg_meta: dict) -> None:
-        """Add or update a package in local registry."""
         local_packages[pkg_name] = pkg_meta.copy()
 
     exts = (".py", ".pyi", ".json")
 
     def _plan_for_core(core_name: str, part: str) -> list[tuple[str, dict, str, str, dict, str]]:
-        """Returns list of (relpath, file_pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type)."""
         todo = []
         remote_packages = remote.get("packages", {})
         
@@ -501,24 +463,18 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
             source = pkg_meta.get("source", "")
             rver = RegistryHelper.get_version(pkg_meta)
             
-            # Find original package by source (walk_files may return variant metadata)
-            # For core packages, the original package has this source in its base metadata or variants
             orig_pkg_name = None
             orig_pkg_meta = None
             
             for name, meta in remote_packages.items():
-                # Check base package source
                 if meta.get("source") == source:
                     orig_pkg_name = name
                     orig_pkg_meta = meta
                     break
-                # Check variants
                 variants = meta.get("variants", {})
                 for var_name, var_meta in variants.items():
                     if var_meta.get("source") == source:
-                        # Found in variant - use base package name but preserve variant's source
                         orig_pkg_name = name
-                        # Copy base metadata and override source with variant's source
                         orig_pkg_meta = meta.copy()
                         orig_pkg_meta["source"] = source
                         break
@@ -526,16 +482,12 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
                     break
             
             if not orig_pkg_name or not orig_pkg_meta:
-                # Fallback: extract from source path
                 pkg_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "").replace("__init__", "")
                 if not pkg_name or pkg_name == "":
-                    # For __init__.py, use parent folder name
                     pkg_name = source.split("/")[-2] if len(source.split("/")) >= 2 else "unknown"
                 orig_pkg_name = pkg_name
                 orig_pkg_meta = pkg_meta
             
-            # Check local version using the same resolver as `pkg search`
-            # (handles variant keys and source-based matching)
             source_for_match = (
                 source
                 or orig_pkg_meta.get("source", "")
@@ -553,14 +505,12 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
             change_type = "NEW" if missing else ("UPD" if float(lver) < float(rver) else "")
             
             if float(lver) < float(rver):
-                # Extract filename for display
                 display_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "")
                 todo.append((relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
         
         return todo
 
     def _plan_for_device(device_name: str, part: str) -> list[tuple[str, dict, str, str, dict, str]]:
-        """Returns list of (relpath, file_pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type)."""
         todo = []
         remote_packages = remote.get("packages", {})
         
@@ -571,23 +521,18 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
             source = pkg_meta.get("source", "")
             rver = RegistryHelper.get_version(pkg_meta)
             
-            # Find original package by source
             orig_pkg_name = None
             orig_pkg_meta = None
             
             for name, meta in remote_packages.items():
-                # Check base package source
                 if meta.get("source") == source:
                     orig_pkg_name = name
                     orig_pkg_meta = meta
                     break
-                # Check variants
                 variants = meta.get("variants", {})
                 for var_name, var_meta in variants.items():
                     if var_meta.get("source") == source:
-                        # Found in variant - use base package name but preserve variant's source
                         orig_pkg_name = name
-                        # Copy base metadata and override source with variant's source
                         orig_pkg_meta = meta.copy()
                         orig_pkg_meta["source"] = source
                         break
@@ -595,15 +540,12 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
                     break
             
             if not orig_pkg_name or not orig_pkg_meta:
-                # Fallback: extract from source path
                 pkg_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "").replace("__init__", "")
                 if not pkg_name or pkg_name == "":
-                    # For __init__.py, use parent folder name
                     pkg_name = source.split("/")[-2] if len(source.split("/")) >= 2 else "unknown"
                 orig_pkg_name = pkg_name
                 orig_pkg_meta = pkg_meta
             
-            # Check local version using the same resolver as `pkg search`
             source_for_match = (
                 source
                 or orig_pkg_meta.get("source", "")
@@ -621,7 +563,6 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
             change_type = "NEW" if missing else ("UPD" if float(lver) < float(rver) else "")
             
             if float(lver) < float(rver):
-                # Extract display name
                 display_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "")
                 todo.append((relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
         
@@ -632,7 +573,6 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
     upd_count = 0
     download_targets = []
     
-    # Check core for updates (always check, even if already downloaded)
     if core_exists_remote and include_core:
         core_src_files = _plan_for_core(core, "src")
         core_hints_files = _plan_for_core(core, "typehints")
@@ -661,7 +601,6 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
         if core_src_files or core_hints_files:
             download_targets.append(f"core/{core}")
     
-    # Check device for updates (always check, even if already downloaded)
     if device_exists_remote and include_device:
         device_src_files = _plan_for_device(device_name_to_path(dev), "src")
         device_hints_files = _plan_for_device(device_name_to_path(dev), "typehints")
@@ -702,7 +641,6 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
         def download_file(task):
             scope, target, part, relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, _change_type = task
             
-            # Get correct source path based on part (src or typehints)
             if part == "typehints":
                 source = pkg_meta.get("typehint", "")
                 if not source:
@@ -710,9 +648,6 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
             else:
                 source = pkg_meta.get("source", "")
             
-            # Build local path based on deploy_path: scope/target/part/relpath
-            # e.g., core/RP2350/src/upaho/__init__.py
-            # For device typehints, add device name as package folder: device/ticle_lite/typehints/ticle_lite/button.pyi
             if scope == "device" and part == "typehints":
                 out_path = os.path.join(StoreManager.pkg_root(), scope, target, part, target, relpath.replace("/", os.sep))
             else:
@@ -722,22 +657,16 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
                 os.makedirs(os.path.dirname(out_path), exist_ok=True)
                 InstallHelper.download_raw_file(owner, repo, ref, source, out_path)
                 
-                # Download submodules if present
-                # Use submodules_typehints for typehints part, otherwise use submodules
                 if part == "typehints":
                     submodules = pkg_meta.get("submodules_typehints", [])
                 else:
                     submodules = pkg_meta.get("submodules", [])
                     
                 for submodule_path in submodules:
-                    # Build submodule path relative to main module's directory
-                    # e.g., relpath="ws2812/__init__.py", submodule="device/_ticle/src/display/ws2812/effect.py"
-                    # -> sub_relpath="ws2812/effect.py"
                     relpath_dir = os.path.dirname(relpath) if "/" in relpath or "\\" in relpath else ""
                     submodule_filename = os.path.basename(submodule_path)
                     sub_relpath = os.path.join(relpath_dir, submodule_filename) if relpath_dir else submodule_filename
                     
-                    # For device typehints, add device name as package folder
                     if scope == "device" and part == "typehints":
                         sub_out_path = os.path.join(StoreManager.pkg_root(), scope, target, part, target, sub_relpath.replace("/", os.sep))
                     else:
@@ -746,8 +675,6 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
                     os.makedirs(os.path.dirname(sub_out_path), exist_ok=True)
                     InstallHelper.download_raw_file(owner, repo, ref, submodule_path, sub_out_path)
                 
-                # Save original package metadata (not variant metadata) to local registry
-                # Use scope:target:name as unique key to avoid conflicts between core/device packages
                 unique_pkg_name = f"{scope}:{target}:{orig_pkg_name}"
                 _local_touch_package(unique_pkg_name, orig_pkg_meta)
                 return (True, relpath, None)
@@ -793,7 +720,6 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
                 OutputHelper._console.print(f"  [dim]... and {len(errors) - 5} more errors[/dim]")
             raise typer.BadParameter(f"Failed to download {len(errors)} file(s)")
     
-    # Create __init__.pyi for device typehints if it doesn't exist
     if device_exists_remote and dev:
         device_typehints_pkg_dir = os.path.join(StoreManager.pkg_root(), "device", device_name_to_path(dev), "typehints", device_name_to_path(dev))
         init_pyi_path = os.path.join(device_typehints_pkg_dir, "__init__.pyi")
@@ -803,12 +729,11 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
                 with open(init_pyi_path, "w", encoding="utf-8") as f:
                     f.write("# Type hints for device package\n")
             except Exception:
-                pass  # Silently ignore if we can't create the file
+                pass 
     
     StoreManager.save_local_meta(local)
     
     if total == 0:
-        # No updates needed
         if dev == core:
             message = f"Core [bright_green]{core}[/bright_green] is already up to date."
         else:
@@ -844,7 +769,6 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
 
         total = len(local_list)
         
-        # Show compilation progress
         if not live and not update_callback:
             from rich.spinner import Spinner
             temp_panel = Panel(
@@ -862,7 +786,6 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
         for abs_file, rel in local_list:
             rel_dir = os.path.dirname(rel)
             
-            # Check if it's a Python file or other file
             is_python = abs_file.endswith(".py")
             
             if rel.startswith("ext/") and "/" in rel[4:]:
@@ -879,7 +802,6 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
                         out_file = CompilerHelper.staging_out_for(abs_file, base, CompilerHelper.mpy_arch_tag())
                         remote_path = ("/" + remote_dir + os.path.splitext(parts[-1])[0] + ".mpy").replace("//", "/")
                     else:
-                        # Non-Python file: copy as-is
                         out_file = abs_file
                         remote_path = ("/" + remote_dir + parts[-1]).replace("//", "/")
                     
@@ -893,12 +815,10 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
                 remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
             
             if is_python:
-                # Python file: compile to .mpy
                 CompilerHelper.compile_to_staging(abs_file, base)
                 out_file = CompilerHelper.staging_out_for(abs_file, base, CompilerHelper.mpy_arch_tag())
                 remote_path = ("/" + remote_dir + os.path.splitext(os.path.basename(rel))[0] + ".mpy").replace("//", "/")
             else:
-                # Non-Python file: copy as-is (e.g., .bin, .json, etc.)
                 out_file = abs_file
                 remote_path = ("/" + remote_dir + os.path.basename(rel)).replace("//", "/")
             
@@ -907,7 +827,6 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
             if remote_dir:
                 unique_dirs.add(remote_dir)
         
-        # Stop temporary compilation spinner
         if temp_live:
             temp_live.stop()
         
@@ -1339,7 +1258,6 @@ def _pkg_clean(args: list[str]):
     
     pkg_root = StoreManager.pkg_root()
     core_path = os.path.join(pkg_root, "core", STATE.core)
-    # Important: Convert device name (e.g., "ticle-lite" -> "ticle_lite")
     device_path = os.path.join(pkg_root, "device", device_name_to_path(STATE.device))
     meta_path = StoreManager.local_meta_path()
     
@@ -1370,7 +1288,6 @@ def _pkg_clean(args: list[str]):
         return total
     
     try:
-        # Remove core and device folders
         if core_exists:
             size = get_dir_size(core_path)
             shutil.rmtree(core_path)
@@ -1383,13 +1300,10 @@ def _pkg_clean(args: list[str]):
             removed_items.append(f"device/{STATE.device}/ ({_format_size(size)})")
             total_size += size
         
-        # Remove entries from local registry (not the file itself)
         if meta_exists:
             local_meta = StoreManager.load_local_meta()
             local_packages = local_meta.get("packages", {})
             
-            # Remove core package entries
-            # Important: Use device_name_to_path() to match registry keys
             core_prefix = f"core:{STATE.core}:"
             device_prefix = f"device:{device_name_to_path(STATE.device)}:"
             
@@ -1402,13 +1316,11 @@ def _pkg_clean(args: list[str]):
                     del local_packages[key]
                 entries_removed += len(keys_to_remove)
             
-            # Remove platform_cores entry for this core
             if core_exists and "platform_cores" in local_meta:
                 if STATE.core in local_meta["platform_cores"]:
                     del local_meta["platform_cores"][STATE.core]
                     entries_removed += 1
             
-            # Remove device_configs entry for this device
             if device_exists and "device_configs" in local_meta:
                 device_key = device_name_to_path(STATE.device)
                 if device_key in local_meta["device_configs"]:
@@ -1483,7 +1395,6 @@ Compile Python files to MicroPython bytecode (.mpy).
         )
         raise typer.Exit(1)
     
-    # Ensure board is connected to get architecture
     _ensure_connected()
     target_arch = STATE.core
     
@@ -1496,7 +1407,6 @@ Compile Python files to MicroPython bytecode (.mpy).
         )
         raise typer.Exit(1)
     
-    # Expand globs and collect files
     py_files = []
     for pattern in files:
         if '*' in pattern or '?' in pattern:
@@ -1535,7 +1445,6 @@ Compile Python files to MicroPython bytecode (.mpy).
         )
         raise typer.Exit(1)
     
-    # Check output option validity
     if output and len(py_files) > 1:
         OutputHelper.print_panel(
             "The [yellow]-o/--output[/yellow] option can only be used with a single file.",
@@ -1545,7 +1454,6 @@ Compile Python files to MicroPython bytecode (.mpy).
         raise typer.Exit(1)
     
     version = STATE.version if STATE.version else "1.24.0"
-    # Use CompilerHelper mapping to keep `mpy` in sync with `pkg update`.
     arch_args = CompilerHelper._march_for_core(target_arch, version)
     
     compiled = []
@@ -1568,19 +1476,16 @@ Compile Python files to MicroPython bytecode (.mpy).
         src_size = os.path.getsize(py_file)
         total_src_size += src_size
         
-        # Determine output path
         if output:
             out_mpy = output if output.endswith('.mpy') else output + '.mpy'
         else:
             out_mpy = os.path.splitext(py_file)[0] + '.mpy'
         
-        # Compile
         args = [py_file, '-o', out_mpy] + arch_args
         
         try:
             mpy_cross.run(*args)
             
-            # Verify output
             if os.path.exists(out_mpy) and os.path.getsize(out_mpy) > 0:
                 mpy_size = os.path.getsize(out_mpy)
                 total_mpy_size += mpy_size
@@ -1590,7 +1495,6 @@ Compile Python files to MicroPython bytecode (.mpy).
         except Exception as e:
             failed.append((py_file, str(e)))
     
-    # Report results
     if compiled:
         if len(compiled) == 1:
             py_file, out_mpy, src_size, mpy_size = compiled[0]

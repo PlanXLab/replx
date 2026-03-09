@@ -80,7 +80,6 @@ Download files or directories from the device to your computer.
         )
         raise typer.Exit(1)
     
-    # Get raw arguments from sys.argv to avoid Typer's shell expansion
     cmd_idx = next((i for i, arg in enumerate(sys.argv) if arg == 'get'), None)
     if cmd_idx is not None and cmd_idx + 1 < len(sys.argv):
         raw_args = []
@@ -91,28 +90,22 @@ Download files or directories from the device to your computer.
         if len(raw_args) >= 2:
             args = raw_args
     
-    # Last argument is local destination
     local = args[-1]
     remotes = args[:-1]
     
-    # Helper function to normalize remote path
     def normalize_remote(path: str) -> str:
         if not path.startswith('/'):
             path = '/' + path
         return path
     
-    # Use AgentClient for all operations
     client = _create_agent_client()
     
-    # Expand wildcards and collect all files to download
     files_to_download = []
     
     for remote_pattern in remotes:
         remote = normalize_remote(remote_pattern)
         
-        # Check for wildcards
         if '*' in remote_pattern or '?' in remote_pattern:
-            # Extract directory and pattern
             dir_path = posixpath.dirname(remote) or '/'
             basename_pattern = posixpath.basename(remote)
             
@@ -132,7 +125,6 @@ Download files or directories from the device to your computer.
                 )
                 continue
         else:
-            # Single file/directory
             try:
                 result = client.send_command('is_dir', path=remote)
                 is_dir = result.get('is_dir', False)
@@ -155,16 +147,13 @@ Download files or directories from the device to your computer.
         )
         raise typer.Exit(1)
     
-    # Download files
     total_files = len(files_to_download)
     success_count = 0
     
     if total_files == 1:
-        # Single file/directory - use original behavior
         remote, basename, is_dir = files_to_download[0]
         display_remote = remote.replace(device_root_fs, "", 1)
         
-        # Determine local destination
         if os.path.exists(local) and os.path.isdir(local):
             local_path = os.path.join(local, basename)
         else:
@@ -172,13 +161,11 @@ Download files or directories from the device to your computer.
         
         try:
             if is_dir:
-                # Use streaming directory download from server
                 progress_state = {"current": 0, "total": 0, "file": "", "status": "starting"}
                 
                 def progress_callback(progress_data):
                     progress_state.update(progress_data)
                 
-                # Start streaming download
                 with Live(OutputHelper.create_progress_panel(0, 1, title=f"Downloading {basename}", message="Scanning directory..."), console=OutputHelper._console, refresh_per_second=10) as live:
                     result_holder = {"result": None, "error": None, "done": False}
                     
@@ -200,11 +187,9 @@ Download files or directories from the device to your computer.
                         finally:
                             result_holder["done"] = True
                     
-                    # Run download in background thread
                     download_thread = threading.Thread(target=download_task, daemon=True)
                     download_thread.start()
                     
-                    # Update progress display
                     while not result_holder["done"]:
                         current = progress_state.get("current", 0)
                         total = progress_state.get("total", 1) or 1
@@ -221,7 +206,6 @@ Download files or directories from the device to your computer.
                         live.update(OutputHelper.create_progress_panel(current, total, title=f"Downloading {basename}", message=message))
                         time.sleep(0.05)
                     
-                    # Final update
                     live.update(OutputHelper.create_progress_panel(
                         progress_state.get("current", 0), 
                         progress_state.get("total", 0) or 1, 
@@ -231,7 +215,6 @@ Download files or directories from the device to your computer.
                     if result_holder["error"]:
                         raise Exception(result_holder["error"])
             else:
-                # Single file - simple download with progress
                 file_count = 1
                 with Live(OutputHelper.create_progress_panel(0, file_count, title=f"Downloading {basename}", message="Downloading file..."), console=OutputHelper._console, refresh_per_second=10) as live:
                     result = client.send_command('get_to_local', remote_path=remote, local_path=local_path, timeout=60)
@@ -250,7 +233,6 @@ Download files or directories from the device to your computer.
             )
             raise typer.Exit(1)
     else:
-        # Multiple files - ensure destination is a directory
         if not os.path.exists(local):
             os.makedirs(local)
         elif not os.path.isdir(local):
@@ -270,7 +252,6 @@ Download files or directories from the device to your computer.
                 
                 try:
                     if is_dir:
-                        # Use streaming for directory download
                         result = client.send_command_streaming(
                             'getdir_to_local', 
                             remote_path=remote, 
@@ -301,10 +282,6 @@ def cat(
     lines: Optional[str] = typer.Option(None, "-L", "--lines", help="Range: lines (text) or bytes (binary)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Display the content of a file from the connected device.
-    Text files are displayed as-is, binary files are shown in hex format.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -347,15 +324,13 @@ Text files show as-is; binary files show in hex format.
         typer.echo("Error: Missing required argument 'REMOTE'.", err=True)
         raise typer.Exit(1)
     
-    _ensure_connected()  # Ensure connection is established
+    _ensure_connected()
     
-    # Normalize path
     if not remote.startswith('/'):
         remote = '/' + remote
     
     display_remote = remote.replace('/', '', 1) if remote.startswith('/') else remote
     
-    # Use agent to get file content
     client = _create_agent_client()
     
     try:
@@ -381,13 +356,11 @@ Text files show as-is; binary files show in hex format.
         raise typer.Exit(1)
     
     if is_binary:
-        # Binary file - content is hex string from server, convert back to bytes
         raw_bytes = bytes.fromhex(content)
         total_bytes = len(raw_bytes)
         start_byte = 0
         end_byte = total_bytes
         
-        # Parse byte range for binary files
         if lines:
             try:
                 if ':' not in lines:
@@ -396,23 +369,18 @@ Text files show as-is; binary files show in hex format.
                 if len(parts) != 2:
                     raise ValueError("Invalid format")
                 
-                # Parse start byte
                 if parts[0]:
                     start_byte = int(parts[0])
                     if start_byte < 0:
                         start_byte = 0
                 
-                # Parse end byte
                 if parts[1]:
                     if parts[1].startswith('+'):
-                        # Relative: N:+M means M bytes from N
                         count = int(parts[1][1:])
                         end_byte = start_byte + count
                     else:
-                        # Absolute: N:M
                         end_byte = int(parts[1])
                 
-                # Clamp to valid range
                 start_byte = max(0, min(start_byte, total_bytes))
                 end_byte = max(start_byte, min(end_byte, total_bytes))
             except (ValueError, IndexError):
@@ -423,44 +391,34 @@ Text files show as-is; binary files show in hex format.
                 )
                 raise typer.Exit(1)
         
-        # Extract byte range
         data = raw_bytes[start_byte:end_byte]
         
-        # Format hex dump: 16 bytes per line with ASCII representation
-        # Align to 16-byte boundaries and show -- for bytes outside the range
         from rich.text import Text
         hex_output = Text()
         
-        # Calculate the first and last line boundaries (aligned to 16 bytes)
         first_line_start = (start_byte // 16) * 16
         last_line_end = ((end_byte + 15) // 16) * 16
         
         for line_offset in range(first_line_start, last_line_end, 16):
-            # Add offset
             hex_output.append(f"{line_offset:08x}", style="cyan")
             hex_output.append("  ")
             
-            # Hex part
             hex_chars = []
             ascii_chars = []
             
             for byte_offset in range(line_offset, line_offset + 16):
                 if start_byte <= byte_offset < end_byte:
-                    # Byte is within range - show actual data
                     data_index = byte_offset - start_byte
                     b = data[data_index]
                     hex_chars.append((f'{b:02x}', "bright_green"))
-                    # For ASCII part: printable chars or dot
                     if 32 <= b < 127:
                         ascii_chars.append((chr(b), None))
                     else:
                         ascii_chars.append((".", "dim"))
                 else:
-                    # Byte is outside range - show placeholder
                     hex_chars.append(("--", "dim"))
                     ascii_chars.append((" ", None))
             
-            # Add hex bytes with spaces
             for i, (h, style) in enumerate(hex_chars):
                 if i > 0:
                     hex_output.append(" ")
@@ -468,7 +426,6 @@ Text files show as-is; binary files show in hex format.
             
             hex_output.append("   ")
             
-            # Add ASCII chars
             for c, style in ascii_chars:
                 hex_output.append(c, style=style)
             
@@ -482,14 +439,12 @@ Text files show as-is; binary files show in hex format.
             title=title,
             border_style="blue"
         )
-        return  # Binary file handled, exit early
+        return 
     else:
-        # Text file - content is string from server
         text_content = content
         content_lines = text_content.split('\n')
         total_lines = len(content_lines)
         
-        # Apply line range if specified
         start_line = 1
         end_line = total_lines
         if lines:
@@ -509,7 +464,6 @@ Text files show as-is; binary files show in hex format.
         
         display_lines = content_lines[start_line-1:end_line]
         
-        # Add line numbers if requested
         if number:
             width = len(str(start_line + len(display_lines) - 1))
             formatted = []
@@ -534,15 +488,12 @@ Text files show as-is; binary files show in hex format.
         '.cfg': 'ini',
     }
     
-    # Get file extension
     _, ext = os.path.splitext(remote.lower())
     language = syntax_extensions.get(ext)
     
-    # Use syntax highlighting for supported file types (text files only)
     if language and not is_binary:
         from rich.syntax import Syntax
         
-        # Create syntax-highlighted content
         syntax = Syntax(
             display_content if not number else '\n'.join(display_lines),
             language,
@@ -558,7 +509,6 @@ Text files show as-is; binary files show in hex format.
             border_style="blue"
         )
     else:
-        # Plain text or binary - use existing panel
         OutputHelper.print_panel(
             display_content,
             title=title,
@@ -573,9 +523,6 @@ def mkdir(
     remotes: Optional[list[str]] = typer.Argument(None, help="Directories to create"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Create one or more directories on the connected device.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -615,14 +562,13 @@ Create directories on the connected device.
     
     with _create_agent_client() as client:
         for remote in remotes:
-            # Normalize path
             if not remote.startswith('/'):
                 remote = '/' + remote
             
             try:
                 client.send_command('mkdir', path=remote)
                 success_count += 1
-                if len(remotes) == 1:  # Only show panel for single directory
+                if len(remotes) == 1:
                     OutputHelper.print_panel(
                         f"Directory [bright_blue]{remote}[/bright_blue] created successfully.",
                         title="Create Directory",
@@ -647,7 +593,6 @@ Create directories on the connected device.
                             border_style="red"
                         )
     
-    # Summary for multiple directories
     if len(remotes) > 1:
         if already_exist:
             OutputHelper.print_panel(
@@ -671,11 +616,6 @@ def rm(
     force: bool = typer.Option(False, "-f", "--force", help="Force removal without confirmation"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Remove files or directories from the connected device.
-    Use -r option to remove directories recursively.
-    Use -f option to skip confirmation prompt.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -722,15 +662,11 @@ Delete files or directories from the connected device.
     status = _ensure_connected()
     device_root_fs = status.get('device_root_fs', '/')
     
-    # Get raw arguments from sys.argv to avoid Typer's shell expansion
-    # Find 'rm' command in sys.argv
     cmd_idx = next((i for i, arg in enumerate(sys.argv) if arg == 'rm'), None)
     if cmd_idx is not None and cmd_idx + 1 < len(sys.argv):
-        # Use raw arguments after 'rm' command, skipping options
         raw_args = []
         for arg in sys.argv[cmd_idx + 1:]:
             if arg.startswith('-'):
-                # Check for combined options like -rf, -r, -f
                 if 'f' in arg:
                     force = True
                 if 'r' in arg:
@@ -746,20 +682,17 @@ Delete files or directories from the connected device.
     
     client = _create_agent_client()
     
-    # Helper function to normalize path
     def normalize_path(path: str) -> str:
         if not path.startswith('/'):
             path = '/' + path
         return path
     
-    # Resolve wildcards to actual file list for confirmation
     def resolve_patterns(patterns: list[str]) -> list[str]:
         """Resolve wildcard patterns to actual file paths."""
         resolved = []
         for pattern in patterns:
             remote = normalize_path(pattern)
             if '*' in pattern or '?' in pattern:
-                # Extract directory and pattern
                 dir_path = posixpath.dirname(remote) or '/'
                 basename_pattern = posixpath.basename(remote)
                 try:
@@ -779,7 +712,6 @@ Delete files or directories from the connected device.
         return resolved
     
     def check_exists(path: str) -> bool:
-        """Check if a file or directory exists on the device."""
         try:
             result = client.send_command('is_dir', path=path)
             return result.get('exists', True)
@@ -839,14 +771,12 @@ Delete files or directories from the connected device.
     
     success_count = 0
     failed_items = []
-    dir_without_r = []  # Track directories attempted without -r
+    dir_without_r = []
     
     for pattern in args:
         remote = normalize_path(pattern)
-        
-        # Check for wildcards
+         
         if '*' in pattern or '?' in pattern:
-            # Extract directory and pattern
             dir_path = posixpath.dirname(remote) or '/'
             basename_pattern = posixpath.basename(remote)
             
@@ -884,7 +814,6 @@ Delete files or directories from the connected device.
             except Exception:
                 failed_items.append(pattern)
         else:
-            # Single file/directory
             try:
                 is_dir_result = client.send_command('is_dir', path=remote)
                 is_dir = is_dir_result.get('is_dir', False)
@@ -902,7 +831,7 @@ Delete files or directories from the connected device.
                 success_count += 1
                 
                 display_path = remote.replace(device_root_fs, "", 1)
-                if len(args) == 1:  # Only show panel for single item
+                if len(args) == 1:
                     OutputHelper.print_panel(
                         f"{item_type} [bright_blue]{display_path}[/bright_blue] removed successfully.",
                         title="Remove",
@@ -915,7 +844,6 @@ Delete files or directories from the connected device.
             except Exception:
                 failed_items.append(pattern)
     
-    # Show error for directories attempted without -r
     if dir_without_r:
         if len(dir_without_r) == 1:
             OutputHelper.print_panel(
@@ -974,12 +902,6 @@ def cp(
     recursive: bool = typer.Option(False, "-r", "--recursive", help="Copy directories recursively"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Copy file(s) or directory on the connected device.
-    Last argument is the destination. Supports wildcards for source files.
-    Use -r to copy directories.
-    """
-    # Check for custom help
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -1036,26 +958,21 @@ Copy files or directories on the connected device.
         )
         raise typer.Exit(1)
     
-    # Get raw arguments from sys.argv (skip options like -r, -h)
     cmd_idx = next((i for i, arg in enumerate(sys.argv) if arg == 'cp'), None)
     if cmd_idx is not None and cmd_idx + 1 < len(sys.argv):
         raw_args = []
         for arg in sys.argv[cmd_idx + 1:]:
-            # Skip options (but not file paths starting with -)
             if arg in ('-r', '--recursive', '-h', '--help'):
                 continue
             raw_args.append(arg)
         if len(raw_args) >= 2:
             args = raw_args
     
-    # Last argument is destination
     dest = args[-1]
     sources = args[:-1]
     
-    # Use agent for cp operation
     client = _create_agent_client()
     
-    # For single source without wildcards, use agent directly
     if len(sources) == 1 and '*' not in sources[0] and '?' not in sources[0]:
         source = sources[0]
         try:
@@ -1118,13 +1035,10 @@ Copy files or directories on the connected device.
             raise typer.Exit(1)
         return
     
-    # For multiple sources or wildcards, expand on client side using agent calls
     files_to_copy = []
     
     for source_pattern in sources:
-        # Check for wildcards
         if '*' in source_pattern or '?' in source_pattern:
-            # Extract directory and pattern
             dir_path = posixpath.dirname(source_pattern) or '/'
             pattern = posixpath.basename(source_pattern)
             
@@ -1161,7 +1075,6 @@ Copy files or directories on the connected device.
                 )
                 raise typer.Exit(1)
         else:
-            # Check if source exists and get info
             try:
                 result = client.send_command('is_dir', path=source_pattern)
                 is_dir = result if isinstance(result, bool) else result.get('is_dir', False)
@@ -1175,7 +1088,6 @@ Copy files or directories on the connected device.
             
             basename = posixpath.basename(source_pattern)
             
-            # Check if trying to copy directory without -r
             if is_dir and not recursive:
                 OutputHelper.print_panel(
                     f"cp: [red]{source_pattern}[/red] is a directory.\n"
@@ -1194,14 +1106,12 @@ Copy files or directories on the connected device.
         )
         raise typer.Exit(1)
     
-    # Check if dest is a directory (needed for multiple files)
     try:
         result = client.send_command('is_dir', path=dest)
         dest_is_dir = result if isinstance(result, bool) else result.get('is_dir', False)
     except Exception:
         dest_is_dir = False
     
-    # If copying multiple files, dest must be a directory
     if len(files_to_copy) > 1 and not dest_is_dir:
         OutputHelper.print_panel(
             f"When copying multiple files, destination must be a directory.\n"
@@ -1211,7 +1121,6 @@ Copy files or directories on the connected device.
         )
         raise typer.Exit(1)
     
-    # Copy each file/directory
     success_count = 0
     for source_path, basename, is_dir in files_to_copy:
         if dest_is_dir:
@@ -1236,7 +1145,6 @@ Copy files or directories on the connected device.
                 )
             raise typer.Exit(1)
     
-    # Success message
     if success_count == 1:
         source_path = files_to_copy[0][0]
         OutputHelper.print_panel(
@@ -1259,11 +1167,6 @@ def mv(
     recursive: bool = typer.Option(False, "--recursive", "-r", help="Move directories recursively"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Move/rename file(s) or directory on the connected device.
-    Last argument is the destination. Supports wildcards for source files.
-    Use -r to move directories.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -1321,26 +1224,21 @@ Move or rename files and directories on the connected device.
         )
         raise typer.Exit(1)
     
-    # Get raw arguments from sys.argv (skip options like -r, -h)
     cmd_idx = next((i for i, arg in enumerate(sys.argv) if arg == 'mv'), None)
     if cmd_idx is not None and cmd_idx + 1 < len(sys.argv):
         raw_args = []
         for arg in sys.argv[cmd_idx + 1:]:
-            # Skip options (but not file paths starting with -)
             if arg in ('-r', '--recursive', '-h', '--help'):
                 continue
             raw_args.append(arg)
         if len(raw_args) >= 2:
             args = raw_args
     
-    # Last argument is destination
     dest = args[-1]
     sources = args[:-1]
     
-    # Use agent for mv operation
     client = _create_agent_client()
     
-    # For single source without wildcards, use agent directly
     if len(sources) == 1 and '*' not in sources[0] and '?' not in sources[0]:
         source = sources[0]
         try:
@@ -1378,19 +1276,15 @@ Move or rename files and directories on the connected device.
             raise typer.Exit(1)
         return
     
-    # For multiple sources or wildcards, expand on client side using agent calls
     files_to_move = []
     
     for source_pattern in sources:
-        # Check for wildcards
         if '*' in source_pattern or '?' in source_pattern:
-            # Extract directory and pattern
             dir_path = posixpath.dirname(source_pattern) or '/'
             pattern = posixpath.basename(source_pattern)
             
             try:
                 result = client.send_command('ls', path=dir_path, detailed=True)
-                # result is {"items": [{"name": ..., "size": ..., "is_dir": ...}, ...]}
                 items = result.get('items', []) if isinstance(result, dict) else []
                 
                 matched = False
@@ -1422,7 +1316,6 @@ Move or rename files and directories on the connected device.
                 )
                 raise typer.Exit(1)
         else:
-            # Check if source exists
             try:
                 result = client.send_command('is_dir', path=source_pattern)
                 is_dir = result if isinstance(result, bool) else result.get('is_dir', False)
@@ -1436,7 +1329,6 @@ Move or rename files and directories on the connected device.
             
             basename = posixpath.basename(source_pattern)
             
-            # Check if trying to move directory without -r
             if is_dir and not recursive:
                 OutputHelper.print_panel(
                     f"mv: [red]{source_pattern}[/red] is a directory.\n"
@@ -1455,14 +1347,12 @@ Move or rename files and directories on the connected device.
         )
         raise typer.Exit(1)
     
-    # Check if dest is a directory (needed for multiple files)
     try:
         result = client.send_command('is_dir', path=dest)
         dest_is_dir = result if isinstance(result, bool) else result.get('is_dir', False)
     except Exception:
         dest_is_dir = False
     
-    # If moving multiple files, dest must be a directory
     if len(files_to_move) > 1 and not dest_is_dir:
         OutputHelper.print_panel(
             f"When moving multiple files, destination must be a directory.\n"
@@ -1472,12 +1362,10 @@ Move or rename files and directories on the connected device.
         )
         raise typer.Exit(1)
     
-    # Move files using agent
     success_count = 0
     failed_items = []
     
     for source, basename, is_dir in files_to_move:
-        # Determine final destination
         if dest_is_dir:
             final_dest = posixpath.join(dest, basename)
         else:
@@ -1489,7 +1377,6 @@ Move or rename files and directories on the connected device.
         except Exception as e:
             failed_items.append((source, str(e)))
     
-    # Summary
     if len(files_to_move) == 1 and success_count == 1:
         source, basename, is_dir = files_to_move[0]
         display_dest = posixpath.join(dest, basename) if dest_is_dir else dest
@@ -1531,9 +1418,6 @@ def touch(
     remotes: Optional[list[str]] = typer.Argument(None, help="Files to create"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Create one or more empty files on the connected device.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -1573,7 +1457,6 @@ Create empty files on the connected device.
         typer.echo("Error: Missing required arguments.", err=True)
         raise typer.Exit(1)
     
-    # Use agent for touch operation
     client = _create_agent_client()
     success_count = 0
     failed_items = []
@@ -1583,7 +1466,7 @@ Create empty files on the connected device.
             result = client.send_command('touch', path=remote)
             success_count += 1
             
-            if len(remotes) == 1:  # Only show panel for single file
+            if len(remotes) == 1:
                 display_path = result.get('created', remote)
                 OutputHelper.print_panel(
                     f"File [bright_blue]{display_path}[/bright_blue] created successfully.",
@@ -1592,14 +1475,13 @@ Create empty files on the connected device.
                 )
         except Exception as e:
             failed_items.append(remote)
-            if len(remotes) == 1:  # Only show panel for single file
+            if len(remotes) == 1:
                 OutputHelper.print_panel(
                     f"Touch failed: {e}",
                     title="Touch Failed",
                     border_style="red"
                 )
     
-    # Summary for multiple files
     if len(remotes) > 1:
         if failed_items:
             OutputHelper.print_panel(
@@ -1622,9 +1504,6 @@ def ls(
     recursive: bool = typer.Option(False, "--recursive", "-r", help="List subdirectories recursively"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    List the contents of a directory on the connected device.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -1659,9 +1538,8 @@ List files and directories on the connected device.
         console.print()
         raise typer.Exit()
     
-    _ensure_connected()  # Ensure connection is established
+    _ensure_connected()
     
-    # Normalize path
     if not path.startswith('/'):
         path = '/' + path
 
@@ -1682,34 +1560,29 @@ List files and directories on the connected device.
         def get_icon(name: str, is_dir: bool) -> str:
             """Get file/folder icon with color"""
             if is_dir:
-                return "[#E6B450]󰉋[/#E6B450]"  # folder - gold/yellow
+                return "[#E6B450]󰉋[/#E6B450]" 
             ext_icons = {
-                ".py":   "[#5CB8C2]󰌠[/#5CB8C2]",  # Python - cyan
-                ".mpy":  "[#D98C53]󰆧[/#D98C53]",  # compiled - orange
-                ".log":  "[#7A7A7A]󰌱[/#7A7A7A]",  # log - gray
-                ".ini":  "[#7A7A7A]󰘦[/#7A7A7A]",  # config - gray
+                ".py":   "[#5CB8C2]󰌠[/#5CB8C2]",  
+                ".mpy":  "[#D98C53]󰆧[/#D98C53]",  
+                ".log":  "[#7A7A7A]󰌱[/#7A7A7A]",  
+                ".ini":  "[#7A7A7A]󰘦[/#7A7A7A]",  
             }
             _, ext = os.path.splitext(str(name).lower())
-            return ext_icons.get(ext, "[#8C8C8C]󰈙[/#8C8C8C]")  # default - gray
+            return ext_icons.get(ext, "[#8C8C8C]󰈙[/#8C8C8C]")  
 
         if recursive:
-            # Build tree structure for recursive listing
             from collections import defaultdict
             
-            # Build tree dict: path -> list of (basename, size, is_dir, full_path)
             tree = defaultdict(list)
             
             for name, size, is_dir in items:
-                # name is full path like /lib/ticle/ext/__init__.mpy
                 parent = '/'.join(name.rsplit('/', 1)[:-1]) or '/'
                 basename = name.rsplit('/', 1)[-1]
                 tree[parent].append((basename, size, is_dir, name))
             
-            # Sort items in each directory: folders first, then files, alphabetically
             for parent in tree:
                 tree[parent].sort(key=lambda x: (not x[2], x[0].lower()))
             
-            # Calculate max size width from original items (3-tuple)
             max_size = max((size for _, size, is_dir in items if not is_dir), default=0)
             size_width = len(str(max_size)) if max_size > 0 else 0
             
@@ -1721,7 +1594,6 @@ List files and directories on the connected device.
                 for i, (basename, size, is_dir, full_path) in enumerate(children):
                     is_last = (i == len(children) - 1)
                     
-                    # Tree branch characters
                     branch = "└── " if is_last else "├── "
                     child_prefix = prefix + ("    " if is_last else "│   ")
                     
@@ -1736,20 +1608,14 @@ List files and directories on the connected device.
                     
                     lines.append(f"{size_str}  {prefix}{branch}{icon}  {name_str}")
                     
-                    # Recurse into directories
                     if is_dir and full_path in tree:
                         render_tree(full_path, child_prefix)
             
-            # Start rendering from the listing path
-            # First show root folder
             root_icon = get_icon(path, True)
             root_name = f"[#73B8F1]{path}[/#73B8F1]"
             lines.append(f"{''.rjust(size_width)}  {root_icon}  {root_name}")
             
-            # Check if the requested path has any children in the tree
             if path not in tree and items:
-                # Items exist but none are direct children of the requested path
-                # This can happen if recursive traversal failed or returned unexpected paths
                 OutputHelper.print_panel(
                     f"No accessible items found in [yellow]{path}[/yellow]\n\n"
                     f"Received {len(items)} item(s) from device, but none are children of the requested path.\n"
@@ -1771,7 +1637,6 @@ List files and directories on the connected device.
                 border_style="blue"
             )
         else:
-            # Non-recursive: simple flat listing
             display_items = []
             for name, size, is_dir in items:
                 icon = get_icon(name, is_dir)
@@ -1811,17 +1676,11 @@ List files and directories on the connected device.
             )
 
 
-
-
 @app.command(rich_help_panel="File Operations")
 def put(
     args: Optional[list[str]] = typer.Argument(None, help="Local file(s) and remote destination"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Upload file(s) or directory to the connected device.
-    Last argument is the remote destination path.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -1879,7 +1738,6 @@ Upload files or directories from your computer to the device.
         )
         raise typer.Exit(1)
     
-    # Get raw arguments from sys.argv to avoid Typer's shell expansion
     cmd_idx = next((i for i, arg in enumerate(sys.argv) if arg == 'put'), None)
     if cmd_idx is not None and cmd_idx + 1 < len(sys.argv):
         raw_args = []
@@ -1890,19 +1748,15 @@ Upload files or directories from your computer to the device.
         if len(raw_args) >= 2:
             args = raw_args
     
-    # Last argument is remote destination
     remote = args[-1]
     locals = args[:-1]
     
-    # Normalize remote path
     if not remote.startswith('/'):
         remote = '/' + remote
     
-    # Expand wildcards and collect all files to upload
     files_to_upload = []
     
     for local_pattern in locals:
-        # Expand wildcards
         if '*' in local_pattern or '?' in local_pattern:
             matched_files = glob.glob(local_pattern)
             if not matched_files:
@@ -1935,25 +1789,20 @@ Upload files or directories from your computer to the device.
     
     client = _create_agent_client()
     
-    # Check if remote destination is a directory
     try:
         result = client.send_command('is_dir', path=remote)
         is_remote_dir = result.get('is_dir', False)
     except Exception:
-        # Remote doesn't exist - will be created if needed
         is_remote_dir = remote.endswith('/')
     
-    # Upload files
     total_files = len(files_to_upload)
     success_count = 0
     
     if total_files == 1:
-        # Single file/directory - use original behavior
         local = files_to_upload[0]
         is_dir = os.path.isdir(local)
         base_name = os.path.basename(local)
         
-        # Determine remote destination
         if is_remote_dir:
             remote_path = posixpath.join(remote, base_name)
         else:
@@ -1962,10 +1811,8 @@ Upload files or directories from your computer to the device.
         display_remote = remote_path.replace(device_root_fs, "", 1)
         item_type = "Directory" if is_dir else "File"
         
-        # Count files for progress (for directories)
         file_count = sum(1 for _, _, files in os.walk(local) for _ in files) if is_dir else 1
         
-        # Progress state for streaming updates
         progress_state = {"current": 0, "total": file_count, "file": base_name}
         
         def progress_callback(data):
@@ -1976,7 +1823,6 @@ Upload files or directories from your computer to the device.
         
         try:
             with Live(OutputHelper.create_progress_panel(0, file_count, title=f"Uploading {base_name}", message=f"Uploading {item_type.lower()}..."), console=OutputHelper._console, refresh_per_second=10) as live:
-                # Start upload in background with streaming
                 upload_error = [None]
                 upload_result = [None]
                 
@@ -2004,10 +1850,8 @@ Upload files or directories from your computer to the device.
                 upload_thread = threading.Thread(target=do_upload, daemon=True)
                 upload_thread.start()
                 
-                # Update progress bar while upload is running
                 while upload_thread.is_alive():
                     if is_dir:
-                        # Directory: show file count progress
                         live.update(OutputHelper.create_progress_panel(
                             progress_state["current"],
                             progress_state["total"],
@@ -2015,7 +1859,6 @@ Upload files or directories from your computer to the device.
                             message=f"Uploading {progress_state['file']}..."
                         ))
                     else:
-                        # Single file: show byte progress
                         live.update(OutputHelper.create_progress_panel(
                             progress_state["current"],
                             progress_state["total"],
@@ -2029,7 +1872,6 @@ Upload files or directories from your computer to the device.
                 if upload_error[0]:
                     raise upload_error[0]
                 
-                # Final update
                 live.update(OutputHelper.create_progress_panel(
                     progress_state["total"],
                     progress_state["total"],
@@ -2049,7 +1891,6 @@ Upload files or directories from your computer to the device.
             )
             raise typer.Exit(1)
     else:
-        # Multiple files - remote must be a directory
         if not is_remote_dir:
             OutputHelper.print_panel(
                 f"Destination [red]{remote}[/red] must be a directory when uploading multiple files.",
@@ -2058,9 +1899,7 @@ Upload files or directories from your computer to the device.
             )
             raise typer.Exit(1)
         
-        # Calculate total bytes for all files (including in directories)
         def count_bytes(path):
-            """Count total bytes in file or directory."""
             if os.path.isfile(path):
                 return os.path.getsize(path)
             elif os.path.isdir(path):
@@ -2077,11 +1916,9 @@ Upload files or directories from your computer to the device.
         total_bytes = sum(count_bytes(local) for local in files_to_upload)
         uploaded_bytes = [0]  # Track total uploaded bytes
         
-        # Progress state for streaming updates
         current_file_progress = {"file": "", "current": 0, "total": 0, "bytes": 0}
         
         def progress_callback(data):
-            """Handle streaming progress updates for current file."""
             current_file_progress["file"] = data.get("file", "")
             current_file_progress["current"] = data.get("current", 0)
             current_file_progress["total"] = data.get("total", 0)
@@ -2113,11 +1950,8 @@ Upload files or directories from your computer to the device.
                 
                 for retry in range(max_retries):
                     try:
-                        # Create new client for each file to ensure clean connection state
                         with _create_agent_client() as file_client:
-                            # Use streaming for real-time progress
                             if is_dir:
-                                # Start upload in background thread to monitor progress
                                 upload_result = [None]
                                 upload_error = [None]
                                 upload_done = [False]
@@ -2139,13 +1973,11 @@ Upload files or directories from your computer to the device.
                                 thread = threading.Thread(target=upload_dir, daemon=True)
                                 thread.start()
                                 
-                                # Monitor progress and update display
                                 while not upload_done[0]:
                                     curr = current_file_progress.get("current", 0)
                                     tot = current_file_progress.get("total", 1)
                                     file_name = current_file_progress.get("file", "")
                                     
-                                    # Estimate bytes based on file progress if not directly provided
                                     if tot > 0:
                                         progress_ratio = curr / tot
                                         estimated_bytes = item_start_bytes + int(item_bytes * progress_ratio)
@@ -2166,7 +1998,6 @@ Upload files or directories from your computer to the device.
                                 if upload_error[0]:
                                     raise upload_error[0]
                                 
-                                # Update total uploaded bytes after directory completion
                                 uploaded_bytes[0] = item_start_bytes + item_bytes
                             else:
                                 result = file_client.send_command_streaming(
@@ -2176,7 +2007,6 @@ Upload files or directories from your computer to the device.
                                     timeout=60,
                                     progress_callback=progress_callback
                                 )
-                                # Update total uploaded bytes after file completion
                                 uploaded_bytes[0] = item_start_bytes + item_bytes
                         
                         success_count += 1
@@ -2186,14 +2016,12 @@ Upload files or directories from your computer to the device.
                             title=f"Uploading {total_files} item(s)",
                             message=f"✓ {base_name}"
                         ))
-                        break  # Success, exit retry loop
+                        break 
                         
                     except Exception as e:
                         if retry == max_retries - 1:
-                            # Last retry failed
                             OutputHelper._console.print(f"[red]Failed to upload {base_name}: {str(e)}[/red]")
                         else:
-                            # Wait before retry
                             time.sleep(0.2)
                 
                 if not upload_success:
@@ -2205,7 +2033,6 @@ Upload files or directories from your computer to the device.
             
             live.update(OutputHelper.create_progress_panel(total_bytes, total_bytes, title=f"Uploading {total_files} item(s)"))
         
-        # Format bytes for display
         def format_bytes(b):
             if b < 1024:
                 return f"{b} B"
@@ -2220,6 +2047,3 @@ Upload files or directories from your computer to the device.
             title="Upload Complete",
             border_style="green" if success_count == total_files else "yellow"
         )
-
-
-

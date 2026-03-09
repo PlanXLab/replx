@@ -81,7 +81,7 @@ def _get_remote_firmware_info(device: str) -> dict:
         return {
             'version': version,
             'download_url': download_url,
-            'size': 0  # Unknown
+            'size': 0 
         }
         
     except urllib.error.HTTPError as e:
@@ -192,7 +192,6 @@ def _find_uf2_drive() -> Optional[Path]:
         if volumes.exists():
             for vol in volumes.iterdir():
                 try:
-                    # Check for RPI-RP2 or RP2040/RP2350 bootloader
                     vol_name_upper = vol.name.upper()
                     if any(name in vol_name_upper for name in ["RPI", "RP2", "PICO", "BOOTLOADER"]):
                         info_file = vol / "INFO_UF2.TXT"
@@ -202,7 +201,6 @@ def _find_uf2_drive() -> Optional[Path]:
                     continue
                         
     elif system == "Linux":
-        # Linux: Check common mount points
         user = os.getenv('USER', '')
         search_paths = [
             Path("/media"),
@@ -215,12 +213,10 @@ def _find_uf2_drive() -> Optional[Path]:
                 try:
                     for mount in base.iterdir():
                         if mount.is_dir():
-                            # Check for INFO_UF2.TXT or typical bootloader volume name
                             try:
                                 info_file = mount / "INFO_UF2.TXT"
                                 if info_file.exists():
                                     return mount
-                                # Also check volume name
                                 mount_name_upper = mount.name.upper()
                                 if any(name in mount_name_upper for name in ["RPI", "RP2", "PICO", "BOOTLOADER"]):
                                     if (mount / "INDEX.HTM").exists() or (mount / "INDEX.HTML").exists():
@@ -234,12 +230,6 @@ def _find_uf2_drive() -> Optional[Path]:
 
 
 def _wait_for_uf2_drive(timeout: int = 30, live=None) -> Optional[Path]:
-    """Wait for UF2 bootloader drive to appear.
-    
-    Args:
-        timeout: Maximum seconds to wait
-        live: Optional Live object to update (if None, no UI updates)
-    """
     start_time = time.time()
     while time.time() - start_time < timeout:
         drive = _find_uf2_drive()
@@ -487,7 +477,6 @@ def _firmware_update(force: bool = False):
         from rich.table import Table
         from rich.console import Group
         
-        # Always use the same basic structure for info
         info_text = Text()
         info_text.append(f"  Device:      ")
         info_text.append(f"{device}", style="bright_yellow")
@@ -496,11 +485,9 @@ def _firmware_update(force: bool = False):
         info_text.append(f"\n  Target:      ")
         info_text.append(f"v{target_version}", style="bright_green")
         
-        # Always add empty line
         separator = Text("\n")
         
         if complete:
-            # Add completion message
             status_display = Text()
             status_display.append("  ")
             if success:
@@ -516,7 +503,7 @@ def _firmware_update(force: bool = False):
                 status_display.append(f"replx --port {port} setup", style="bright_blue")
             
             content = Group(info_text, separator, status_display)
-            border_style = "cyan"  # Keep same border style
+            border_style = "cyan"  
         elif progress is not None:
             bar_width = 50
             filled = int(bar_width * progress)
@@ -563,10 +550,8 @@ def _firmware_update(force: bool = False):
     new_version = None
     was_foreground = False
     
-    # Start with empty text to avoid initial render
     from rich.text import Text as RichText
     with Live(RichText(""), console=OutputHelper._console, refresh_per_second=10, transient=False) as live:
-        # Step 1: Save current connection state
         live.update(make_update_panel("Preparing device for firmware update..."))
         try:
             with _create_agent_client() as client:
@@ -575,16 +560,13 @@ def _firmware_update(force: bool = False):
         except Exception:
             was_foreground = False
         
-        # Step 2: Send bootloader command while connected, then disconnect
         live.update(make_update_panel("Entering bootloader mode..."))
         try:
             with _create_agent_client() as client:
-                # Send bootloader command
                 client.send_command('exec', code='import machine; machine.bootloader()', timeout=1.0)
         except Exception:
             pass
         
-        # Step 3: Fully disconnect the serial port
         time.sleep(0.3)
         try:
             with _create_agent_client() as client:
@@ -594,7 +576,6 @@ def _firmware_update(force: bool = False):
         
         time.sleep(1.0)
         
-        # Step 4: Wait for UF2 bootloader drive
         live.update(make_update_panel("Waiting for bootloader drive..."))
         uf2_drive = _wait_for_uf2_drive(timeout=15, live=live)
         
@@ -611,13 +592,12 @@ def _firmware_update(force: bool = False):
             )
             raise typer.Exit(1)
         
-        # Step 5: Copy firmware to UF2 drive
         import platform
         try:
             target_uf2 = uf2_drive / f"{device}.uf2"
             file_size = firmware_path.stat().st_size
             copied = 0
-            chunk_size = 64 * 1024  # 64KB chunks
+            chunk_size = 64 * 1024 
             
             with open(firmware_path, 'rb') as src, open(target_uf2, 'wb') as dst:
                 while True:
@@ -632,19 +612,14 @@ def _firmware_update(force: bool = False):
                         progress=progress,
                         detail=f"{format_bytes(copied)} / {format_bytes(file_size)}"
                     ))
-                # Ensure all data is written to disk
                 dst.flush()
                 os.fsync(dst.fileno())
             
-            # Let OS flush all buffers before device auto-reboots
             if platform.system() == "Darwin":
-                # On macOS, ensure all writes are committed
                 try:
                     os.sync()
                 except (AttributeError, OSError):
                     pass
-                # Give macOS time to complete all I/O operations
-                # This prevents "disk not ejected properly" warning
                 time.sleep(1.5)
             elif platform.system() == "Linux":
                 try:
@@ -655,7 +630,6 @@ def _firmware_update(force: bool = False):
             else:
                 time.sleep(1.0)
             
-            # Device will auto-reboot and drive will disappear
         except Exception as e:
             live.stop()
             OutputHelper.print_panel(
@@ -668,15 +642,12 @@ def _firmware_update(force: bool = False):
             )
             raise typer.Exit(1)
         
-        # Step 7: Device reboot (automatic after UF2 copy)
         live.update(make_update_panel("Waiting for device to restart..."))
         time.sleep(3.0)
         
-        # Step 8: Reconnect using saved port and foreground state
         live.update(make_update_panel("Reconnecting..."))
         time.sleep(1.0)
         
-        # Try reconnection with saved foreground state
         for attempt in range(20):
             try:
                 time.sleep(0.5)
@@ -706,8 +677,6 @@ def _firmware_update(force: bool = False):
             except Exception:
                 pass
         
-        # Final update in Live context - this will stay on screen
         live.update(make_update_panel(
             "", complete=True, success=reconnected, final_version=new_version
         ))
-    # Live exits here and leaves the final panel on screen - DO NOT print anything after

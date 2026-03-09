@@ -286,16 +286,13 @@ class ReplProtocol:
                 else:
                     time.sleep(0.001)
 
-                    # Idle timeout only for non-streaming mode
                     if timeout > 0:
                         idle_limit = max(timeout * 2, 10)
                         if (time.time() - last_activity) > idle_limit:
                             break
                     elif data_consumer is None:
-                        # No consumer and no timeout: use short idle limit
                         if (time.time() - last_activity) > 5:
                             break
-                    # streaming mode (data_consumer is not None): no idle timeout
 
             return _get_result()
 
@@ -310,12 +307,11 @@ class ReplProtocol:
 
 
     def _enter_repl(self):
-        delay = 0.1  # Increased from 0.05
-        timeout = 5  # Increased from 3
+        delay = 0.1 
+        timeout = 5 
         
-        for attempt in (1, 2, 3, 4):  # Added 4th attempt
+        for attempt in (1, 2, 3, 4):
             try:
-                # More aggressive buffer clearing
                 self.transport.reset_input_buffer()
                 time.sleep(0.05)
                 self.transport.reset_output_buffer()
@@ -323,18 +319,15 @@ class ReplProtocol:
             except Exception:
                 pass
 
-            # Send CTRL+C twice to interrupt any running code
             self.transport.write(b'\r' + CTRL_C + CTRL_C)
             time.sleep(delay)
             
             try:
-                # Clear any responses from CTRL+C
                 self.transport.reset_input_buffer()
                 time.sleep(0.05)
             except Exception:
                 pass
             
-            # Enter raw REPL mode
             self.transport.write(b'\r' + CTRL_A)
 
             try:
@@ -344,11 +337,9 @@ class ReplProtocol:
                 self._in_raw_repl = True
                 return
             except ProtocolError:
-                # Try to exit to friendly REPL before next attempt
                 try:
-                    self.transport.write(b'\r' + CTRL_B)  # friendly
+                    self.transport.write(b'\r' + CTRL_B) 
                     time.sleep(0.15)
-                    # Clear buffer again
                     try:
                         self.transport.reset_input_buffer()
                     except Exception:
@@ -356,8 +347,7 @@ class ReplProtocol:
                 except Exception:
                     pass
                 
-                # Wait longer between attempts
-                time.sleep(0.2 * attempt)  # Progressive backoff
+                time.sleep(0.2 * attempt) 
                 continue
             
         raise ProtocolError('could not enter raw repl')
@@ -412,7 +402,6 @@ class ReplProtocol:
         need_enter = self._session_depth == 0
         if need_enter:
             self._enter_repl()
-            # Reset raw_paste state for each new session
             self._raw_paste_supported = None
         self._session_depth += 1
         try:
@@ -459,7 +448,7 @@ class ReplProtocol:
                 
             elif response.startswith(b'r'):
                 try:
-                    self._read_ex(1, b'>', timeout=1)  # Consume remaining response
+                    self._read_ex(1, b'>', timeout=1) 
                 except Exception:
                     pass
                 self._raw_paste_supported = False
@@ -559,7 +548,7 @@ class ReplProtocol:
         if stderr_data.endswith(EOF_MARKER):
             stderr_data = stderr_data[:-1]
         
-        self._read(1)  # Consume prompt
+        self._read(1)  
         
         return (stdout_data, stderr_data)
 
@@ -572,7 +561,6 @@ class ReplProtocol:
         if isinstance(command, str):
             command = command.encode('utf-8')
         
-        # Handle empty command (empty file)
         if not command or len(command) == 0:
             return b''
         
@@ -590,7 +578,6 @@ class ReplProtocol:
 
         command_len = len(command)
 
-        # raw_paste only for put operations (force_raw_paste=True), not for general commands
         use_raw_paste = force_raw_paste and self._enter_raw_paste_mode()
         
         if use_raw_paste:
@@ -819,11 +806,9 @@ class ReplProtocol:
         if not interactive and echo:
             raise typer.BadParameter("Option chaining error: -n and -e can only be used once, not multiple times.")
         
-        # Read file first to check if empty
         with open(local, "rb") as f:
             data = f.read()
         
-        # Handle empty file: exit quietly without entering REPL
         if not data or len(data) == 0:
             return
         
@@ -846,8 +831,6 @@ class ReplProtocol:
         self.transport.close()
 
     def reset(self):
-        # Always force re-entry to raw REPL to ensure clean state
-        # _in_raw_repl flag may be out of sync with actual board state
         self._in_raw_repl = False
         self._enter_repl()
         

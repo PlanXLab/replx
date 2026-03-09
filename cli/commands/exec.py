@@ -100,7 +100,6 @@ def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> 
                     changed_stable_since = now
                     last_seen_hash = current_hash
                 elif now - changed_stable_since >= 0.4:
-                    # Edited content has settled; continue even if VSCode --wait is stuck.
                     return True
             else:
                 changed_stable_since = None
@@ -112,8 +111,6 @@ def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> 
                 return True
 
             if elapsed >= timeout_sec:
-                # Some VSCode setups may not release --wait reliably.
-                # Do not auto-finish while user may still be editing.
                 print("Waiting for editor close is taking longer than expected.")
                 input("After closing the editor tab/window, press Enter to continue...")
                 return True
@@ -320,10 +317,10 @@ By default, runs a file from your computer. Use -d to run from device.
     try:
         if not non_interactive:
             stop_requested = False
-            ctrl_c_count = 0  # Track consecutive Ctrl+C presses
+            ctrl_c_count = 0
             pending_input = []
             stderr_buffer = bytearray()
-            stdout_ended_with_newline = True  # Default to True (no extra newline unless output exists without newline)
+            stdout_ended_with_newline = True
             
             old_settings = None
             fd = None
@@ -337,7 +334,6 @@ By default, runs a file from your computer. Use -d to run from device.
                     pass
             
             def output_callback(data: bytes, stream_type: str = "stdout"):
-                """Handle streaming output from device."""
                 nonlocal ctrl_c_count, stdout_ended_with_newline
                 ctrl_c_count = 0
                 try:
@@ -345,12 +341,12 @@ By default, runs a file from your computer. Use -d to run from device.
                         stderr_buffer.extend(data)
                     else:
                         if not IS_WINDOWS:
-                            data = data.replace(b'\r\n', b'\n')  # CRLF -> LF
-                            data = data.replace(b'\r', b'\n')    # lone CR -> LF
-                            data = data.replace(b'\n', b'\r\n')  # LF -> CRLF
+                            data = data.replace(b'\r\n', b'\n')
+                            data = data.replace(b'\r', b'\n')
+                            data = data.replace(b'\n', b'\r\n')
                         else:
                             data = data.replace(b'\r', b'')
-                        
+
                         if data:
                             stdout_ended_with_newline = data.endswith(b'\n')
                             sys.stdout.buffer.write(data)
@@ -359,7 +355,6 @@ By default, runs a file from your computer. Use -d to run from device.
                     pass
             
             def input_provider() -> bytes:
-                """Provide keyboard input to device."""
                 nonlocal ctrl_c_count, stop_requested
                 
                 if pending_input:
@@ -378,30 +373,28 @@ By default, runs a file from your computer. Use -d to run from device.
                                 return CTRL_C
                             elif ch == '\x04':
                                 return CTRL_D
-                            elif ch == '\r':  # Enter key
+                            elif ch == '\r':
                                 if echo:
                                     sys.stdout.write('\r\n')
                                     sys.stdout.flush()
                                 return b'\r'
-                            elif ch == '\n':  # Also map newline to CR
+                            elif ch == '\n':
                                 if echo:
                                     sys.stdout.write('\r\n')
                                     sys.stdout.flush()
                                 return b'\r'
-                            elif ch == '\x08':  # Backspace
+                            elif ch == '\x08':
                                 if echo:
-                                    # Erase character: move back, overwrite with space, move back
                                     sys.stdout.write('\b \b')
                                     sys.stdout.flush()
                                 return b'\x08'
-                            elif ch in ('\x00', '\xe0'):  # Extended key
+                            elif ch in ('\x00', '\xe0'):
                                 ext = msvcrt.getwch()
-                                # Map arrow keys etc.
                                 ext_map = {
-                                    'H': b'\x1b[A',  # Up
-                                    'P': b'\x1b[B',  # Down
-                                    'M': b'\x1b[C',  # Right
-                                    'K': b'\x1b[D',  # Left
+                                    'H': b'\x1b[A',
+                                    'P': b'\x1b[B',
+                                    'M': b'\x1b[C',
+                                    'K': b'\x1b[D',
                                 }
                                 return ext_map.get(ext, b'')
                             else:
@@ -420,8 +413,8 @@ By default, runs a file from your computer. Use -d to run from device.
                                 if ctrl_c_count >= 2:
                                     stop_requested = True
                                     return None
-                                return CTRL_C  # Send to device
-                            elif ch == b'\n':  # Enter key on Unix
+                                return CTRL_C
+                            elif ch == b'\n':
                                 ctrl_c_count = 0
                                 if echo:
                                     sys.stdout.buffer.write(b'\r\n')
@@ -438,13 +431,11 @@ By default, runs a file from your computer. Use -d to run from device.
                 return None
             
             def stop_check() -> bool:
-                """Check if stop was requested."""
                 return stop_requested
             
             original_sigint = signal.getsignal(signal.SIGINT)
             
             def sigint_handler(signum, frame):
-                """Handle SIGINT by queuing Ctrl+C to send to device."""
                 nonlocal ctrl_c_count, stop_requested
                 ctrl_c_count += 1
                 if ctrl_c_count >= 2:
@@ -485,23 +476,19 @@ By default, runs a file from your computer. Use -d to run from device.
                         client.send_command('run_stop', timeout=0.3)
                     except Exception:
                         pass
-                    # Add newline only if output didn't end with one
                     if not stdout_ended_with_newline:
                         print("\n[Interrupted]")
                     return
                 
-                # Add newline only if output didn't end with one
                 if not stdout_ended_with_newline:
                     print()
                 
-                # Display stderr as error panel if present
                 if stderr_buffer:
                     stderr_text = stderr_buffer.decode('utf-8', errors='replace').strip()
                     if stderr_text:
                         script_abs_path = os.path.abspath(local_file) if local_file else None
                         
                         def make_file_link(match):
-                            """Convert File "<stdin>", line X to clickable path:line format."""
                             file_ref = match.group(1)
                             line_num = match.group(2)
                             
@@ -612,9 +599,6 @@ By default, runs a file from your computer. Use -d to run from device.
 def repl(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Enter the REPL (Read-Eval-Print Loop) mode.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -713,7 +697,6 @@ Start a live MicroPython session where you can type code line by line.
     RESET = "\033[0m"
     
     def colorize_prompt(text: str) -> str:
-        """Colorize >>> and ... prompts to yellow."""
         text = re.sub(r'^(>>>|\.\.\.)', f'{YELLOW}\\1{RESET}', text, flags=re.MULTILINE)
         return text
     
@@ -724,14 +707,6 @@ Start a live MicroPython session where you can type code line by line.
     reader_client = [None]
     
     def reader_thread_func():
-        """Background thread that reads agent output and prints to stdout.
-
-        Adaptive polling:
-        - Reset to 5 ms when output arrives (keep up with bursty data).
-        - Back off up to 50 ms when idle to reduce UDP traffic / GIL pressure.
-        - Use a short timeout (0.5 s) for repl_read so stale socket state
-          never causes a multi-second stall.
-        """
         try:
             reader_client[0] = _create_agent_client()
             sleep_time = 0.005
@@ -766,11 +741,6 @@ Start a live MicroPython session where you can type code line by line.
     
     writer_client = _create_agent_client()
 
-    # Windows Quick Edit Mode 비활성화 ─────────────────────────────────────
-    # Quick Edit / Mark Mode가 활성화된 상태에서 사용자가 터미널 창을
-    # 클릭하면 Windows가 콘솔 I/O(ReadConsoleInput 포함)를 일시 정지시켜
-    # getch()가 무기한 블로킹된다. REPL 사용 중에는 비활성화하고
-    # 종료 시 반드시 복원한다.
     _old_console_mode = disable_quick_edit_mode()
 
     def _restore_console():
@@ -778,7 +748,6 @@ Start a live MicroPython session where you can type code line by line.
 
     import atexit as _atexit
     _atexit.register(_restore_console)
-    # ──────────────────────────────────────────────────────────────────────
 
     input_buffer = ""
     
@@ -828,7 +797,6 @@ Start a live MicroPython session where you can type code line by line.
         pass
     finally:
         repl_running[0] = False
-        # Quick Edit Mode 즉시 복원 (atexit 중복 실행 방지)
         restore_console_mode(_old_console_mode)
         _atexit.unregister(_restore_console)
         reader.join(timeout=0.5)
@@ -851,10 +819,6 @@ Start a live MicroPython session where you can type code line by line.
 def shell(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Enter an interactive shell for device control.
-    Provides a shell-like environment where you can run replx commands without the 'replx' prefix.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -926,7 +890,6 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
         print(f"\n[{STATE.device}]:{current_path} > ", end="", flush=True)
 
     def print_shell_help(cmd: str):
-        """Print help for a shell command by calling the corresponding replx command with --help."""
         shell_console = Console(width=CONSOLE_WIDTH)
         
         shell_only_help = {
@@ -1500,9 +1463,6 @@ def reset(
     soft: bool = typer.Option(False, "--soft", help="Soft reset (default, restarts interpreter)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Reset the connected device.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -1558,7 +1518,6 @@ Reset the connected MicroPython device.
 
 
 def _reset_soft(device: str, status: dict):
-    """Perform soft reset (Ctrl+C → Ctrl+D)."""
     try:
         with _create_agent_client() as client:
             client.send_command('reset')
@@ -1595,7 +1554,6 @@ def _reset_soft(device: str, status: dict):
 
 
 def _reset_hard(device: str, status: dict):
-    """Perform hard reset (machine.reset()) with auto-reconnect."""
     from rich.live import Live
     from rich.spinner import Spinner
     from rich.text import Text

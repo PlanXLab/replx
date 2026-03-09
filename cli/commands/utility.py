@@ -31,11 +31,6 @@ from .package import _install_spec_internal
 
 
 def _port_sort_key(port: str) -> tuple:
-    """Stable sort key for ports.
-
-    - Sorts by trailing number when present (COM24 -> 24)
-    - Falls back to lexicographic
-    """
     if port is None:
         return ("", -1)
     p = str(port).strip()
@@ -67,12 +62,6 @@ def _is_windows() -> bool:
 
 
 def _get_connection_info_for_port(connections: dict, port: Optional[str]) -> dict:
-    """Return connection info dict for a port.
-
-    On Windows, COM ports are case-insensitive, but different call sites may
-    preserve different casing (e.g. 'com24' vs 'COM24'). This lookup makes
-    status/session display resilient to that.
-    """
     if not port or not connections:
         return {}
 
@@ -99,11 +88,6 @@ def _get_connection_info_for_port(connections: dict, port: Optional[str]) -> dic
 def version_cmd(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Show replx version information.
-    
-    Alias: replx -v
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -129,25 +113,6 @@ Show replx version information.
 
 
 def _get_session_list_data():
-    """
-    Get all sessions data for display.
-    Returns tuple of (sessions_data, current_ppid, error).
-    
-    sessions_data structure:
-    {
-        'sessions': [
-            {
-                'ppid': int,
-                'foreground': str or None,
-                'backgrounds': [str],
-                'is_current': bool  # True if this is current terminal's session
-            }
-        ],
-        'connections': {
-            'COM19': {'version': '1.24.1', 'core': 'RP2350', 'device': 'ticle', 'manufacturer': 'Raspberry Pi'}
-        }
-    }
-    """
     try:
         with AgentClient(port=_get_current_agent_port()) as client:
             session_info = client.send_command('session_info', timeout=1.5)
@@ -209,23 +174,10 @@ def _get_session_list_data():
 
 
 def _num_to_bracket(n: int) -> str:
-    """
-    Convert number to bracketed format for consistent terminal display.
-    Returns: " [1]", "[12]", etc. (4 chars, right-aligned)
-    """
     return f"[{n}]".rjust(4)
 
 
 def _print_session_list_interactive(sessions_data, current_ppid):
-    """
-    Print formatted multi-session list with interactive selection using Rich Table.
-    
-    Shows ALL sessions with their fg/bg connections, grouped by session.
-    Current session is highlighted with brackets.
-    User can select any connection (from any session) to set as current session's fg.
-    
-    Returns: (selected_port, action) - port to promote or action like 'stop'
-    """
     sessions = sessions_data['sessions']
     connections = sessions_data['connections']
     
@@ -277,7 +229,6 @@ def _print_session_list_interactive(sessions_data, current_ppid):
         else:
             content_lines.append(f"[dim]SID: {ppid}[/dim]")
         
-        # Sort all ports within a session so output is deterministic and matches scan.
         ordered_ports = _sorted_unique_ports(([fg_port] if fg_port else []) + list(bg_ports or []))
 
         if ordered_ports:
@@ -311,7 +262,6 @@ def _print_session_list_interactive(sessions_data, current_ppid):
                     icon = "󱓥" if is_fg else " "
                     line = f"{selector}  [{color}]{p_disp:>{PORT_W}}[/{color}]  [{status_color}]{status:<{STATUS_W}}[/{status_color}]  {version:<{VER_W}}  {core:<{CORE_W}}  [{color}]{device:<{DEV_W}}[/{color}]  [dim]{manufacturer}[/dim]"
                     if icon and is_fg and is_current:
-                        # current FG already has 󱓥 row above; keep simple
                         pass
                     content_lines.append(line)
                 else:
@@ -358,10 +308,6 @@ def _print_session_list_interactive(sessions_data, current_ppid):
 
 
 def _print_session_list_status(sessions_data, current_ppid):
-    """
-    Print formatted session list (status only, no interactive selection).
-    Uses column-based coloring consistent with scan output.
-    """
     from rich.table import Table
     from rich.console import Console
     from io import StringIO
@@ -487,9 +433,6 @@ def _print_session_list_status(sessions_data, current_ppid):
 def status(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Show all sessions and connections.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -601,9 +544,6 @@ When you have multiple boards connected, use this to switch between them.
     if port:
         switch_target = port
 
-        # Windows: agent connection keys are case-sensitive, but COM ports are
-        # not. Resolve `com4` -> `COM4` (or whatever the agent registered) by
-        # looking up current connections.
         if sys.platform.startswith("win"):
             sessions_data, _current_ppid, _error = _get_session_list_data()
             if sessions_data and not _error:
@@ -689,9 +629,6 @@ When you have multiple boards connected, use this to switch between them.
 def whoami(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Show current foreground connection.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -773,9 +710,6 @@ Quickly check your active foreground connection.
 def disconnect(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Release connection from session.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -862,9 +796,6 @@ The connection is closed and removed from ALL sessions that reference it.
 
 
 def _do_shutdown():
-    """
-    Stop all connections and the agent.
-    """
     agent_port = _get_current_agent_port()
 
     try:
@@ -904,9 +835,6 @@ def _do_shutdown():
 def shutdown(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Stop all connections and agent.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -947,9 +875,6 @@ This is the "full cleanup" command - stops everything.
 def format(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Format the file system of the connected device.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -1077,13 +1002,6 @@ Format (erase) the filesystem on the connected device.
 def init(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Initialize the device by formatting and installing libraries.
-    
-    This command combines 'format' and 'install' operations:
-    1. Format the device file system
-    2. Install core and device libraries
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\

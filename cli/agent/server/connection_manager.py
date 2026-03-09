@@ -455,9 +455,6 @@ class ConnectionManager:
 
             conn = self._connections.pop(key)
 
-        # Remember whether a detached (user) script was running before clearing the flag.
-        # If so, the device is executing paste-mode code on its UART, NOT in raw REPL.
-        # Sending CTRL_B in that state would inject \x02 into the running script's stdin.
         was_detached = conn.is_detached()
         conn.stop_detached()
 
@@ -474,8 +471,6 @@ class ConnectionManager:
                 if transport:
                     try:
                         if not was_detached:
-                            # Only send CTRL_B to leave raw REPL when no user script
-                            # was running; otherwise the byte contaminates the script stdin.
                             transport.write(CTRL_B)
                             time.sleep(0.1 if sys.platform == 'win32' else 0.05)
                     except Exception:

@@ -60,7 +60,7 @@ class OutputHelper:
         pct = 0 if total == 0 else min(1.0, current / total)
         
         panel_width = OutputHelper._get_panel_width()
-        bar_length = max(20, panel_width - 40)  # Minimum 20 chars for bar, leave room for counter
+        bar_length = max(20, panel_width - 40) 
         
         block = min(bar_length, int(round(bar_length * pct)))
         bar = "█" * block + "░" * (bar_length - block)
@@ -141,7 +141,6 @@ class OutputHelper:
         if 'is busy' in error_msg:
             import re
             
-            # Check if REPL session is active
             repl_match = re.search(r'Connection (\S+) is busy.*REPL session is active', error_msg)
             if repl_match:
                 port = repl_match.group(1)
