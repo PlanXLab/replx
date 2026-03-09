@@ -201,7 +201,7 @@ def run(
     non_interactive: bool = typer.Option(False, "--non-interactive", "-n", help="Non-interactive execution"),
     echo: bool = typer.Option(False, "--echo", "-e", help="Turn on echo for interactive"),
     device: bool = typer.Option(False, "--device", "-d", help="Run from device storage"),
-    line_text: bool = typer.Option(False, "--line", help="Line input mode: text"),
+    line_text: bool = typer.Option(False, "--text", help="Line input mode: text"),
     line_hex: bool = typer.Option(False, "--hex", help="Line input mode: hex bytes"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
@@ -218,10 +218,10 @@ By default, runs a file from your computer. Use -d to run from device.
   replx [yellow]SCRIPT[/yellow]               [dim]# Shortcut (if .py file)[/dim]
 
 [bold cyan]Options:[/bold cyan]
-  [yellow]-d, --device[/yellow]          Run from device storage (not local)
-  [yellow]-n, --non-interactive[/yellow] Detached mode (don't wait for output)
-  [yellow]-e, --echo[/yellow]            Show what's being sent
-  [yellow]--line[/yellow]                 Line input mode: send text lines
+  [yellow]-d, --device[/yellow]           Run from device storage (not local)
+  [yellow]-n, --non-interactive[/yellow]  Detached mode (don't wait for output)
+  [yellow]-e, --echo[/yellow]             Show what's being sent
+  [yellow]--text[/yellow]                 Line input mode: send text lines
   [yellow]--hex[/yellow]                  Line input mode: send hex bytes
 
 [bold cyan]Arguments:[/bold cyan]
@@ -242,8 +242,10 @@ By default, runs a file from your computer. Use -d to run from device.
   replx run -dn main.py           [dim]# Run from device, detached[/dim]
 
   [dim]# Line input mode (send one line at a time)[/dim]
-  replx run --line main.py        [dim]# Type text, Enter to send[/dim]
+  replx run --text main.py        [dim]# Type text, Enter to send[/dim]
   replx run --hex main.py         [dim]# Type hex bytes (e.g. 0102ff)[/dim]
+  replx run -d --text main.py     [dim]# Line mode with device-side script[/dim]
+  replx run -d --hex main.py      [dim]# Hex mode with device-side script[/dim]
   replx main.py --hex             [dim]# Shortcut form[/dim]
 
 [bold cyan]How it works:[/bold cyan]
@@ -255,8 +257,9 @@ By default, runs a file from your computer. Use -d to run from device.
 [bold cyan]Line mode keys:[/bold cyan]
   [yellow]Enter[/yellow]       Send the typed line to the board
   [yellow]Backspace[/yellow]   Delete last character
+  [yellow]Up/Down[/yellow]     Recall previous input (history)
   [yellow]Ctrl+U[/yellow]      Clear input line
-  [yellow]Ctrl+C x2[/yellow]   Interrupt and exit
+  [yellow]Ctrl+C[/yellow]      Interrupt and exit (--text: once, --hex: twice)
 
 [bold cyan]Related:[/bold cyan]
   replx -c "code"         [dim]# Run single command instead[/dim]
@@ -277,10 +280,10 @@ By default, runs a file from your computer. Use -d to run from device.
 
     if line_mode is not None:
         if non_interactive:
-            typer.echo("Error: --line/--hex cannot be used with --non-interactive.", err=True)
+            typer.echo("Error: --text/--hex cannot be used with --non-interactive.", err=True)
             raise typer.Exit(1)
         if echo:
-            typer.echo("Error: --line/--hex cannot be used with --echo.", err=True)
+            typer.echo("Error: --text/--hex cannot be used with --echo.", err=True)
             raise typer.Exit(1)
 
     _ensure_connected()
@@ -345,6 +348,27 @@ By default, runs a file from your computer. Use -d to run from device.
             if line_mode is not None:
                 hex_mode = (line_mode == "hex")
                 lmt = LineModeTerminal(hex_mode=hex_mode)
+
+                # --hex mode: auto-inject micropython.kbd_intr(-1) so that 0x03 bytes
+                # inside binary packets are not interpreted as Ctrl+C by MicroPython.
+                # Scripts that already call kbd_intr(-1) themselves are unaffected
+                # (calling it twice is harmless).  Cleanup (kbd_intr(3)) is sent
+                # automatically after the interactive session ends.
+                if hex_mode:
+                    _KBD_DISABLE = "import micropython as _mp\n_mp.kbd_intr(-1)\n"
+                    if local_file and not device_exec_code:
+                        try:
+                            with open(local_file, 'r', encoding='utf-8') as _hf:
+                                _orig_src = _hf.read()
+                        except Exception:
+                            _orig_src = ""
+                        device_exec_code = _KBD_DISABLE + _orig_src
+                        local_file = None
+                    elif device_exec_code:
+                        # device_exec_code is a single-line expression such as
+                        # exec(open('/path').read()) – prepend as a separate statement.
+                        device_exec_code = _KBD_DISABLE + device_exec_code
+
                 lmt_stop_requested = False
                 lmt_ctrl_c_count = 0
                 lmt_pending: list[bytes] = []
@@ -380,6 +404,9 @@ By default, runs a file from your computer. Use -d to run from device.
                                 return None
                             w = _ms.getwch()
                             if w == '\x03':
+                                if not hex_mode:
+                                    lmt_stop_requested = True
+                                    return None
                                 lmt_ctrl_c_count += 1
                                 if lmt_ctrl_c_count >= 2:
                                     lmt_stop_requested = True
@@ -389,7 +416,12 @@ By default, runs a file from your computer. Use -d to run from device.
                             if w == '\x04':
                                 return CTRL_D
                             if w in ('\x00', '\xe0'):
-                                _ms.getwch()
+                                ext = _ms.getwch()
+                                _arrows = {'H': b'\x1b[A', 'P': b'\x1b[B',
+                                           'M': b'\x1b[C', 'K': b'\x1b[D'}
+                                mapped = _arrows.get(ext)
+                                if mapped is not None:
+                                    return lmt.handle_key(mapped)
                                 return None
                             lmt_ctrl_c_count = 0
                             return lmt.handle_key(w.encode('utf-8'))
@@ -400,6 +432,9 @@ By default, runs a file from your computer. Use -d to run from device.
                                 return None
                             ch = os.read(fd, 1)
                             if ch == CTRL_C:
+                                if not hex_mode:
+                                    lmt_stop_requested = True
+                                    return None
                                 lmt_ctrl_c_count += 1
                                 if lmt_ctrl_c_count >= 2:
                                     lmt_stop_requested = True
@@ -408,6 +443,11 @@ By default, runs a file from your computer. Use -d to run from device.
                                 return None
                             if ch == CTRL_D:
                                 return CTRL_D
+                            # Drain full escape sequence (e.g. arrow keys: \x1b[A)
+                            if ch == b'\x1b':
+                                r3, _, _ = _sel.select([sys.stdin], [], [], 0.02)
+                                if r3:
+                                    ch += os.read(fd, 4)
                             lmt_ctrl_c_count = 0
                             return lmt.handle_key(ch)
                     except Exception:
@@ -421,6 +461,9 @@ By default, runs a file from your computer. Use -d to run from device.
 
                 def lmt_sigint_handler(signum, frame) -> None:
                     nonlocal lmt_ctrl_c_count, lmt_stop_requested
+                    if not hex_mode:
+                        lmt_stop_requested = True
+                        return
                     lmt_ctrl_c_count += 1
                     if lmt_ctrl_c_count >= 2:
                         lmt_stop_requested = True
@@ -456,6 +499,17 @@ By default, runs a file from your computer. Use -d to run from device.
                         lmt_stop_requested = True
                         try:
                             client.send_command('run_stop', timeout=0.3)
+                        except Exception:
+                            pass
+                    # Restore keyboard-interrupt byte to default (3 = Ctrl+C) after
+                    # the session ends, in case the script did not restore it itself.
+                    if hex_mode:
+                        try:
+                            client.send_command(
+                                'exec',
+                                code='import micropython; micropython.kbd_intr(3)',
+                                timeout=2.0,
+                            )
                         except Exception:
                             pass
                 finally:

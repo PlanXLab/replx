@@ -343,6 +343,9 @@ class LineModeTerminal:
         self._scroll_top = 1
         self._scroll_bottom = self._rows - 1
         self._error_msg: str = ""
+        self._history: list[str] = []
+        self._hist_idx: int = -1
+        self._hist_draft: str = ""
 
     def setup(self) -> None:
         if self._rows < 3:
@@ -379,11 +382,18 @@ class LineModeTerminal:
             return self._backspace()
         if ch == b"\x15":
             self._buf.clear()
+            self._hist_idx = -1
+            self._hist_draft = ""
             self._error_msg = ""
             self._draw_input()
             return None
+        if ch == b"\x1b[A":  
+            return self._history_up()
+        if ch == b"\x1b[B": 
+            return self._history_down()
         if len(ch) == 1 and 0x20 <= ch[0] <= 0x7E:
             self._buf.append(ch.decode("ascii"))
+            self._hist_idx = -1
             self._error_msg = ""
             self._draw_input()
         return None
@@ -403,9 +413,37 @@ class LineModeTerminal:
         self._draw_input()
         return None
 
+    def _history_up(self) -> None:
+        if not self._history:
+            return None
+        if self._hist_idx == -1:
+            self._hist_draft = "".join(self._buf)
+        new_idx = self._hist_idx + 1
+        if new_idx >= len(self._history):
+            return None
+        self._hist_idx = new_idx
+        self._buf = list(self._history[-(self._hist_idx + 1)])
+        self._error_msg = ""
+        self._draw_input()
+        return None
+
+    def _history_down(self) -> None:
+        if self._hist_idx == -1:
+            return None
+        self._hist_idx -= 1
+        if self._hist_idx == -1:
+            self._buf = list(self._hist_draft)
+        else:
+            self._buf = list(self._history[-(self._hist_idx + 1)])
+        self._error_msg = ""
+        self._draw_input()
+        return None
+
     def _commit(self) -> bytes | None:
         raw = "".join(self._buf).strip()
         self._buf.clear()
+        self._hist_idx = -1
+        self._hist_draft = ""
         if not raw:
             self._draw_input()
             return None
@@ -417,9 +455,14 @@ class LineModeTerminal:
                 return None
         else:
             payload = raw.encode("utf-8")
+        # Save to history on successful commit
+        if not self._history or self._history[-1] != raw:
+            self._history.append(raw)
+            if len(self._history) > 100:
+                self._history.pop(0)
         self._error_msg = ""
         self._draw_input()
-        return payload + b"\r"
+        return payload if self.hex_mode else payload + b"\r"
 
     @staticmethod
     def _parse_hex(s: str) -> tuple[bytes | None, str | None]:
