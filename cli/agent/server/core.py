@@ -60,10 +60,6 @@ class _AgentDatagramProtocol(asyncio.DatagramProtocol):
     def __init__(self, server: 'AgentServer') -> None:
         self._server = server
 
-    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
-        send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._server.server_socket = send_sock
-
     def datagram_received(self, data: bytes, addr: tuple) -> None:
         server = self._server
         if not server.running:
@@ -103,7 +99,6 @@ class AgentServer(
 ):
     def __init__(self, port: int = None):
         self.agent_port = port or DEFAULT_AGENT_PORT
-        self.server_socket: Optional[socket.socket] = None
         self.running = False
 
         self.connection_manager = ConnectionManager()
@@ -436,6 +431,19 @@ class AgentServer(
     def _stop_drain_thread(self, conn: BoardConnection):
         conn.stop_detached()
     
+    def _safe_send(self, data: bytes, addr: tuple) -> None:
+        """Thread-safe UDP send via the asyncio transport.
+        Responses come from the agent's bound port (same as V1.0 behavior).
+        """
+        transport = self._datagram_transport
+        loop = self._loop
+        if not transport or transport.is_closing() or not loop:
+            return
+        try:
+            loop.call_soon_threadsafe(transport.sendto, data, addr)
+        except Exception:
+            pass
+
     def _stop_detached_script(self, conn: BoardConnection = None):
         if conn:
             if not conn.is_detached():
@@ -467,13 +475,10 @@ class AgentServer(
             return
         self.last_seq[client_addr] = seq
 
-        try:
-            self.server_socket.sendto(
-                AgentProtocol.encode_message(AgentProtocol.create_ack(seq)),
-                client_addr,
-            )
-        except Exception:
-            pass
+        self._safe_send(
+            AgentProtocol.encode_message(AgentProtocol.create_ack(seq)),
+            client_addr,
+        )
 
         try:
             ppid = msg.get('ppid')
@@ -492,13 +497,7 @@ class AgentServer(
         except Exception as exc:
             response = AgentProtocol.create_response(seq=seq, error=str(exc))
 
-        try:
-            self.server_socket.sendto(
-                AgentProtocol.encode_message(response),
-                client_addr,
-            )
-        except Exception:
-            pass
+        self._safe_send(AgentProtocol.encode_message(response), client_addr)
 
     def _handle_request(self, data: bytes, client_addr: tuple):
         try:
@@ -524,13 +523,13 @@ class AgentServer(
             
             ack = AgentProtocol.create_ack(seq)
             ack_data = AgentProtocol.encode_message(ack)
-            self.server_socket.sendto(ack_data, client_addr)
+            self._safe_send(ack_data, client_addr)
             
             response = self._handle_message(msg, client_addr)
             
             if response is not None:
                 response_data = AgentProtocol.encode_message(response)
-                self.server_socket.sendto(response_data, client_addr)
+                self._safe_send(response_data, client_addr)
             
         except Exception as e:
             try:
@@ -539,7 +538,7 @@ class AgentServer(
                     error=str(e)
                 )
                 error_data = AgentProtocol.encode_message(error_response)
-                self.server_socket.sendto(error_data, client_addr)
+                self._safe_send(error_data, client_addr)
             except Exception:
                 pass
     
@@ -778,13 +777,6 @@ class AgentServer(
                     transport.close()
             except Exception:
                 pass
-        elif self.server_socket:
-            try:
-                self.server_socket.close()
-            except Exception:
-                pass
-        self.server_socket = None
-
         self._fast_executor.shutdown(wait=False, cancel_futures=True)
         self._slow_executor.shutdown(wait=False, cancel_futures=True)
 

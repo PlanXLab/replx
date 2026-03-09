@@ -199,7 +199,7 @@ class ExecCommandsMixin:
         
         def send_error(msg: str):
             error_response = AgentProtocol.create_response(seq=seq, error=msg)
-            self.server_socket.sendto(AgentProtocol.encode_message(error_response), client_addr)
+            self._safe_send(AgentProtocol.encode_message(error_response), client_addr)
         
         if not conn or not conn.repl_protocol:
             send_error("Not connected")
@@ -273,7 +273,6 @@ class ExecCommandsMixin:
             pass
             
     def _run_interactive_thread(self, conn: BoardConnection, script_data: bytes):
-        sock = self.server_socket
         client_addr = conn.interactive.client_addr
         seq = conn.interactive.seq
         
@@ -293,7 +292,7 @@ class ExecCommandsMixin:
                 if completed:
                     msg['completed'] = True
                     msg['error'] = error
-                sock.sendto(AgentProtocol.encode_message(msg), client_addr)
+                self._safe_send(AgentProtocol.encode_message(msg), client_addr)
             except Exception:
                 pass
         

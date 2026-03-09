@@ -203,12 +203,12 @@ class TransferCommandsMixin:
                 if not conn or not conn.file_system:
                     error_response = AgentProtocol.create_response(seq=seq, error="Not connected")
                     error_data = AgentProtocol.encode_message(error_response)
-                    self.server_socket.sendto(error_data, client_addr)
+                    self._safe_send(error_data, client_addr)
                     return
 
                 ack_msg = AgentProtocol.create_ack(seq)
                 ack_data = AgentProtocol.encode_message(ack_msg)
-                self.server_socket.sendto(ack_data, client_addr)
+                self._safe_send(ack_data, client_addr)
 
                 real_remote_path = self._to_real_path(remote_path, conn)
                 remote_normalized = real_remote_path.rstrip('/')
@@ -228,7 +228,7 @@ class TransferCommandsMixin:
                     "status": "starting"
                 })
                 progress_data = AgentProtocol.encode_message(progress_msg)
-                self.server_socket.sendto(progress_data, client_addr)
+                self._safe_send(progress_data, client_addr)
 
                 files_downloaded = 0
 
@@ -277,7 +277,7 @@ class TransferCommandsMixin:
                         "status": "downloading"
                     })
                     progress_data = AgentProtocol.encode_message(progress_msg)
-                    self.server_socket.sendto(progress_data, client_addr)
+                    self._safe_send(progress_data, client_addr)
 
                 final_response = AgentProtocol.create_response(seq=seq, result={
                     "downloaded_dir": remote_path,
@@ -286,12 +286,12 @@ class TransferCommandsMixin:
                     "success": True
                 })
                 final_data = AgentProtocol.encode_message(final_response)
-                self.server_socket.sendto(final_data, client_addr)
+                self._safe_send(final_data, client_addr)
 
             except Exception as e:
                 error_response = AgentProtocol.create_response(seq=seq, error=f"getdir_to_local failed: {e}")
                 error_data = AgentProtocol.encode_message(error_response)
-                self.server_socket.sendto(error_data, client_addr)
+                self._safe_send(error_data, client_addr)
             finally:
                 if conn:
                     conn.release()
@@ -351,18 +351,18 @@ class TransferCommandsMixin:
                 if not conn or not conn.file_system:
                     error_response = AgentProtocol.create_response(seq=seq, error="Not connected")
                     error_data = AgentProtocol.encode_message(error_response)
-                    self.server_socket.sendto(error_data, client_addr)
+                    self._safe_send(error_data, client_addr)
                     return
 
                 if not os.path.exists(local_path):
                     error_response = AgentProtocol.create_response(seq=seq, error=f"Local file not found: {local_path}")
                     error_data = AgentProtocol.encode_message(error_response)
-                    self.server_socket.sendto(error_data, client_addr)
+                    self._safe_send(error_data, client_addr)
                     return
 
                 ack_msg = AgentProtocol.create_ack(seq)
                 ack_data = AgentProtocol.encode_message(ack_msg)
-                self.server_socket.sendto(ack_data, client_addr)
+                self._safe_send(ack_data, client_addr)
 
                 file_size = os.path.getsize(local_path)
                 file_name = os.path.basename(local_path)
@@ -374,7 +374,7 @@ class TransferCommandsMixin:
                     "status": "starting"
                 })
                 progress_data = AgentProtocol.encode_message(progress_msg)
-                self.server_socket.sendto(progress_data, client_addr)
+                self._safe_send(progress_data, client_addr)
 
                 real_remote_path = self._to_real_path(remote_path, conn)
 
@@ -393,7 +393,7 @@ class TransferCommandsMixin:
                             "status": "uploading"
                         })
                         progress_data = AgentProtocol.encode_message(progress_msg)
-                        self.server_socket.sendto(progress_data, client_addr)
+                        self._safe_send(progress_data, client_addr)
 
                 conn.file_system.put(local_path, real_remote_path, progress_callback=progress_callback)
                 bytes_uploaded[0] = file_size
@@ -405,13 +405,13 @@ class TransferCommandsMixin:
                     "success": True
                 })
                 final_data = AgentProtocol.encode_message(final_response)
-                self.server_socket.sendto(final_data, client_addr)
+                self._safe_send(final_data, client_addr)
 
             except Exception as e:
                 error_response = AgentProtocol.create_response(seq=seq, error=str(e))
                 error_data = AgentProtocol.encode_message(error_response)
                 try:
-                    self.server_socket.sendto(error_data, client_addr)
+                    self._safe_send(error_data, client_addr)
                 except Exception:
                     pass
             finally:
@@ -434,18 +434,18 @@ class TransferCommandsMixin:
                 if not conn or not conn.file_system:
                     error_response = AgentProtocol.create_response(seq=seq, error="Not connected")
                     error_data = AgentProtocol.encode_message(error_response)
-                    self.server_socket.sendto(error_data, client_addr)
+                    self._safe_send(error_data, client_addr)
                     return
 
                 if not os.path.exists(local_path) or not os.path.isdir(local_path):
                     error_response = AgentProtocol.create_response(seq=seq, error=f"Local directory not found: {local_path}")
                     error_data = AgentProtocol.encode_message(error_response)
-                    self.server_socket.sendto(error_data, client_addr)
+                    self._safe_send(error_data, client_addr)
                     return
 
                 ack_msg = AgentProtocol.create_ack(seq)
                 ack_data = AgentProtocol.encode_message(ack_msg)
-                self.server_socket.sendto(ack_data, client_addr)
+                self._safe_send(ack_data, client_addr)
 
                 base_local = os.path.abspath(local_path)
                 real_remote_path = self._to_real_path(remote_path, conn)
@@ -481,7 +481,7 @@ class TransferCommandsMixin:
                     "status": "starting"
                 })
                 progress_data = AgentProtocol.encode_message(progress_msg)
-                self.server_socket.sendto(progress_data, client_addr)
+                self._safe_send(progress_data, client_addr)
 
                 for dir_path in sorted(dirs_to_create):
                     try:
@@ -518,7 +518,7 @@ class TransferCommandsMixin:
                                 "status": "uploading"
                             })
                             progress_data = AgentProtocol.encode_message(progress_msg)
-                            self.server_socket.sendto(progress_data, client_addr)
+                            self._safe_send(progress_data, client_addr)
                             break
                             
                         except Exception as e:
@@ -535,13 +535,13 @@ class TransferCommandsMixin:
                     "success": True
                 })
                 final_data = AgentProtocol.encode_message(final_response)
-                self.server_socket.sendto(final_data, client_addr)
+                self._safe_send(final_data, client_addr)
 
             except Exception as e:
                 error_response = AgentProtocol.create_response(seq=seq, error=str(e))
                 error_data = AgentProtocol.encode_message(error_response)
                 try:
-                    self.server_socket.sendto(error_data, client_addr)
+                    self._safe_send(error_data, client_addr)
                 except Exception:
                     pass
             finally:
