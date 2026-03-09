@@ -1,3 +1,4 @@
+import locale
 import os
 import sys
 import socket
@@ -16,6 +17,21 @@ LOCAL_PATH_PARAMS = frozenset({'local_path', 'local'})
 class AgentClient:    
     TIMEOUT = 5.0
     MAX_RETRIES = 3
+
+    @staticmethod
+    def _kill_process_on_port(port: int) -> None:
+        try:
+            import psutil
+            for conn in psutil.net_connections(kind='udp'):
+                if conn.laddr and conn.laddr.port == port and conn.pid:
+                    try:
+                        psutil.Process(conn.pid).kill()
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
+                    break
+        except Exception:
+            pass
 
     def __init__(self, port: int = None, device_port: str = None):
         self.agent_port = port or DEFAULT_AGENT_PORT
@@ -322,6 +338,9 @@ class AgentClient:
         import subprocess
         python_exe = sys.executable
         agent_module = 'replx.cli.agent.server'
+        agent_port = port or DEFAULT_AGENT_PORT
+
+        AgentClient._kill_process_on_port(agent_port)
 
         cmd = [python_exe, '-m', agent_module]
         if port:
@@ -335,7 +354,7 @@ class AgentClient:
             try:
                 fd, stderr_path = tempfile.mkstemp(prefix='replx_agent_', suffix='.err')
                 os.close(fd)
-                stderr_file = open(stderr_path, 'w', encoding='utf-8')
+                stderr_file = open(stderr_path, 'wb')
             except Exception:
                 stderr_file = None
                 stderr_path = None
@@ -375,8 +394,9 @@ class AgentClient:
                     detail = ''
                     if stderr_path:
                         try:
-                            with open(stderr_path, 'r', encoding='utf-8', errors='replace') as f:
-                                detail = f.read().strip()
+                            enc = locale.getpreferredencoding(False) or 'utf-8'
+                            with open(stderr_path, 'rb') as f:
+                                detail = f.read().decode(enc, errors='replace').strip()
                         except Exception:
                             pass
                     msg = f"Failed to start agent (process exited with code {proc.returncode})"
