@@ -18,21 +18,6 @@ class AgentClient:
     TIMEOUT = 5.0
     MAX_RETRIES = 3
 
-    @staticmethod
-    def _kill_process_on_port(port: int) -> None:
-        try:
-            import psutil
-            for conn in psutil.net_connections(kind='udp'):
-                if conn.laddr and conn.laddr.port == port and conn.pid:
-                    try:
-                        psutil.Process(conn.pid).kill()
-                        time.sleep(0.5)
-                    except Exception:
-                        pass
-                    break
-        except Exception:
-            pass
-
     def __init__(self, port: int = None, device_port: str = None):
         self.agent_port = port or DEFAULT_AGENT_PORT
         self.device_port = device_port
@@ -339,8 +324,6 @@ class AgentClient:
         python_exe = sys.executable
         agent_module = 'replx.cli.agent.server'
         agent_port = port or DEFAULT_AGENT_PORT
-
-        AgentClient._kill_process_on_port(agent_port)
 
         cmd = [python_exe, '-m', agent_module]
         if port:
