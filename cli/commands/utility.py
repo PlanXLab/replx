@@ -793,6 +793,21 @@ The connection is closed and removed from ALL sessions that reference it.
         )
 
 
+def _find_and_kill_agent_by_port(port: int) -> bool:
+    try:
+        import psutil
+        for conn in psutil.net_connections(kind='udp'):
+            if conn.laddr and conn.laddr.port == port and conn.pid:
+                try:
+                    psutil.Process(conn.pid).kill()
+                    return True
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+    except Exception:
+        pass
+    return False
+
+
 def _do_shutdown():
     agent_port = _get_current_agent_port()
 
@@ -808,19 +823,37 @@ def _do_shutdown():
                 border_style="blue"
             )
         elif not was_running:
-            OutputHelper.print_panel(
-                "Agent is already stopped.\n"
-                "[dim]Run any replx command to start and reconnect.[/dim]",
-                title="Already Shutdown",
-                border_style="dim"
-            )
+            killed = _find_and_kill_agent_by_port(agent_port)
+            if killed:
+                OutputHelper.print_panel(
+                    "Stopped all connections and agent.\n"
+                    "[dim]Run any replx command to reconnect.[/dim]",
+                    title="Shutdown Complete",
+                    border_style="blue"
+                )
+            else:
+                OutputHelper.print_panel(
+                    "Agent is already stopped.\n"
+                    "[dim]Run any replx command to start and reconnect.[/dim]",
+                    title="Already Shutdown",
+                    border_style="dim"
+                )
         else:
-            OutputHelper.print_panel(
-                "Failed to stop agent cleanly.\n"
-                "[dim]Some connections may still be active.[/dim]",
-                title="Shutdown Failed",
-                border_style="red"
-            )
+            killed = _find_and_kill_agent_by_port(agent_port)
+            if killed:
+                OutputHelper.print_panel(
+                    "Stopped all connections and agent.\n"
+                    "[dim]Run any replx command to reconnect.[/dim]",
+                    title="Shutdown Complete",
+                    border_style="blue"
+                )
+            else:
+                OutputHelper.print_panel(
+                    "Failed to stop agent cleanly.\n"
+                    "[dim]Some connections may still be active.[/dim]",
+                    title="Shutdown Failed",
+                    border_style="red"
+                )
     except Exception as e:
         OutputHelper.print_panel(
             f"Failed to shutdown agent: {str(e)}",
