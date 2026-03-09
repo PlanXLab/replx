@@ -473,7 +473,6 @@ def _firmware_update(force: bool = False):
     
     def make_update_panel(step: str, progress: float = None, detail: str = None, use_spinner: bool = True, 
                           complete: bool = False, success: bool = True, final_version: str = None):
-        """Create a unified update panel with current step and optional progress."""
         from rich.table import Table
         from rich.console import Group
         

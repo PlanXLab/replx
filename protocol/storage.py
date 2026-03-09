@@ -313,7 +313,6 @@ print(json.dumps(get_recursive_listing('{dir}')))
         return sorted(result, key=lambda x: x[0].lower())
 
     def is_dir(self, path: str) -> bool:
-        """Check if the given path is a directory."""
         path = self._normalize_remote_path(path)
         
         if self.core == "EFR32MG":
@@ -400,7 +399,6 @@ except Exception:
         return result == '1'
 
     def mkdir(self, dir: str) -> bool:
-        """Create directory on device. Uses forward slashes for device paths."""
         dir = dir.replace('\\', '/')
         command = f"""
 import os
@@ -435,7 +433,6 @@ os.remove('{filename}')
         self.repl.exec(command)
 
     def touch(self, filename: str, core: str = None):
-        """Create file if not exists, preserve content if exists (like Unix touch)."""
         core = core or self.core
         if core == "EFR32MG":
             command = f"""
@@ -454,7 +451,6 @@ except Exception:
         self.repl.exec(command)
 
     def rmdir(self, dir: str):
-        """Remove a directory and all its contents recursively."""
         if self.core == "EFR32MG":
             command = f"""
 import os
@@ -643,7 +639,6 @@ os.chdir('/flash')
         return True
 
     def get(self, remote: str, local: str = None) -> bytes:
-        """Download a file from the device."""
         import binascii as binascii_module
         
         local_file = None
@@ -718,7 +713,6 @@ if chunk:
             return b''.join(content_parts)
 
     def put(self, local: str, remote: str, progress_callback=None):
-        """Upload a file to the device."""
         sent = 0
         needs_retry = False
         file_opened = False

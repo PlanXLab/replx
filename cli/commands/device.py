@@ -988,7 +988,6 @@ WIFI_STATUS_MESSAGES = {
 }
 
 def _wifi_status(client: AgentClient):
-    """Show WiFi status."""
     code = '''
 import network
 import json

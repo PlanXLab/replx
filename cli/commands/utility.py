@@ -111,7 +111,6 @@ Show replx version information.
     )
 
 
-
 def _get_session_list_data():
     try:
         with AgentClient(port=_get_current_agent_port()) as client:
@@ -212,7 +211,6 @@ def _print_session_list_interactive(sessions_data, current_ppid):
         numbered_ports.add(current_fg)
     
     def make_row(selector, port, version, core, device, manufacturer, color, dimmed=False):
-        """Build a row with proper alignment."""
         if dimmed:
             return f"{selector:>4}  {port:>{PORT_W}}  {version:<{VER_W}}  {core:<{CORE_W}}  {device:<{DEV_W}}  {manufacturer}"
         else:
@@ -997,7 +995,6 @@ Format (erase) the filesystem on the connected device.
     return ret
 
 
-
 @app.command(rich_help_panel="Device Management")
 def init(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
@@ -1083,7 +1080,6 @@ Completely reset device: format filesystem and install all libraries.
     console = Console(width=CONSOLE_WIDTH)
     
     def make_format_panel(message: str, title: str = "Formatting") -> Panel:
-        """Create a panel with spinner animation for format step."""
         spinner = Spinner("dots", text=f" {message}")
         return Panel(spinner, title=title, title_align="left", border_style="cyan", 
                      box=get_panel_box(), width=CONSOLE_WIDTH)

@@ -23,10 +23,6 @@ def get(
     args: Optional[list[str]] = typer.Argument(None, help="Remote file(s) and local destination"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
-    """
-    Download file(s) or directory from the connected device to the local filesystem.
-    Last argument is the local destination path.
-    """
     if show_help:
         console = Console(width=CONSOLE_WIDTH)
         help_text = """\
@@ -273,8 +269,6 @@ Download files or directories from the device to your computer.
         )
 
 
-
-
 @app.command(name="cat", rich_help_panel="File Operations")
 def cat(
     remote: str = typer.Argument("", help="Remote file path"),
@@ -516,8 +510,6 @@ Text files show as-is; binary files show in hex format.
         )
 
 
-
-
 @app.command(rich_help_panel="File Operations")
 def mkdir(
     remotes: Optional[list[str]] = typer.Argument(None, help="Directories to create"),
@@ -608,7 +600,6 @@ Create directories on the connected device.
             )
 
 
-
 @app.command(rich_help_panel="File Operations")
 def rm(
     args: Optional[list[str]] = typer.Argument(None, help="Files or directories to remove"),
@@ -688,7 +679,6 @@ Delete files or directories from the connected device.
         return path
     
     def resolve_patterns(patterns: list[str]) -> list[str]:
-        """Resolve wildcard patterns to actual file paths."""
         resolved = []
         for pattern in patterns:
             remote = normalize_path(pattern)
@@ -893,7 +883,6 @@ Delete files or directories from the connected device.
             title="Remove",
             border_style="red"
         )
-
 
 
 @app.command(rich_help_panel="File Operations")
@@ -1160,7 +1149,6 @@ Copy files or directories on the connected device.
         )
 
 
-
 @app.command(rich_help_panel="File Operations")
 def mv(
     args: Optional[list[str]] = typer.Argument(None, help="Source file(s) and destination"),
@@ -1412,7 +1400,6 @@ Move or rename files and directories on the connected device.
         raise typer.Exit(1)
 
 
-
 @app.command(rich_help_panel="File Operations")
 def touch(
     remotes: Optional[list[str]] = typer.Argument(None, help="Files to create"),
@@ -1497,7 +1484,6 @@ Create empty files on the connected device.
             )
 
 
-
 @app.command(rich_help_panel="File Operations")
 def ls(
     path: str = typer.Argument("/", help="Directory path to list"),
@@ -1558,7 +1544,6 @@ List files and directories on the connected device.
             return
         
         def get_icon(name: str, is_dir: bool) -> str:
-            """Get file/folder icon with color"""
             if is_dir:
                 return "[#E6B450]󰉋[/#E6B450]" 
             ext_icons = {
@@ -1589,7 +1574,6 @@ List files and directories on the connected device.
             lines = []
             
             def render_tree(dir_path: str, prefix: str = ""):
-                """Recursively render tree structure"""
                 children = tree.get(dir_path, [])
                 for i, (basename, size, is_dir, full_path) in enumerate(children):
                     is_last = (i == len(children) - 1)
@@ -1816,7 +1800,6 @@ Upload files or directories from your computer to the device.
         progress_state = {"current": 0, "total": file_count, "file": base_name}
         
         def progress_callback(data):
-            """Handle streaming progress updates."""
             progress_state["current"] = data.get("current", 0)
             progress_state["total"] = data.get("total", file_count)
             progress_state["file"] = data.get("file", base_name)

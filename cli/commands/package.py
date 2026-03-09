@@ -205,7 +205,6 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
         return ""
 
     def local_ver(source_path: str, target: str, scope: str) -> tuple[float, bool]:
-        """Check if package exists locally for specific target (core/device)."""
         if not source_path or not target:
             return 0.0, True
 

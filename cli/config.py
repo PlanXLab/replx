@@ -20,7 +20,6 @@ class RuntimeState:
 STATE = RuntimeState()
 
 class GlobalOptions:
-    """Global CLI options storage."""
     
     _instance = None
     

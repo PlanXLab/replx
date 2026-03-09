@@ -1,4 +1,3 @@
-"""Update checking utilities."""
 import os
 import sys
 import re

@@ -1,4 +1,3 @@
-"""MPY compilation utilities with intelligent caching."""
 import os
 import hashlib
 import time

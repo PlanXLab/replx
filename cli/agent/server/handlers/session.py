@@ -184,7 +184,6 @@ class SessionCommandsMixin:
         }
 
     def _cmd_set_default(self, ctx: CommandContext, port: str = None, update_session: bool = False) -> dict:
-        """Set default port. If update_session=True, also update calling session's default_port."""
         port = port or ctx.explicit_port
         if port:
             self._set_default_port(port)
