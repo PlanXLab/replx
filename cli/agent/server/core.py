@@ -400,9 +400,6 @@ class AgentServer(
             self.connection_manager.disconnect(port)
             self.session_manager.remove_connection_from_all_sessions(port)
 
-        if not self.connection_manager.get_connected_ports():
-            self.running = False
-
         self._last_command_time = time.time()
 
         return zombie_counter, gc_counter
@@ -734,9 +731,6 @@ class AgentServer(
                 failed_port = active_conn.port
                 self.connection_manager.disconnect(failed_port)
                 self.session_manager.remove_connection_from_all_sessions(failed_port)
-                if not self.connection_manager.get_connected_ports():
-                    self.running = False
-                    return AgentProtocol.create_response(seq=seq, error=f"Connection {failed_port} lost: {str(e)}. No connections remain, agent shutting down.")
                 return AgentProtocol.create_response(seq=seq, error=f"Connection {failed_port} lost: {str(e)}. Connection removed.")
             else:
                 return AgentProtocol.create_response(seq=seq, error=f"Connection error: {str(e)}")
