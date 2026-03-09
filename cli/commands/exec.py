@@ -261,6 +261,11 @@ By default, runs a file from your computer. Use -d to run from device.
   [yellow]Ctrl+U[/yellow]      Clear input line
   [yellow]Ctrl+C[/yellow]      Interrupt and exit (--text: once, --hex: twice)
 
+[bold cyan]Note (--hex):[/bold cyan]
+  MicroPython interprets 0x03 bytes as Ctrl+C (KeyboardInterrupt).
+  Use [yellow]micropython.kbd_intr(-1)[/yellow] in your script to disable this,
+  and restore it with [yellow]micropython.kbd_intr(3)[/yellow] on exit.
+
 [bold cyan]Related:[/bold cyan]
   replx -c "code"         [dim]# Run single command instead[/dim]
   replx repl              [dim]# Interactive mode[/dim]"""
@@ -348,26 +353,6 @@ By default, runs a file from your computer. Use -d to run from device.
             if line_mode is not None:
                 hex_mode = (line_mode == "hex")
                 lmt = LineModeTerminal(hex_mode=hex_mode)
-
-                # --hex mode: auto-inject micropython.kbd_intr(-1) so that 0x03 bytes
-                # inside binary packets are not interpreted as Ctrl+C by MicroPython.
-                # Scripts that already call kbd_intr(-1) themselves are unaffected
-                # (calling it twice is harmless).  Cleanup (kbd_intr(3)) is sent
-                # automatically after the interactive session ends.
-                if hex_mode:
-                    _KBD_DISABLE = "import micropython as _mp\n_mp.kbd_intr(-1)\n"
-                    if local_file and not device_exec_code:
-                        try:
-                            with open(local_file, 'r', encoding='utf-8') as _hf:
-                                _orig_src = _hf.read()
-                        except Exception:
-                            _orig_src = ""
-                        device_exec_code = _KBD_DISABLE + _orig_src
-                        local_file = None
-                    elif device_exec_code:
-                        # device_exec_code is a single-line expression such as
-                        # exec(open('/path').read()) – prepend as a separate statement.
-                        device_exec_code = _KBD_DISABLE + device_exec_code
 
                 lmt_stop_requested = False
                 lmt_ctrl_c_count = 0
@@ -499,17 +484,6 @@ By default, runs a file from your computer. Use -d to run from device.
                         lmt_stop_requested = True
                         try:
                             client.send_command('run_stop', timeout=0.3)
-                        except Exception:
-                            pass
-                    # Restore keyboard-interrupt byte to default (3 = Ctrl+C) after
-                    # the session ends, in case the script did not restore it itself.
-                    if hex_mode:
-                        try:
-                            client.send_command(
-                                'exec',
-                                code='import micropython; micropython.kbd_intr(3)',
-                                timeout=2.0,
-                            )
                         except Exception:
                             pass
                 finally:
