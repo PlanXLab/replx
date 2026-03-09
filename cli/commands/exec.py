@@ -220,6 +220,7 @@ By default, runs a file from your computer. Use -d to run from device.
   [yellow]-d, --device[/yellow]          Run from device storage (not local)
   [yellow]-n, --non-interactive[/yellow] Detached mode (don't wait for output)
   [yellow]-e, --echo[/yellow]            Show what's being sent
+  [yellow]--line MODE[/yellow]           Line input mode: [cyan]text[/cyan] or [cyan]hex[/cyan]
 
 [bold cyan]Arguments:[/bold cyan]
   [yellow]SCRIPT[/yellow]      Script file to run [red][required][/red]
@@ -238,10 +239,22 @@ By default, runs a file from your computer. Use -d to run from device.
   replx run -n server.py          [dim]# Start and detach[/dim]
   replx run -dn main.py           [dim]# Run from device, detached[/dim]
 
+  [dim]# Line input mode (send one line at a time)[/dim]
+  replx run --line text main.py   [dim]# Type text, Enter to send[/dim]
+  replx run --line hex main.py    [dim]# Type hex bytes (e.g. 0102ff)[/dim]
+  replx main.py --line hex        [dim]# Shortcut form[/dim]
+
 [bold cyan]How it works:[/bold cyan]
   • Local files: uploaded to device RAM and executed
   • Device files (-d): executed directly from flash storage
   • Interactive: Ctrl+C to interrupt, output shown in real-time
+  • Line mode: split-screen layout — output scrolls above, input stays at bottom
+
+[bold cyan]Line mode keys:[/bold cyan]
+  [yellow]Enter[/yellow]       Send the typed line to the board
+  [yellow]Backspace[/yellow]   Delete last character
+  [yellow]Ctrl+U[/yellow]      Clear input line
+  [yellow]Ctrl+C x2[/yellow]   Interrupt and exit
 
 [bold cyan]Related:[/bold cyan]
   replx -c "code"         [dim]# Run single command instead[/dim]

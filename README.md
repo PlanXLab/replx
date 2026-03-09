@@ -373,23 +373,34 @@ replx -c "import time; time.sleep(1); print('done')"
 ```
 
 #### `run`
-The primary command for running scripts. Default mode transfers a local file to the board and runs it interactively. `-d/--device` runs a file already stored on the board interactively. `-n/--non-interactive` detaches execution without waiting for I/O. `-e/--echo` echoes input to the terminal during interactive runs. `--non-interactive` and `--echo` cannot be used together.
+The primary command for running scripts. Default mode transfers a local file to the board and runs it interactively. `-d/--device` runs a file already stored on the board interactively. `-n/--non-interactive` detaches execution without waiting for I/O. `-e/--echo` echoes input to the terminal during interactive runs. `--line text|hex` switches to line input mode: output scrolls in a split region while the input line stays fixed at the bottom. `--non-interactive` and `--echo` cannot be used together, and `--line` cannot be combined with either.
 
 Usage:
 ```sh
 replx run SCRIPT
 replx run -d SCRIPT
 replx SCRIPT
+replx run --line text SCRIPT
+replx run --line hex SCRIPT
 ```
 
 Examples:
 ```sh
 replx run main.py
-replx main.py          # shorthand for .py files
-replx run -d /test.py  # run board's /test.py interactively
-replx run -n server.py # non-interactive (no I/O wait)
-replx run -dn /main.py # run board's /main.py non-interactively
+replx main.py              # shorthand for .py files
+replx run -d /test.py      # run board's /test.py interactively
+replx run -n server.py     # non-interactive (no I/O wait)
+replx run -dn /main.py     # run board's /main.py non-interactively
+replx run --line text main.py   # line mode: type text, Enter to send
+replx run --line hex main.py    # line mode: type hex bytes (e.g. 0102ff), Enter to send
+replx main.py --line hex        # shortcut form also works
 ```
+
+Line mode key bindings:
+- `Enter`: send the typed line to the board
+- `Backspace`: delete last character
+- `Ctrl+U`: clear the input line
+- `Ctrl+C` twice: interrupt and exit
 
 #### `repl`
 Enter the board's Friendly REPL to experiment with code line by line. Output is displayed in real time. Type `exit()` to end the REPL session.
