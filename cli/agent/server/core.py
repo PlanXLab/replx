@@ -105,6 +105,8 @@ class AgentServer(
         self.session_manager = SessionManager()
 
         self.last_seq: dict = {}
+        self._last_seq_lock = threading.Lock()
+        self._MAX_LAST_SEQ = 256
 
         self._last_command_time = time.time()
         self._command_handlers = self._build_command_handlers()
@@ -439,6 +441,16 @@ class AgentServer(
         except Exception:
             pass
 
+    def _check_and_record_seq(self, client_addr: tuple, seq: int) -> bool:
+        with self._last_seq_lock:
+            if client_addr in self.last_seq and seq <= self.last_seq[client_addr]:
+                return False
+            self.last_seq[client_addr] = seq
+            if len(self.last_seq) > self._MAX_LAST_SEQ:
+                oldest = next(iter(self.last_seq))
+                del self.last_seq[oldest]
+            return True
+
     def _stop_detached_script(self, conn: BoardConnection = None):
         if conn:
             if not conn.is_detached():
@@ -466,9 +478,8 @@ class AgentServer(
         seq = msg.get('seq', 0)
         command = msg.get('command')
 
-        if client_addr in self.last_seq and seq <= self.last_seq[client_addr]:
+        if not self._check_and_record_seq(client_addr, seq):
             return
-        self.last_seq[client_addr] = seq
 
         self._safe_send(
             AgentProtocol.encode_message(AgentProtocol.create_ack(seq)),
@@ -511,10 +522,8 @@ class AgentServer(
                 return
             
             if msg_type == 'request':
-                if client_addr in self.last_seq and seq <= self.last_seq[client_addr]:
+                if not self._check_and_record_seq(client_addr, seq):
                     return
-                
-                self.last_seq[client_addr] = seq
             
             ack = AgentProtocol.create_ack(seq)
             ack_data = AgentProtocol.encode_message(ack)

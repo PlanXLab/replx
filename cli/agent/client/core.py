@@ -40,10 +40,7 @@ class AgentClient:
             self.connect()
 
         effective_timeout = timeout if timeout else self.TIMEOUT
-
-        if timeout:
-            self.sock.settimeout(timeout)
-
+        self.sock.settimeout(effective_timeout)
         port_to_use = args.pop('port', None) or self.device_port
 
         for param in LOCAL_PATH_PARAMS:
