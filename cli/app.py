@@ -497,7 +497,7 @@ def main():
         "pkg","setup","init","firmware"
     }
 
-    opts_with_value = {'--port', '-p', '--agent-port'}
+    opts_with_value = {'--port', '-p', '--agent-port', '--line'}
     
     first_nonopt_idx = None
     skip_next = False
@@ -513,7 +513,7 @@ def main():
             break
     first_nonopt = sys.argv[first_nonopt_idx] if first_nonopt_idx is not None else None
 
-    run_opts = {'-n', '--non-interactive', '-e', '--echo', '-d', '--device'}
+    run_opts = {'-n', '--non-interactive', '-e', '--echo', '-d', '--device', '--line'}
     has_device_opt = bool(run_opts & {'-d', '--device'} & set(args))
     
     script_files = []
@@ -538,7 +538,7 @@ def main():
 
     if should_inject_run:
         opt_idx = next((i for i, a in enumerate(sys.argv[1:], 1) if a in run_opts), None)
-        insert_at = opt_idx if opt_idx is not None else script_arg_idx
+        insert_at = min(opt_idx, script_arg_idx) if opt_idx is not None else script_arg_idx
         sys.argv.insert(insert_at, 'run')
 
         first_nonopt_idx = next((i for i, a in enumerate(sys.argv[1:], 1) if not a.startswith('-')), None)

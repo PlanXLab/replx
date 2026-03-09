@@ -2,6 +2,7 @@ import os
 import sys
 import platform
 import threading
+import shutil
 from typing import Callable
 import select
 
@@ -280,4 +281,164 @@ else:
             sys.stdout.flush()
 
 
+def lmt_write(s: str | bytes) -> None:
+    if isinstance(s, str):
+        s = s.encode()
+    sys.stdout.buffer.write(s)
+    sys.stdout.buffer.flush()
+
+
+def lmt_terminal_size() -> tuple[int, int]:
+    sz = shutil.get_terminal_size(fallback=(80, 24))
+    return sz.columns, sz.lines
+
+
+def lmt_set_scroll_region(top: int, bottom: int) -> None:
+    lmt_write(f"\x1b[{top};{bottom}r")
+
+
+def lmt_clear_scroll_region() -> None:
+    lmt_write("\x1b[r")
+
+
+def lmt_move(row: int, col: int = 1) -> None:
+    lmt_write(f"\x1b[{row};{col}H")
+
+
+def lmt_erase_line() -> None:
+    lmt_write("\x1b[2K")
+
+
+def lmt_clear_screen() -> None:
+    lmt_write("\x1b[2J")
+    lmt_move(1, 1)
+
+
+def enable_vt_mode() -> bool:
+    if not IS_WINDOWS:
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        STD_OUTPUT_HANDLE = -11
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        ENABLE_PROCESSED_OUTPUT = 0x0001
+        handle = kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        old_mode = ctypes.c_ulong(0)
+        kernel32.GetConsoleMode(handle, ctypes.byref(old_mode))
+        new_mode = old_mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT
+        return bool(kernel32.SetConsoleMode(handle, new_mode))
+    except Exception:
+        return False
+
+
+class LineModeTerminal:
+    PROMPT = "> "
+
+    def __init__(self, hex_mode: bool = False):
+        self.hex_mode = hex_mode
+        self._buf: list[str] = []
+        self._cols, self._rows = lmt_terminal_size()
+        self._input_row = self._rows
+        self._scroll_top = 1
+        self._scroll_bottom = self._rows - 1
+        self._error_msg: str = ""
+
+    def setup(self) -> None:
+        if self._rows < 3:
+            raise RuntimeError(f"Terminal too small (rows={self._rows}, min 3 required)")
+        enable_vt_mode()
+        lmt_clear_screen()
+        lmt_set_scroll_region(self._scroll_top, self._scroll_bottom)
+        lmt_move(self._scroll_bottom, 1)
+        self._draw_input()
+        if not IS_WINDOWS:
+            import signal
+            signal.signal(signal.SIGWINCH, self._on_resize)
+
+    def restore(self) -> None:
+        lmt_clear_scroll_region()
+        lmt_move(self._input_row, 1)
+        lmt_erase_line()
+        lmt_write("\r\n")
+
+    def write_output(self, data: bytes) -> None:
+        if not data:
+            return
+        data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        if not IS_WINDOWS:
+            data = data.replace(b"\n", b"\r\n")
+        lmt_move(self._scroll_bottom, 1)
+        lmt_write(data)
+        self._draw_input()
+
+    def handle_key(self, ch: bytes) -> bytes | None:
+        if ch in (b"\r", b"\n"):
+            return self._commit()
+        if ch in (b"\x7f", b"\x08"):
+            return self._backspace()
+        if ch == b"\x15":
+            self._buf.clear()
+            self._error_msg = ""
+            self._draw_input()
+            return None
+        if len(ch) == 1 and 0x20 <= ch[0] <= 0x7E:
+            self._buf.append(ch.decode("ascii"))
+            self._error_msg = ""
+            self._draw_input()
+        return None
+
+    def _draw_input(self) -> None:
+        lmt_move(self._input_row, 1)
+        lmt_erase_line()
+        mode_tag = "[hex] " if self.hex_mode else ""
+        err = f"  \x1b[31m{self._error_msg}\x1b[0m" if self._error_msg else ""
+        content = "".join(self._buf)
+        lmt_write(f"{self.PROMPT}{mode_tag}{content}{err}")
+
+    def _backspace(self) -> None:
+        if self._buf:
+            self._buf.pop()
+        self._error_msg = ""
+        self._draw_input()
+        return None
+
+    def _commit(self) -> bytes | None:
+        raw = "".join(self._buf).strip()
+        self._buf.clear()
+        if not raw:
+            self._draw_input()
+            return None
+        if self.hex_mode:
+            payload, err = self._parse_hex(raw)
+            if err:
+                self._error_msg = err
+                self._draw_input()
+                return None
+        else:
+            payload = raw.encode("utf-8")
+        self._error_msg = ""
+        self._draw_input()
+        return payload + b"\r"
+
+    @staticmethod
+    def _parse_hex(s: str) -> tuple[bytes | None, str | None]:
+        s = s.replace(" ", "").replace("_", "")
+        valid = set("0123456789abcdefABCDEF")
+        for ch in s:
+            if ch not in valid:
+                return None, f"invalid hex char: {ch!r}"
+        if len(s) % 2:
+            return None, f"odd length: {s!r}"
+        try:
+            return bytes.fromhex(s), None
+        except ValueError as e:
+            return None, f"conversion error: {e}"
+
+    def _on_resize(self, signum, frame) -> None:
+        self._cols, self._rows = lmt_terminal_size()
+        self._input_row = self._rows
+        self._scroll_bottom = self._rows - 1
+        lmt_set_scroll_region(self._scroll_top, self._scroll_bottom)
+        self._draw_input()
 

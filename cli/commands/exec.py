@@ -15,7 +15,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from replx.terminal import IS_WINDOWS, getch, disable_quick_edit_mode, restore_console_mode
+from replx.terminal import IS_WINDOWS, getch, disable_quick_edit_mode, restore_console_mode, LineModeTerminal
 from replx.utils.constants import CTRL_C, CTRL_D
 from ..helpers import (
     OutputHelper, StoreManager,
@@ -201,6 +201,7 @@ def run(
     non_interactive: bool = typer.Option(False, "--non-interactive", "-n", help="Non-interactive execution"),
     echo: bool = typer.Option(False, "--echo", "-e", help="Turn on echo for interactive"),
     device: bool = typer.Option(False, "--device", "-d", help="Run from device storage"),
+    line_mode: str | None = typer.Option(None, "--line", metavar="MODE", help="Line input mode: text or hex"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
@@ -256,7 +257,18 @@ By default, runs a file from your computer. Use -d to run from device.
     if non_interactive and echo:
         typer.echo("Error: The --non-interactive and --echo options cannot be used together.", err=True)
         raise typer.Exit(1)
-    
+
+    if line_mode is not None:
+        if non_interactive:
+            typer.echo("Error: --line cannot be used with --non-interactive.", err=True)
+            raise typer.Exit(1)
+        if echo:
+            typer.echo("Error: --line cannot be used with --echo.", err=True)
+            raise typer.Exit(1)
+        if line_mode not in ("text", "hex"):
+            typer.echo("Error: --line value must be 'text' or 'hex'.", err=True)
+            raise typer.Exit(1)
+
     _ensure_connected()
     
     client = None
@@ -316,6 +328,167 @@ By default, runs a file from your computer. Use -d to run from device.
     
     try:
         if not non_interactive:
+            if line_mode is not None:
+                hex_mode = (line_mode == "hex")
+                lmt = LineModeTerminal(hex_mode=hex_mode)
+                lmt_stop_requested = False
+                lmt_ctrl_c_count = 0
+                lmt_pending: list[bytes] = []
+                lmt_stderr = bytearray()
+
+                old_settings = None
+                fd = None
+                if not IS_WINDOWS:
+                    import tty
+                    import termios
+                    fd = sys.stdin.fileno()
+                    try:
+                        old_settings = termios.tcgetattr(fd)
+                    except Exception:
+                        pass
+
+                def lmt_output_callback(data: bytes, stream_type: str = "stdout") -> None:
+                    nonlocal lmt_ctrl_c_count
+                    lmt_ctrl_c_count = 0
+                    if stream_type == "stderr":
+                        lmt_stderr.extend(data)
+                    else:
+                        lmt.write_output(data)
+
+                def lmt_input_provider() -> bytes | None:
+                    nonlocal lmt_ctrl_c_count, lmt_stop_requested
+                    if lmt_pending:
+                        return lmt_pending.pop(0)
+                    try:
+                        if IS_WINDOWS:
+                            import msvcrt as _ms
+                            if not _ms.kbhit():
+                                return None
+                            w = _ms.getwch()
+                            if w == '\x03':
+                                lmt_ctrl_c_count += 1
+                                if lmt_ctrl_c_count >= 2:
+                                    lmt_stop_requested = True
+                                    return None
+                                lmt_pending.append(CTRL_C)
+                                return None
+                            if w == '\x04':
+                                return CTRL_D
+                            if w in ('\x00', '\xe0'):
+                                _ms.getwch()
+                                return None
+                            lmt_ctrl_c_count = 0
+                            return lmt.handle_key(w.encode('utf-8'))
+                        else:
+                            import select as _sel
+                            r, _, _ = _sel.select([sys.stdin], [], [], 0)
+                            if not r:
+                                return None
+                            ch = os.read(fd, 1)
+                            if ch == CTRL_C:
+                                lmt_ctrl_c_count += 1
+                                if lmt_ctrl_c_count >= 2:
+                                    lmt_stop_requested = True
+                                    return None
+                                lmt_pending.append(CTRL_C)
+                                return None
+                            if ch == CTRL_D:
+                                return CTRL_D
+                            lmt_ctrl_c_count = 0
+                            return lmt.handle_key(ch)
+                    except Exception:
+                        pass
+                    return None
+
+                def lmt_stop_check() -> bool:
+                    return lmt_stop_requested
+
+                lmt_original_sigint = signal.getsignal(signal.SIGINT)
+
+                def lmt_sigint_handler(signum, frame) -> None:
+                    nonlocal lmt_ctrl_c_count, lmt_stop_requested
+                    lmt_ctrl_c_count += 1
+                    if lmt_ctrl_c_count >= 2:
+                        lmt_stop_requested = True
+                    else:
+                        lmt_pending.append(CTRL_C)
+
+                try:
+                    signal.signal(signal.SIGINT, lmt_sigint_handler)
+                    if not IS_WINDOWS and old_settings is not None:
+                        try:
+                            tty.setraw(fd)
+                        except Exception:
+                            pass
+                    lmt.setup()
+                    try:
+                        if device_exec_code:
+                            client.run_interactive(
+                                script_content=device_exec_code,
+                                echo=False,
+                                output_callback=lmt_output_callback,
+                                input_provider=lmt_input_provider,
+                                stop_check=lmt_stop_check,
+                            )
+                        else:
+                            client.run_interactive(
+                                script_path=local_file,
+                                echo=False,
+                                output_callback=lmt_output_callback,
+                                input_provider=lmt_input_provider,
+                                stop_check=lmt_stop_check,
+                            )
+                    except KeyboardInterrupt:
+                        lmt_stop_requested = True
+                        try:
+                            client.send_command('run_stop', timeout=0.3)
+                        except Exception:
+                            pass
+                finally:
+                    lmt.restore()
+                    signal.signal(signal.SIGINT, lmt_original_sigint)
+                    if not IS_WINDOWS:
+                        try:
+                            import termios
+                            if old_settings is not None and fd is not None:
+                                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                        except Exception:
+                            pass
+
+                if lmt_stderr:
+                    stderr_text = lmt_stderr.decode('utf-8', errors='replace').strip()
+                    if stderr_text:
+                        script_abs_path = os.path.abspath(local_file) if local_file else None
+
+                        def lmt_make_file_link(match):
+                            file_ref = match.group(1)
+                            line_num = match.group(2)
+                            if file_ref == "<stdin>":
+                                if script_abs_path:
+                                    return f'File "{script_abs_path}", line {line_num}'
+                                return match.group(0)
+                            replx_home = StoreManager.pkg_root()
+                            possible_paths = [
+                                os.path.join(replx_home, "core", STATE.core or "", "src", file_ref.lstrip('/')),
+                                os.path.join(replx_home, "device", STATE.device or "", "src", file_ref.lstrip('/')),
+                            ]
+                            for path in possible_paths:
+                                if os.path.exists(path):
+                                    return f'File "{path}", line {line_num}'
+                            return match.group(0)
+
+                        linked_text = re.sub(
+                            r'File "([^"]+)", line (\d+)',
+                            lmt_make_file_link,
+                            stderr_text
+                        )
+                        OutputHelper.print_panel(
+                            linked_text,
+                            title="Execution Error",
+                            border_style="red"
+                        )
+                return
+
             stop_requested = False
             ctrl_c_count = 0
             pending_input = []
