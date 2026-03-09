@@ -201,7 +201,8 @@ def run(
     non_interactive: bool = typer.Option(False, "--non-interactive", "-n", help="Non-interactive execution"),
     echo: bool = typer.Option(False, "--echo", "-e", help="Turn on echo for interactive"),
     device: bool = typer.Option(False, "--device", "-d", help="Run from device storage"),
-    line_mode: str | None = typer.Option(None, "--line", metavar="MODE", help="Line input mode: text or hex"),
+    line_text: bool = typer.Option(False, "--line", help="Line input mode: text"),
+    line_hex: bool = typer.Option(False, "--hex", help="Line input mode: hex bytes"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
@@ -220,7 +221,8 @@ By default, runs a file from your computer. Use -d to run from device.
   [yellow]-d, --device[/yellow]          Run from device storage (not local)
   [yellow]-n, --non-interactive[/yellow] Detached mode (don't wait for output)
   [yellow]-e, --echo[/yellow]            Show what's being sent
-  [yellow]--line MODE[/yellow]           Line input mode: [cyan]text[/cyan] or [cyan]hex[/cyan]
+  [yellow]--line[/yellow]                 Line input mode: send text lines
+  [yellow]--hex[/yellow]                  Line input mode: send hex bytes
 
 [bold cyan]Arguments:[/bold cyan]
   [yellow]SCRIPT[/yellow]      Script file to run [red][required][/red]
@@ -240,9 +242,9 @@ By default, runs a file from your computer. Use -d to run from device.
   replx run -dn main.py           [dim]# Run from device, detached[/dim]
 
   [dim]# Line input mode (send one line at a time)[/dim]
-  replx run --line text main.py   [dim]# Type text, Enter to send[/dim]
-  replx run --line hex main.py    [dim]# Type hex bytes (e.g. 0102ff)[/dim]
-  replx main.py --line hex        [dim]# Shortcut form[/dim]
+  replx run --line main.py        [dim]# Type text, Enter to send[/dim]
+  replx run --hex main.py         [dim]# Type hex bytes (e.g. 0102ff)[/dim]
+  replx main.py --hex             [dim]# Shortcut form[/dim]
 
 [bold cyan]How it works:[/bold cyan]
   • Local files: uploaded to device RAM and executed
@@ -271,15 +273,14 @@ By default, runs a file from your computer. Use -d to run from device.
         typer.echo("Error: The --non-interactive and --echo options cannot be used together.", err=True)
         raise typer.Exit(1)
 
+    line_mode = "text" if line_text else ("hex" if line_hex else None)
+
     if line_mode is not None:
         if non_interactive:
-            typer.echo("Error: --line cannot be used with --non-interactive.", err=True)
+            typer.echo("Error: --line/--hex cannot be used with --non-interactive.", err=True)
             raise typer.Exit(1)
         if echo:
-            typer.echo("Error: --line cannot be used with --echo.", err=True)
-            raise typer.Exit(1)
-        if line_mode not in ("text", "hex"):
-            typer.echo("Error: --line value must be 'text' or 'hex'.", err=True)
+            typer.echo("Error: --line/--hex cannot be used with --echo.", err=True)
             raise typer.Exit(1)
 
     _ensure_connected()

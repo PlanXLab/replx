@@ -497,7 +497,7 @@ def main():
         "pkg","setup","init","firmware"
     }
 
-    opts_with_value = {'--port', '-p', '--agent-port', '--line'}
+    opts_with_value = {'--port', '-p', '--agent-port'}
     
     first_nonopt_idx = None
     skip_next = False
@@ -513,7 +513,7 @@ def main():
             break
     first_nonopt = sys.argv[first_nonopt_idx] if first_nonopt_idx is not None else None
 
-    run_opts = {'-n', '--non-interactive', '-e', '--echo', '-d', '--device', '--line'}
+    run_opts = {'-n', '--non-interactive', '-e', '--echo', '-d', '--device', '--line', '--hex'}
     has_device_opt = bool(run_opts & {'-d', '--device'} & set(args))
     
     script_files = []

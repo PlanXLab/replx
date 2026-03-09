@@ -204,11 +204,35 @@ class ExecCommandsMixin:
         if not conn or not conn.repl_protocol:
             send_error("Not connected")
             return
-        
+
         with conn.interactive.lock:
             if conn.interactive.active:
-                send_error("Interactive session already active on this connection")
-                return
+                thread = conn.interactive.thread
+                if thread is not None and thread.is_alive():
+                    conn.interactive.stop_requested = True
+                    try:
+                        conn.repl_protocol.interrupt()
+                    except Exception:
+                        pass
+                else:
+                    conn.interactive.active = False
+                    conn.interactive.thread = None
+
+        for _ in range(20):
+            with conn.interactive.lock:
+                if not conn.interactive.active:
+                    break
+            time.sleep(0.05)
+
+        with conn.interactive.lock:
+            if conn.interactive.active:
+                thread = conn.interactive.thread
+                if thread is None or not thread.is_alive():
+                    conn.interactive.active = False
+                    conn.interactive.thread = None
+                else:
+                    send_error("Interactive session already active on this connection")
+                    return
         
         repl = conn.repl_protocol
         if conn.is_detached():
