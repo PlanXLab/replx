@@ -121,7 +121,7 @@ class AgentServer(
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
         self._datagram_transport: asyncio.DatagramTransport | None = None
-        self._send_socket: Optional[socket.socket] = None
+        self._send_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._cleaned_up: bool = False
     
     @property
@@ -322,7 +322,6 @@ class AgentServer(
             local_addr=(AGENT_HOST, self.agent_port),
         )
         self._datagram_transport = transport
-        self._send_socket = transport.get_extra_info('socket')
         self.running = True
         print(f'replx agent started — listening on {AGENT_HOST}:{self.agent_port} (UDP)')
 
@@ -434,11 +433,9 @@ class AgentServer(
         conn.stop_detached()
     
     def _safe_send(self, data: bytes, addr: tuple) -> None:
-        sock = self._send_socket
-        if not sock:
-            return
+        """Send UDP response via dedicated unbound socket. Thread-safe."""
         try:
-            sock.sendto(data, addr)
+            self._send_socket.sendto(data, addr)
         except Exception:
             pass
 
@@ -774,6 +771,10 @@ class AgentServer(
                     transport.close()
             except Exception:
                 pass
+        try:
+            self._send_socket.close()
+        except Exception:
+            pass
         self._send_socket = None
         self._fast_executor.shutdown(wait=False, cancel_futures=True)
         self._slow_executor.shutdown(wait=False, cancel_futures=True)

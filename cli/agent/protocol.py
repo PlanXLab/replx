@@ -1,5 +1,6 @@
 import json
 import struct
+import threading
 import time
 import base64
 from typing import Dict, Any, Optional, List
@@ -8,6 +9,16 @@ from replx.utils.constants import MAX_PAYLOAD_SIZE
 
 _MAGIC = b'RPLX'
 _VERSION = 1
+
+_seq_lock = threading.Lock()
+_seq_counter = int(time.time() * 1000000) & 0xFFFFFFFE  # even start
+
+
+def _next_seq() -> int:
+    global _seq_counter
+    with _seq_lock:
+        _seq_counter = (_seq_counter + 1) & 0xFFFFFFFF
+        return _seq_counter
 
 
 class AgentProtocol:
@@ -49,7 +60,7 @@ class AgentProtocol:
     @staticmethod
     def create_request(command: str, seq: int = None, ppid: int = None, port: str = None, **args) -> Dict[str, Any]:
         if seq is None:
-            seq = int(time.time() * 1000000) % 0xFFFFFFFF
+            seq = _next_seq()
 
         request = {
             "seq": seq,
