@@ -121,6 +121,7 @@ class AgentServer(
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
         self._datagram_transport: asyncio.DatagramTransport | None = None
+        self._send_socket: Optional[socket.socket] = None
         self._cleaned_up: bool = False
     
     @property
@@ -321,6 +322,7 @@ class AgentServer(
             local_addr=(AGENT_HOST, self.agent_port),
         )
         self._datagram_transport = transport
+        self._send_socket = transport.get_extra_info('socket')
         self.running = True
         print(f'replx agent started — listening on {AGENT_HOST}:{self.agent_port} (UDP)')
 
@@ -432,15 +434,11 @@ class AgentServer(
         conn.stop_detached()
     
     def _safe_send(self, data: bytes, addr: tuple) -> None:
-        """Thread-safe UDP send via the asyncio transport.
-        Responses come from the agent's bound port (same as V1.0 behavior).
-        """
-        transport = self._datagram_transport
-        loop = self._loop
-        if not transport or transport.is_closing() or not loop:
+        sock = self._send_socket
+        if not sock:
             return
         try:
-            loop.call_soon_threadsafe(transport.sendto, data, addr)
+            sock.sendto(data, addr)
         except Exception:
             pass
 
@@ -597,7 +595,6 @@ class AgentServer(
         if not conn:
             raise ValueError(f"Connection {target_port} not found")
         
-        # Disconnect handles stopping detached script and drain thread via stop_detached()
         self.connection_manager.disconnect(target_port)
         self.session_manager.remove_connection_from_all_sessions(target_port)
         
@@ -777,6 +774,7 @@ class AgentServer(
                     transport.close()
             except Exception:
                 pass
+        self._send_socket = None
         self._fast_executor.shutdown(wait=False, cancel_futures=True)
         self._slow_executor.shutdown(wait=False, cancel_futures=True)
 
