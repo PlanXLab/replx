@@ -2,6 +2,7 @@ import os
 import sys
 import socket
 import time
+import tempfile
 from typing import Dict, Any, Optional, Callable
 
 from replx.utils.constants import DEFAULT_AGENT_PORT, AGENT_HOST, MAX_UDP_SIZE
@@ -327,7 +328,18 @@ class AgentClient:
             cmd.append(str(port))
 
         proc = None
+        stderr_file = None
+        stderr_path = None
+
         if background:
+            try:
+                fd, stderr_path = tempfile.mkstemp(prefix='replx_agent_', suffix='.err')
+                os.close(fd)
+                stderr_file = open(stderr_path, 'w', encoding='utf-8')
+            except Exception:
+                stderr_file = None
+                stderr_path = None
+
             if sys.platform == 'win32':
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -337,27 +349,48 @@ class AgentClient:
                     cmd,
                     creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=stderr_file if stderr_file else subprocess.DEVNULL,
                     startupinfo=startupinfo
                 )
             else:
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=stderr_file if stderr_file else subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
                     start_new_session=True,
                     close_fds=True
                 )
+
+            if stderr_file:
+                stderr_file.close()
+                stderr_file = None
         else:
             proc = subprocess.Popen(cmd)
 
-        for _ in range(100):
-            time.sleep(0.1)
-            if proc is not None and proc.poll() is not None:
-                raise RuntimeError(f"Failed to start agent (process exited with code {proc.returncode})")
-            if AgentClient.is_agent_running(port=port):
-                return True
+        try:
+            for _ in range(100):
+                time.sleep(0.1)
+                if proc is not None and proc.poll() is not None:
+                    detail = ''
+                    if stderr_path:
+                        try:
+                            with open(stderr_path, 'r', encoding='utf-8', errors='replace') as f:
+                                detail = f.read().strip()
+                        except Exception:
+                            pass
+                    msg = f"Failed to start agent (process exited with code {proc.returncode})"
+                    if detail:
+                        msg += f"\n{detail}"
+                    raise RuntimeError(msg)
+                if AgentClient.is_agent_running(port=port):
+                    return True
+        finally:
+            if stderr_path:
+                try:
+                    os.unlink(stderr_path)
+                except Exception:
+                    pass
 
         raise RuntimeError("Failed to start agent (timeout)")
 
