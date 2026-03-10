@@ -332,11 +332,16 @@ def enable_vt_mode() -> bool:
         return False
 
 
+_EOL_MODES = ("cr", "lf", "crlf")
+_EOL_BYTES = {"cr": b"\r", "lf": b"\n", "crlf": b"\r\n"}
+
+
 class LineModeTerminal:
     PROMPT = "> "
 
     def __init__(self, hex_mode: bool = False):
         self.hex_mode = hex_mode
+        self._eol: str = "cr"  # "cr" | "lf" | "crlf"
         self._buf: list[str] = []
         self._cols, self._rows = lmt_terminal_size()
         self._input_row = self._rows
@@ -380,6 +385,10 @@ class LineModeTerminal:
             return self._commit()
         if ch in (b"\x7f", b"\x08"):
             return self._backspace()
+        if ch == b"\x14":  # Ctrl+T — toggle EOL mode (text mode only)
+            if not self.hex_mode:
+                self._toggle_eol()
+            return None
         if ch == b"\x15":
             self._buf.clear()
             self._hist_idx = -1
@@ -401,7 +410,10 @@ class LineModeTerminal:
     def _draw_input(self) -> None:
         lmt_move(self._input_row, 1)
         lmt_erase_line()
-        mode_tag = "[hex] " if self.hex_mode else ""
+        if self.hex_mode:
+            mode_tag = "[hex] "
+        else:
+            mode_tag = f"[{self._eol.upper()}] "
         err = f"  \x1b[31m{self._error_msg}\x1b[0m" if self._error_msg else ""
         content = "".join(self._buf)
         lmt_write(f"{self.PROMPT}{mode_tag}{content}{err}")
@@ -439,6 +451,11 @@ class LineModeTerminal:
         self._draw_input()
         return None
 
+    def _toggle_eol(self) -> None:
+        idx = _EOL_MODES.index(self._eol)
+        self._eol = _EOL_MODES[(idx + 1) % len(_EOL_MODES)]
+        self._draw_input()
+
     def _commit(self) -> bytes | None:
         raw = "".join(self._buf).strip()
         self._buf.clear()
@@ -462,7 +479,7 @@ class LineModeTerminal:
                 self._history.pop(0)
         self._error_msg = ""
         self._draw_input()
-        return payload if self.hex_mode else payload + b"\r"
+        return payload if self.hex_mode else payload + _EOL_BYTES[self._eol]
 
     @staticmethod
     def _parse_hex(s: str) -> tuple[bytes | None, str | None]:

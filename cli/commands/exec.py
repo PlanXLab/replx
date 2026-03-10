@@ -259,6 +259,7 @@ By default, runs a file from your computer. Use -d to run from device.
   [yellow]Backspace[/yellow]   Delete last character
   [yellow]Up/Down[/yellow]     Recall previous input (history)
   [yellow]Ctrl+U[/yellow]      Clear input line
+  [yellow]Ctrl+T[/yellow]      Toggle EOL: [yellow]CR[/yellow] → [yellow]LF[/yellow] → [yellow]CRLF[/yellow] → ... (shown in prompt)
   [yellow]Ctrl+C[/yellow]      Interrupt and exit (--hex: twice; all other modes: once)
 
 [bold cyan]Note (--hex):[/bold cyan]
