@@ -274,21 +274,41 @@ By default, runs a file from your computer. Use -d to run from device.
         raise typer.Exit()
     
     if not script_file:
-        typer.echo("Error: Missing required argument 'SCRIPT_FILE'.", err=True)
+        OutputHelper.print_panel(
+            "Missing required argument 'SCRIPT_FILE'.",
+            title="Error",
+            title_align="left",
+            border_style="red"
+        )
         raise typer.Exit(1)
     
     if non_interactive and echo:
-        typer.echo("Error: The --non-interactive and --echo options cannot be used together.", err=True)
+        OutputHelper.print_panel(
+            "--non-interactive and --echo cannot be used together.",
+            title="Error",
+            title_align="left",
+            border_style="red"
+        )
         raise typer.Exit(1)
 
     line_mode = "text" if line_text else ("hex" if line_hex else None)
 
     if line_mode is not None:
         if non_interactive:
-            typer.echo("Error: --text/--hex cannot be used with --non-interactive.", err=True)
+            OutputHelper.print_panel(
+                "--text/--hex cannot be used with --non-interactive.",
+                title="Error",
+                title_align="left",
+                border_style="red"
+            )
             raise typer.Exit(1)
         if echo:
-            typer.echo("Error: --text/--hex cannot be used with --echo.", err=True)
+            OutputHelper.print_panel(
+                "--text/--hex cannot be used with --echo.",
+                title="Error",
+                title_align="left",
+                border_style="red"
+            )
             raise typer.Exit(1)
 
     _ensure_connected()
