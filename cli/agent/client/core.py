@@ -160,6 +160,19 @@ class AgentClient:
         try:
             while True:
                 if stop_check and stop_check():
+                    # Flush any remaining pending input (e.g. CTRL_C) before stopping,
+                    # so the board receives the interrupt signal before run_stop is called.
+                    if input_provider:
+                        for _ in range(16):
+                            try:
+                                input_data = input_provider()
+                                if input_data:
+                                    input_msg = AgentProtocol.create_input(seq, input_data, ppid=self._ppid, port=self.device_port)
+                                    self.sock.sendto(AgentProtocol.encode_message(input_msg), (AGENT_HOST, self.agent_port))
+                                else:
+                                    break
+                            except Exception:
+                                break
                     try:
                         self.send_command(Cmd.RUN_STOP, timeout=0.5)
                     except Exception:

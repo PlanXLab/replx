@@ -411,6 +411,7 @@ By default, runs a file from your computer. Use -d to run from device.
                             if w == '\x03':
                                 if not hex_mode:
                                     lmt_stop_requested = True
+                                    lmt_pending.append(CTRL_C)
                                     return None
                                 lmt_ctrl_c_count += 1
                                 if lmt_ctrl_c_count >= 2:
@@ -439,6 +440,7 @@ By default, runs a file from your computer. Use -d to run from device.
                             if ch == CTRL_C:
                                 if not hex_mode:
                                     lmt_stop_requested = True
+                                    lmt_pending.append(CTRL_C)
                                     return None
                                 lmt_ctrl_c_count += 1
                                 if lmt_ctrl_c_count >= 2:
@@ -468,6 +470,7 @@ By default, runs a file from your computer. Use -d to run from device.
                     nonlocal lmt_ctrl_c_count, lmt_stop_requested
                     if not hex_mode:
                         lmt_stop_requested = True
+                        lmt_pending.append(CTRL_C)
                         return
                     lmt_ctrl_c_count += 1
                     if lmt_ctrl_c_count >= 2:
