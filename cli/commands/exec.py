@@ -259,7 +259,7 @@ By default, runs a file from your computer. Use -d to run from device.
   [yellow]Backspace[/yellow]   Delete last character
   [yellow]Up/Down[/yellow]     Recall previous input (history)
   [yellow]Ctrl+U[/yellow]      Clear input line
-  [yellow]Ctrl+C[/yellow]      Interrupt and exit (--text: once, --hex: twice)
+  [yellow]Ctrl+C[/yellow]      Interrupt and exit (--hex: twice; all other modes: once)
 
 [bold cyan]Note (--hex):[/bold cyan]
   MicroPython interprets 0x03 bytes as Ctrl+C (KeyboardInterrupt).
@@ -532,7 +532,6 @@ By default, runs a file from your computer. Use -d to run from device.
                 return
 
             stop_requested = False
-            ctrl_c_count = 0
             pending_input = []
             stderr_buffer = bytearray()
             stdout_ended_with_newline = True
@@ -549,8 +548,7 @@ By default, runs a file from your computer. Use -d to run from device.
                     pass
             
             def output_callback(data: bytes, stream_type: str = "stdout"):
-                nonlocal ctrl_c_count, stdout_ended_with_newline
-                ctrl_c_count = 0
+                nonlocal stdout_ended_with_newline
                 try:
                     if stream_type == "stderr":
                         stderr_buffer.extend(data)
@@ -570,7 +568,7 @@ By default, runs a file from your computer. Use -d to run from device.
                     pass
             
             def input_provider() -> bytes:
-                nonlocal ctrl_c_count, stop_requested
+                nonlocal stop_requested
                 
                 if pending_input:
                     return pending_input.pop(0)
@@ -581,10 +579,7 @@ By default, runs a file from your computer. Use -d to run from device.
                         if msvcrt.kbhit():
                             ch = msvcrt.getwch()
                             if ch == '\x03':
-                                ctrl_c_count += 1
-                                if ctrl_c_count >= 2:
-                                    stop_requested = True
-                                    return None
+                                stop_requested = True
                                 return CTRL_C
                             elif ch == '\x04':
                                 return CTRL_D
@@ -613,7 +608,6 @@ By default, runs a file from your computer. Use -d to run from device.
                                 }
                                 return ext_map.get(ext, b'')
                             else:
-                                ctrl_c_count = 0
                                 if echo:
                                     sys.stdout.write(ch)
                                     sys.stdout.flush()
@@ -624,19 +618,14 @@ By default, runs a file from your computer. Use -d to run from device.
                         if r:
                             ch = os.read(sys.stdin.fileno(), 1)
                             if ch == CTRL_C:
-                                ctrl_c_count += 1
-                                if ctrl_c_count >= 2:
-                                    stop_requested = True
-                                    return None
+                                stop_requested = True
                                 return CTRL_C
                             elif ch == b'\n':
-                                ctrl_c_count = 0
                                 if echo:
                                     sys.stdout.buffer.write(b'\r\n')
                                     sys.stdout.buffer.flush()
                                 return b'\r'
                             else:
-                                ctrl_c_count = 0
                                 if echo:
                                     sys.stdout.buffer.write(ch)
                                     sys.stdout.buffer.flush()
@@ -651,12 +640,9 @@ By default, runs a file from your computer. Use -d to run from device.
             original_sigint = signal.getsignal(signal.SIGINT)
             
             def sigint_handler(signum, frame):
-                nonlocal ctrl_c_count, stop_requested
-                ctrl_c_count += 1
-                if ctrl_c_count >= 2:
-                    stop_requested = True
-                else:
-                    pending_input.append(CTRL_C)
+                nonlocal stop_requested
+                stop_requested = True
+                pending_input.append(CTRL_C)
             
             try:
                 signal.signal(signal.SIGINT, sigint_handler)
