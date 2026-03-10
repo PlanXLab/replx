@@ -173,10 +173,39 @@ class AgentClient:
                                     break
                             except Exception:
                                 break
-                    try:
-                        self.send_command(Cmd.RUN_STOP, timeout=0.5)
-                    except Exception:
-                        pass
+
+                    # Grace period: wait for the board to finish its KeyboardInterrupt
+                    # handler (e.g. finally blocks, cleanup code, print statements).
+                    # If the script completes within the grace period, we receive all
+                    # output and break cleanly without calling run_stop.
+                    # Only force-stop if the board does not exit on its own.
+                    grace_deadline = time.time() + 3.0
+                    graceful = False
+                    while time.time() < grace_deadline:
+                        try:
+                            data, addr = self.sock.recvfrom(MAX_UDP_SIZE)
+                            msg = AgentProtocol.decode_message(data)
+                            if msg and msg.get('seq') == seq:
+                                if msg.get('type') == 'stream':
+                                    output = msg.get('output', '')
+                                    if output and output_callback:
+                                        output_callback(output.encode('utf-8'), 'stdout')
+                                    if msg.get('completed'):
+                                        error = msg.get('error')
+                                        if error and output_callback:
+                                            output_callback(error.encode('utf-8'), 'stderr')
+                                        graceful = True
+                                        break
+                        except socket.timeout:
+                            pass
+                        except Exception:
+                            pass
+
+                    if not graceful:
+                        try:
+                            self.send_command(Cmd.RUN_STOP, timeout=0.5)
+                        except Exception:
+                            pass
                     break
 
                 now = time.time()
