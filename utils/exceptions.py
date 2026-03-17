@@ -11,23 +11,7 @@ class TransportError(ReplxException):
     pass
 
 
-class SerialError(TransportError):
-    pass
-
-
 class ProtocolError(ReplxException):
-    pass
-
-
-class RawReplError(ProtocolError):
-    pass
-
-
-class RawPasteError(ProtocolError):
-    pass
-
-
-class ExecutionError(ProtocolError):
     pass
 
 
@@ -35,21 +19,9 @@ class FileSystemError(ReplxException):
     pass
 
 
-class DownloadError(FileSystemError):
+class ValidationError(ReplxException):
     pass
 
 
-class UploadError(FileSystemError):
-    pass
-
-
-class CLIError(ReplxException):
-    pass
-
-
-class ValidationError(CLIError):
-    pass
-
-
-class CompilationError(CLIError):
+class CompilationError(ReplxException):
     pass

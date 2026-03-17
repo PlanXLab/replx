@@ -6,6 +6,8 @@ from pathlib import Path
 
 import typer
 
+from replx.utils.constants import HTTP_REQUEST_TIMEOUT
+
 
 class StoreManager:    
     HOME_STORE = Path.home() / ".replx"
@@ -81,7 +83,7 @@ class StoreManager:
     def load_remote_meta(owner: str, repo: str, ref_: str) -> dict:
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{StoreManager.META_NAME}?ref={ref_}"
         req = urllib.request.Request(url, headers=StoreManager.gh_headers())
-        with urllib.request.urlopen(req) as r:
+        with urllib.request.urlopen(req, timeout=HTTP_REQUEST_TIMEOUT) as r:
             data = json.load(r)
         b64 = (data.get("content") or "").replace("\n", "")
         if not b64:

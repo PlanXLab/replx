@@ -19,20 +19,12 @@ from ..helpers import (
     get_panel_box, CONSOLE_WIDTH
 )
 from replx.utils import device_name_to_path
+from replx.utils.constants import HTTP_REQUEST_TIMEOUT
 from ..config import STATE
 from ..connection import (
     _ensure_connected, _create_agent_client
 )
 from ..app import app
-
-
-def _format_size(b: int) -> str:
-    if b < 1024:
-        return f"{b}B"
-    elif b < 1024 * 1024:
-        return f"{b/1024:.1f}KB"
-    else:
-        return f"{b/(1024*1024):.1f}MB"
 
 
 def _upload_file_with_progress(client, local_path: str, remote_path: str, progress_callback):
@@ -899,9 +891,9 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
                     
                     total_sent = cumulative + bytes_sent
                     
-                    msg = f"[{idx+1}/{total}] {filename} ({_format_size(file_size)})"
+                    msg = f"[{idx+1}/{total}] {filename} ({OutputHelper.format_bytes(file_size)})"
                     
-                    counter_text = f"({_format_size(total_sent)}/{_format_size(total_bytes_all)})"
+                    counter_text = f"({OutputHelper.format_bytes(total_sent)}/{OutputHelper.format_bytes(total_bytes_all)})"
                     panel = OutputHelper.create_progress_panel(total_sent, total_bytes_all, title=f"Installing {spec} to {STATE.device}", message=msg, counter_text=counter_text)
                     
                     if update_callback:
@@ -919,7 +911,7 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
                 if resp and resp.get('error'):
                     pass
             
-            panel = OutputHelper.create_progress_panel(total_bytes_all, total_bytes_all, title=f"Installing {spec} to {STATE.device}", message="Complete", counter_text=f"({_format_size(total_bytes_all)}/{_format_size(total_bytes_all)})")
+            panel = OutputHelper.create_progress_panel(total_bytes_all, total_bytes_all, title=f"Installing {spec} to {STATE.device}", message="Complete", counter_text=f"({OutputHelper.format_bytes(total_bytes_all)}/{OutputHelper.format_bytes(total_bytes_all)})")
             if update_callback:
                 update_callback(panel)
             else:
@@ -928,7 +920,7 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
         if live is not None:
             do_install(live)
         else:
-            with Live(OutputHelper.create_progress_panel(0, total_bytes_all, title=f"Installing {spec} to {STATE.device}", message=f"Processing {total} file(s)...", counter_text=f"(0B/{_format_size(total_bytes_all)})"), console=OutputHelper._console, refresh_per_second=10) as internal_live:
+            with Live(OutputHelper.create_progress_panel(0, total_bytes_all, title=f"Installing {spec} to {STATE.device}", message=f"Processing {total} file(s)...", counter_text=f"(0B/{OutputHelper.format_bytes(total_bytes_all)})"), console=OutputHelper._console, refresh_per_second=10) as internal_live:
                 do_install(internal_live)
         
         return {"files": total, "bytes": total_bytes_all}
@@ -1031,7 +1023,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                 if isinstance(data, dict):
                     progress_state["current"] = data.get("current", 0)
         
-        with Live(OutputHelper.create_progress_panel(0, total_size, title=f"Updating {folder_name} to {STATE.device}", message=f"Preparing...", counter_text=f"0/{_format_size(total_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
+        with Live(OutputHelper.create_progress_panel(0, total_size, title=f"Updating {folder_name} to {STATE.device}", message=f"Preparing...", counter_text=f"0/{OutputHelper.format_bytes(total_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
             for idx, (local_file, remote, _, file_size) in enumerate(upload_files):
                 filename = os.path.basename(local_file)
                 
@@ -1058,7 +1050,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                         current_bytes = progress_state["current"]
                         cumulative = progress_state["cumulative"]
                     total_sent = cumulative + current_bytes
-                    live.update(OutputHelper.create_progress_panel(total_sent, total_size, title=f"Updating {folder_name} to {STATE.device}", message=f"[{idx+1}/{total_files}] {filename} ({_format_size(file_size)})", counter_text=f"{_format_size(total_sent)}/{_format_size(total_size)}"))
+                    live.update(OutputHelper.create_progress_panel(total_sent, total_size, title=f"Updating {folder_name} to {STATE.device}", message=f"[{idx+1}/{total_files}] {filename} ({OutputHelper.format_bytes(file_size)})", counter_text=f"{OutputHelper.format_bytes(total_sent)}/{OutputHelper.format_bytes(total_size)}"))
                     time.sleep(0.05)
                 
                 upload_thread.join()
@@ -1066,11 +1058,11 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                 with progress_lock:
                     progress_state["cumulative"] += file_size
             
-            live.update(OutputHelper.create_progress_panel(total_size, total_size, title=f"Updating {folder_name} to {STATE.device}", message="Complete", counter_text=f"{_format_size(total_size)}/{_format_size(total_size)}"))
+            live.update(OutputHelper.create_progress_panel(total_size, total_size, title=f"Updating {folder_name} to {STATE.device}", message="Complete", counter_text=f"{OutputHelper.format_bytes(total_size)}/{OutputHelper.format_bytes(total_size)}"))
         
         target_display = f"/{base_target}/"
         OutputHelper.print_panel(
-            f"[green]{total_files}[/green] file(s) ([cyan]{_format_size(total_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
+            f"[green]{total_files}[/green] file(s) ([cyan]{OutputHelper.format_bytes(total_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
             title="Update Complete",
             border_style="green"
         )
@@ -1106,7 +1098,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                 if isinstance(data, dict):
                     progress_state["current"] = data.get("current", 0)
         
-        with Live(OutputHelper.create_progress_panel(0, file_size, title=f"Updating {name} to {STATE.device}", message="Uploading...", counter_text=f"0/{_format_size(file_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
+        with Live(OutputHelper.create_progress_panel(0, file_size, title=f"Updating {name} to {STATE.device}", message="Uploading...", counter_text=f"0/{OutputHelper.format_bytes(file_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
             upload_result = [None]
             def do_upload():
                 try:
@@ -1125,7 +1117,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
             while upload_thread.is_alive():
                 with progress_lock:
                     current_bytes = progress_state["current"]
-                live.update(OutputHelper.create_progress_panel(current_bytes, file_size, title=f"Updating {name} to {STATE.device}", message="Uploading...", counter_text=f"{_format_size(current_bytes)}/{_format_size(file_size)}"))
+                live.update(OutputHelper.create_progress_panel(current_bytes, file_size, title=f"Updating {name} to {STATE.device}", message="Uploading...", counter_text=f"{OutputHelper.format_bytes(current_bytes)}/{OutputHelper.format_bytes(file_size)}"))
                 time.sleep(0.05)
             
             upload_thread.join()
@@ -1138,11 +1130,11 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                     border_style="red"
                 )
                 return 0
-            live.update(OutputHelper.create_progress_panel(file_size, file_size, title=f"Updating {name} to {STATE.device}", message="Complete", counter_text=f"{_format_size(file_size)}/{_format_size(file_size)}"))
+            live.update(OutputHelper.create_progress_panel(file_size, file_size, title=f"Updating {name} to {STATE.device}", message="Complete", counter_text=f"{OutputHelper.format_bytes(file_size)}/{OutputHelper.format_bytes(file_size)}"))
         
         target_display = f"/{target_dir}/" if target_path else "/lib/"
         OutputHelper.print_panel(
-            f"[green]1[/green] file ([cyan]{_format_size(file_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
+            f"[green]1[/green] file ([cyan]{OutputHelper.format_bytes(file_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
             title="Update Complete",
             border_style="green"
         )
@@ -1176,7 +1168,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
         dl_dir.mkdir(parents=True, exist_ok=True)
         dst = str(dl_dir / fname)
         try:
-            with urllib.request.urlopen(spec) as r, open(dst, "wb") as f:
+            with urllib.request.urlopen(spec, timeout=HTTP_REQUEST_TIMEOUT) as r, open(dst, "wb") as f:
                 f.write(r.read())
         except Exception as e:
             OutputHelper.print_panel(
@@ -1290,13 +1282,13 @@ def _pkg_clean(args: list[str]):
         if core_exists:
             size = get_dir_size(core_path)
             shutil.rmtree(core_path)
-            removed_items.append(f"core/{STATE.core}/ ({_format_size(size)})")
+            removed_items.append(f"core/{STATE.core}/ ({OutputHelper.format_bytes(size)})")
             total_size += size
         
         if device_exists:
             size = get_dir_size(device_path)
             shutil.rmtree(device_path)
-            removed_items.append(f"device/{STATE.device}/ ({_format_size(size)})")
+            removed_items.append(f"device/{STATE.device}/ ({OutputHelper.format_bytes(size)})")
             total_size += size
         
         if meta_exists:
@@ -1334,7 +1326,7 @@ def _pkg_clean(args: list[str]):
             items_text = "\n".join(f"  [green]✓[/green] {item}" for item in removed_items)
             OutputHelper.print_panel(
                 f"Removed from local store:\n{items_text}\n\n"
-                f"Total freed: [bright_yellow]{_format_size(total_size)}[/bright_yellow]",
+                f"Total freed: [bright_yellow]{OutputHelper.format_bytes(total_size)}[/bright_yellow]",
                 title="Clean Complete",
                 border_style="green"
             )

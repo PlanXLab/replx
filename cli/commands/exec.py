@@ -195,6 +195,381 @@ Quick way to execute code without creating a file.
             print(result['output'], end='')
 
 
+def _display_execution_error(stderr_data: bytearray, local_file: str | None) -> None:
+    if not stderr_data:
+        return
+    stderr_text = stderr_data.decode('utf-8', errors='replace').strip()
+    if not stderr_text:
+        return
+    script_abs_path = os.path.abspath(local_file) if local_file else None
+
+    def _make_link(match):
+        file_ref = match.group(1)
+        line_num = match.group(2)
+        if file_ref == "<stdin>":
+            if script_abs_path:
+                return f'File "{script_abs_path}", line {line_num}'
+            return match.group(0)
+        replx_home = StoreManager.pkg_root()
+        possible_paths = [
+            os.path.join(replx_home, "core", STATE.core or "", "src", file_ref.lstrip('/')),
+            os.path.join(replx_home, "device", STATE.device or "", "src", file_ref.lstrip('/')),
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                return f'File "{path}", line {line_num}'
+        return match.group(0)
+
+    linked_text = re.sub(r'File "([^"]+)", line (\d+)', _make_link, stderr_text)
+    OutputHelper.print_panel(linked_text, title="Execution Error", border_style="red")
+
+
+def _run_line_mode(client, device_exec_code: str | None, local_file: str | None, hex_mode: bool) -> None:
+    lmt = LineModeTerminal(hex_mode=hex_mode)
+    stop_requested = False
+    ctrl_c_count = 0
+    pending: list[bytes] = []
+    stderr_data = bytearray()
+
+    old_settings = None
+    fd = None
+    if not IS_WINDOWS:
+        import tty
+        import termios
+        fd = sys.stdin.fileno()
+        try:
+            old_settings = termios.tcgetattr(fd)
+        except Exception:
+            pass
+
+    def output_callback(data: bytes, stream_type: str = "stdout") -> None:
+        nonlocal ctrl_c_count
+        ctrl_c_count = 0
+        if stream_type == "stderr":
+            stderr_data.extend(data)
+        else:
+            lmt.write_output(data)
+
+    def input_provider() -> bytes | None:
+        nonlocal ctrl_c_count, stop_requested
+        if pending:
+            return pending.pop(0)
+        try:
+            if IS_WINDOWS:
+                import msvcrt as _ms
+                if not _ms.kbhit():
+                    return None
+                w = _ms.getwch()
+                if w == '\x03':
+                    if not hex_mode:
+                        stop_requested = True
+                        pending.append(CTRL_C)
+                        return None
+                    ctrl_c_count += 1
+                    if ctrl_c_count >= 2:
+                        stop_requested = True
+                        return None
+                    pending.append(CTRL_C)
+                    return None
+                if w == '\x04':
+                    return CTRL_D
+                if w in ('\x00', '\xe0'):
+                    ext = _ms.getwch()
+                    _arrows = {'H': b'\x1b[A', 'P': b'\x1b[B',
+                               'M': b'\x1b[C', 'K': b'\x1b[D'}
+                    mapped = _arrows.get(ext)
+                    if mapped is not None:
+                        return lmt.handle_key(mapped)
+                    return None
+                ctrl_c_count = 0
+                return lmt.handle_key(w.encode('utf-8'))
+            else:
+                import select as _sel
+                r, _, _ = _sel.select([sys.stdin], [], [], 0)
+                if not r:
+                    return None
+                ch = os.read(fd, 1)
+                if ch == CTRL_C:
+                    if not hex_mode:
+                        stop_requested = True
+                        pending.append(CTRL_C)
+                        return None
+                    ctrl_c_count += 1
+                    if ctrl_c_count >= 2:
+                        stop_requested = True
+                        return None
+                    pending.append(CTRL_C)
+                    return None
+                if ch == CTRL_D:
+                    return CTRL_D
+                if ch == b'\x1b':
+                    r3, _, _ = _sel.select([sys.stdin], [], [], 0.02)
+                    if r3:
+                        ch += os.read(fd, 4)
+                ctrl_c_count = 0
+                return lmt.handle_key(ch)
+        except Exception:
+            pass
+        return None
+
+    def stop_check() -> bool:
+        return stop_requested
+
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def sigint_handler(signum, frame) -> None:
+        nonlocal ctrl_c_count, stop_requested
+        if not hex_mode:
+            stop_requested = True
+            pending.append(CTRL_C)
+            return
+        ctrl_c_count += 1
+        if ctrl_c_count >= 2:
+            stop_requested = True
+        else:
+            pending.append(CTRL_C)
+
+    try:
+        signal.signal(signal.SIGINT, sigint_handler)
+        if not IS_WINDOWS and old_settings is not None:
+            try:
+                tty.setraw(fd)
+            except Exception:
+                pass
+        lmt.setup()
+        try:
+            if device_exec_code:
+                client.run_interactive(
+                    script_content=device_exec_code,
+                    echo=False,
+                    output_callback=output_callback,
+                    input_provider=input_provider,
+                    stop_check=stop_check,
+                )
+            else:
+                client.run_interactive(
+                    script_path=local_file,
+                    echo=False,
+                    output_callback=output_callback,
+                    input_provider=input_provider,
+                    stop_check=stop_check,
+                )
+        except KeyboardInterrupt:
+            stop_requested = True
+            try:
+                client.send_command('run_stop', timeout=0.3)
+            except Exception:
+                pass
+    finally:
+        lmt.restore()
+        signal.signal(signal.SIGINT, original_sigint)
+        if not IS_WINDOWS:
+            try:
+                import termios
+                if old_settings is not None and fd is not None:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
+
+    _display_execution_error(stderr_data, local_file)
+
+
+def _run_interactive_mode(client, device_exec_code: str | None, local_file: str | None, echo: bool) -> None:
+    stop_requested = False
+    pending_input = []
+    stderr_buffer = bytearray()
+    stdout_ended_with_newline = True
+
+    old_settings = None
+    fd = None
+    if not IS_WINDOWS:
+        import tty
+        import termios
+        fd = sys.stdin.fileno()
+        try:
+            old_settings = termios.tcgetattr(fd)
+        except Exception:
+            pass
+
+    def output_callback(data: bytes, stream_type: str = "stdout"):
+        nonlocal stdout_ended_with_newline
+        try:
+            if stream_type == "stderr":
+                stderr_buffer.extend(data)
+            else:
+                if not IS_WINDOWS:
+                    data = data.replace(b'\r\n', b'\n')
+                    data = data.replace(b'\r', b'\n')
+                    data = data.replace(b'\n', b'\r\n')
+                else:
+                    data = data.replace(b'\r', b'')
+
+                if data:
+                    stdout_ended_with_newline = data.endswith(b'\n')
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+        except Exception:
+            pass
+
+    def input_provider() -> bytes:
+        nonlocal stop_requested
+
+        if pending_input:
+            return pending_input.pop(0)
+
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    if ch == '\x03':
+                        stop_requested = True
+                        return CTRL_C
+                    elif ch == '\x04':
+                        return CTRL_D
+                    elif ch == '\r':
+                        if echo:
+                            sys.stdout.write('\r\n')
+                            sys.stdout.flush()
+                        return b'\r'
+                    elif ch == '\n':
+                        if echo:
+                            sys.stdout.write('\r\n')
+                            sys.stdout.flush()
+                        return b'\r'
+                    elif ch == '\x08':
+                        if echo:
+                            sys.stdout.write('\b \b')
+                            sys.stdout.flush()
+                        return b'\x08'
+                    elif ch in ('\x00', '\xe0'):
+                        ext = msvcrt.getwch()
+                        ext_map = {
+                            'H': b'\x1b[A',
+                            'P': b'\x1b[B',
+                            'M': b'\x1b[C',
+                            'K': b'\x1b[D',
+                        }
+                        return ext_map.get(ext, b'')
+                    else:
+                        if echo:
+                            sys.stdout.write(ch)
+                            sys.stdout.flush()
+                        return ch.encode('utf-8')
+            else:
+                import select
+                r, _, _ = select.select([sys.stdin], [], [], 0)
+                if r:
+                    ch = os.read(sys.stdin.fileno(), 1)
+                    if ch == CTRL_C:
+                        stop_requested = True
+                        return CTRL_C
+                    elif ch == b'\n':
+                        if echo:
+                            sys.stdout.buffer.write(b'\r\n')
+                            sys.stdout.buffer.flush()
+                        return b'\r'
+                    else:
+                        if echo:
+                            sys.stdout.buffer.write(ch)
+                            sys.stdout.buffer.flush()
+                        return ch
+        except Exception:
+            pass
+        return None
+
+    def stop_check() -> bool:
+        return stop_requested
+
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def sigint_handler(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+        pending_input.append(CTRL_C)
+
+    try:
+        signal.signal(signal.SIGINT, sigint_handler)
+
+        if not IS_WINDOWS:
+            if old_settings is not None:
+                try:
+                    tty.setraw(fd)
+                except Exception:
+                    pass
+
+        try:
+            if device_exec_code:
+                client.run_interactive(
+                    script_content=device_exec_code,
+                    echo=echo,
+                    output_callback=output_callback,
+                    input_provider=input_provider,
+                    stop_check=stop_check
+                )
+            else:
+                client.run_interactive(
+                    script_path=local_file,
+                    echo=echo,
+                    output_callback=output_callback,
+                    input_provider=input_provider,
+                    stop_check=stop_check
+                )
+        except KeyboardInterrupt:
+            stop_requested = True
+            try:
+                client.send_command('run_stop', timeout=0.3)
+            except Exception:
+                pass
+            if not stdout_ended_with_newline:
+                print("\n[Interrupted]")
+            return
+
+        if not stdout_ended_with_newline:
+            print()
+
+        _display_execution_error(stderr_buffer, local_file)
+
+    except KeyboardInterrupt:
+        stop_requested = True
+        try:
+            client.send_command('run_stop', timeout=0.1)
+        except Exception:
+            pass
+        print("\n[Interrupted by user]")
+    except Exception as e:
+        error_msg = str(e)
+        if 'Not connected' in error_msg:
+            OutputHelper.print_panel(
+                "Not connected to any device.\n\nRun [bright_green]replx --port COM3 setup[/bright_green] first.",
+                title="Connection Required",
+                border_style="red"
+            )
+        elif 'busy' in error_msg.lower():
+            OutputHelper.print_panel(
+                f"{error_msg}",
+                title="Device Busy",
+                border_style="yellow"
+            )
+        else:
+            OutputHelper.print_panel(
+                f"Error: {str(e)}",
+                title="Execution Failed",
+                border_style="red"
+            )
+        raise typer.Exit(1)
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+
+        if not IS_WINDOWS:
+            try:
+                import termios
+                if old_settings is not None and fd is not None:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
+
+
 @app.command(rich_help_panel="Execution")
 def run(
     script_file: str = typer.Argument("", help="Script file to run"),

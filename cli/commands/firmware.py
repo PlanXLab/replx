@@ -461,14 +461,6 @@ def _firmware_update(force: bool = False):
         )
         return
     
-    def format_bytes(b):
-        if b < 1024:
-            return f"{b}B"
-        elif b < 1024 * 1024:
-            return f"{b/1024:.1f}KB"
-        else:
-            return f"{b/(1024*1024):.1f}MB"
-    
     spinner = Spinner("dots", style="bright_cyan")
     
     def make_update_panel(step: str, progress: float = None, detail: str = None, use_spinner: bool = True, 
@@ -609,7 +601,7 @@ def _firmware_update(force: bool = False):
                     live.update(make_update_panel(
                         "Copying firmware...",
                         progress=progress,
-                        detail=f"{format_bytes(copied)} / {format_bytes(file_size)}"
+                        detail=f"{OutputHelper.format_bytes(copied)} / {OutputHelper.format_bytes(file_size)}"
                     ))
                 dst.flush()
                 os.fsync(dst.fileno())

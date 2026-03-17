@@ -35,6 +35,7 @@ from .handlers import (
     FilesystemCommandsMixin,
     TransferCommandsMixin,
     ReplCommandsMixin,
+    I2cCommandsMixin,
     DisconnectedError,
 )
 
@@ -95,7 +96,8 @@ class AgentServer(
     ExecCommandsMixin,
     FilesystemCommandsMixin,
     TransferCommandsMixin,
-    ReplCommandsMixin
+    ReplCommandsMixin,
+    I2cCommandsMixin,
 ):
     def __init__(self, port: int = None):
         self.agent_port = port or DEFAULT_AGENT_PORT
@@ -103,6 +105,7 @@ class AgentServer(
 
         self.connection_manager = ConnectionManager()
         self.session_manager = SessionManager()
+        self._i2c_bus: dict = {}
 
         self.last_seq: dict = {}
         self._last_seq_lock = threading.Lock()
@@ -590,6 +593,9 @@ class AgentServer(
             'getdir_to_local': (self._cmd_getdir_to_local_streaming, True),
             'put_from_local_streaming': (self._cmd_put_from_local_streaming, True),
             'putdir_from_local_streaming': (self._cmd_putdir_from_local_streaming, True),
+            'i2c_bus_set': (self._cmd_i2c_bus_set, True),
+            'i2c_bus_get': (self._cmd_i2c_bus_get, False),
+            'i2c_bus_clear': (self._cmd_i2c_bus_clear, False),
         }
 
     def _cmd_disconnect_port(self, ctx: CommandContext, port: str = None) -> dict:

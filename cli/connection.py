@@ -25,6 +25,22 @@ def _print_auto_connect_info(port: str, version: str, core: str, device: str, ma
     )
 
 
+def _is_transport_connection_error(e: Exception) -> bool:
+    """Return True if the error indicates a physical board disconnect / serial port failure."""
+    msg = str(e).lower()
+    return any(kw in msg for kw in (
+        'failed to create connection',
+        'failed to open serial',
+        'transporterror',
+        'transport error',
+        'cannot configure port',
+        'i/o operation',         # Windows OSError 995
+        'connection lost',       # composite: "Connection X lost:"
+        'connection removed',    # agent mid-command disconnect suffix
+        'disconnectederror',
+    ))
+
+
 def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = False):
     conn_info = OutputHelper.format_port(port) if port else "unknown"
     
@@ -387,7 +403,22 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
     except typer.Exit:
         raise
     except Exception as e:
-        OutputHelper.print_panel(f"Agent error: {str(e)}", title="Error", border_style="red")
+        if _is_transport_connection_error(e):
+            try:
+                AgentClient.stop_agent(port=agent_port)
+            except Exception:
+                pass
+            OutputHelper.print_panel(
+                "Board connection lost.\n\n"
+                f"[yellow]Error:[/yellow] {str(e)}\n\n"
+                "The agent has been shut down automatically.\n"
+                "Please check the board is powered and connected, then try again.\n\n"
+                "[dim]The next command will restart the agent and reconnect.[/dim]",
+                title="Connection Lost",
+                border_style="red"
+            )
+        else:
+            OutputHelper.print_panel(f"Agent error: {str(e)}", title="Error", border_style="red")
         raise typer.Exit(1)
 
 

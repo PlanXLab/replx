@@ -16,6 +16,21 @@ class OutputHelper:
     PANEL_WIDTH = None
 
     @staticmethod
+    def format_bytes(b: int) -> str:
+        if b < 1024:
+            return f"{b}B"
+        elif b < 1024 * 1024:
+            return f"{b/1024:.1f}KB"
+        else:
+            return f"{b/(1024*1024):.1f}MB"
+
+    @staticmethod
+    def normalize_remote_path(path: str) -> str:
+        if not path.startswith('/'):
+            path = '/' + path
+        return path
+
+    @staticmethod
     def format_port(port: str) -> str:
         if port is None:
             return ""

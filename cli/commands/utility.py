@@ -1102,14 +1102,6 @@ Completely reset device: format filesystem and install all libraries.
         )
         raise typer.Exit(1)
     
-    def format_bytes(b):
-        if b < 1024:
-            return f"{b}B"
-        elif b < 1024 * 1024:
-            return f"{b/1024:.1f}KB"
-        else:
-            return f"{b/(1024*1024):.1f}MB"
-    
     console = Console(width=CONSOLE_WIDTH)
     
     def make_format_panel(message: str, title: str = "Formatting") -> Panel:
@@ -1241,7 +1233,7 @@ Completely reset device: format filesystem and install all libraries.
             for spec_key in ["core.all", "device.all"]:
                 if spec_key in install_stats:
                     stats = install_stats[spec_key]
-                    summary_parts.append(f"🔧 {spec_key} {stats['files']} file(s) {format_bytes(stats['bytes'])}")
+                    summary_parts.append(f"🔧 {spec_key} {stats['files']} file(s) {OutputHelper.format_bytes(stats['bytes'])}")
             
             summary_line = "    ".join(summary_parts)
             live.update(RichPanel(

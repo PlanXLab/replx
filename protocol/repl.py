@@ -17,10 +17,8 @@ from replx.utils.constants import (
     RAW_PASTE_WINDOW_INC, RAW_PASTE_END_DATA,
     RAW_PASTE_DEFAULT_WINDOW_SIZE,
     ERROR_HEADER,
-    DEVICE_CHUNK_SIZE_DEFAULT, DEVICE_CHUNK_SIZE_EFR32MG,
-    PUT_BATCH_BYTES_DEFAULT, PUT_BATCH_BYTES_EFR32MG,
-    RAW_MODE_DELAY_DEFAULT, RAW_MODE_DELAY_EFR32MG,
 )
+from replx.utils.device_info import get_core_profile
 from replx.transport import create_transport
 from replx.terminal import (
     IS_WINDOWS, CR, LF,
@@ -81,14 +79,10 @@ class ReplProtocol:
         self.core = core
         self.device_root_fs = device_root_fs
         
-        if core == "EFR32MG":
-            self._DEVICE_CHUNK_SIZES = DEVICE_CHUNK_SIZE_EFR32MG
-            self._RAW_MODE_DELAY = RAW_MODE_DELAY_EFR32MG
-            self._PUT_BATCH_BYTES = PUT_BATCH_BYTES_EFR32MG
-        else:
-            self._DEVICE_CHUNK_SIZES = DEVICE_CHUNK_SIZE_DEFAULT
-            self._RAW_MODE_DELAY = RAW_MODE_DELAY_DEFAULT
-            self._PUT_BATCH_BYTES = PUT_BATCH_BYTES_DEFAULT
+        _profile = get_core_profile(core)
+        self._DEVICE_CHUNK_SIZES = _profile['chunk_size']
+        self._RAW_MODE_DELAY = _profile['raw_mode_delay']
+        self._PUT_BATCH_BYTES = _profile['put_batch_bytes']
         
         self._init_repl()
         self._install_sigint_handler()
@@ -190,15 +184,40 @@ class ReplProtocol:
             if not chunk:
                 return -1
 
+            clen = len(chunk)
             end_at = -1
-            for idx, b in enumerate(chunk):
-                while matched > 0 and pat[matched] != b:
-                    matched = pi[matched - 1]
-                if pat[matched] == b:
-                    matched += 1
-                    if matched == m:
-                        end_at = idx
-                        break
+
+            if matched == 0:
+                pos = chunk.find(pat)
+                if pos >= 0:
+                    end_at = pos + m - 1
+                    matched = m
+                else:
+                    tail_start = max(0, clen - m + 1)
+                    for idx in range(tail_start, clen):
+                        b = chunk[idx]
+                        while matched > 0 and pat[matched] != b:
+                            matched = pi[matched - 1]
+                        if pat[matched] == b:
+                            matched += 1
+                            if matched == m:
+                                end_at = idx
+                                break
+            else:
+                remaining = m - matched
+                if clen >= remaining and chunk[:remaining] == pat[matched:]:
+                    end_at = remaining - 1
+                    matched = m
+                else:
+                    for idx in range(clen):
+                        b = chunk[idx]
+                        while matched > 0 and pat[matched] != b:
+                            matched = pi[matched - 1]
+                        if pat[matched] == b:
+                            matched += 1
+                            if matched == m:
+                                end_at = idx
+                                break
 
             if streaming_mode:
                 chunk_to_process = chunk[:end_at+1] if end_at >= 0 else chunk
@@ -564,13 +583,22 @@ class ReplProtocol:
         if not command or len(command) == 0:
             return b''
         
+        if interactive:
+            ReplProtocol._active_instance = self
+
+        try:
+            return self._exec_command(command, interactive, echo, detach, data_consumer, force_raw_paste)
+        finally:
+            if interactive:
+                ReplProtocol._active_instance = None
+
+    def _exec_command(self, command: bytes, interactive: bool, echo: bool, detach: bool,
+                      data_consumer: Optional[Callable[[bytes], None]],
+                      force_raw_paste: bool) -> bytes:
         data_err = b''
         if data_consumer is None and interactive:
             data_consumer = self._create_data_consumer()
-        follow_thread = None   
-
-        if interactive:
-            ReplProtocol._active_instance = self
+        follow_thread = None
 
         data = self._read_ex(1, b'>')
         if not data.endswith(b'>'):
@@ -690,9 +718,6 @@ class ReplProtocol:
                             self._read_ex(1, RAW_REPL_PROMPT[:-1], timeout=1)
                 except Exception:
                     pass
-        
-        if interactive:
-            ReplProtocol._active_instance = None
         
         if data_err:
             if self._interrupt_requested:

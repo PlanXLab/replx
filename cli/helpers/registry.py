@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 import typer
 
+from replx.utils.constants import HTTP_REQUEST_TIMEOUT
 from replx.utils import device_name_to_path
 from . import get_global_context
 from .store import StoreManager
@@ -58,7 +59,7 @@ class InstallHelper:
         url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref_}/{path}"
         req = urllib.request.Request(url, headers=StoreManager.gh_headers())
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        with urllib.request.urlopen(req) as r, open(out_path, "wb") as f:
+        with urllib.request.urlopen(req, timeout=HTTP_REQUEST_TIMEOUT) as r, open(out_path, "wb") as f:
             f.write(r.read())
         return out_path
     

@@ -52,12 +52,17 @@ class Cmd:
     MEM = 'mem'
     DF = 'df'
 
+    I2C_BUS_SET = 'i2c_bus_set'
+    I2C_BUS_GET = 'i2c_bus_get'
+    I2C_BUS_CLEAR = 'i2c_bus_clear'
+
 class CmdGroups:
     NON_REPL = frozenset({
         Cmd.CONNECT, Cmd.RELEASE, Cmd.DISCONNECT_PORT,
         Cmd.STATUS, Cmd.SHUTDOWN, Cmd.PING, Cmd.RUN_STOP,
         Cmd.SESSION_INFO, Cmd.SESSION_SETUP, Cmd.SESSION_DISCONNECT,
-        Cmd.SESSION_SWITCH_FG, Cmd.SET_DEFAULT
+        Cmd.SESSION_SWITCH_FG, Cmd.SET_DEFAULT,
+        Cmd.I2C_BUS_SET, Cmd.I2C_BUS_GET, Cmd.I2C_BUS_CLEAR,
     })
 
     READ_ONLY = frozenset({
@@ -65,7 +70,8 @@ class CmdGroups:
         Cmd.EXEC, Cmd.LS, Cmd.LS_RECURSIVE, Cmd.CAT, Cmd.STAT,
         Cmd.IS_DIR, Cmd.MEM, Cmd.DF,
         Cmd.GET_FILE, Cmd.GET_TO_LOCAL, Cmd.GETDIR_TO_LOCAL,
-        Cmd.GET_FILE_BATCH
+        Cmd.GET_FILE_BATCH,
+        Cmd.I2C_BUS_GET,
     })
 
     SESSION = frozenset({

@@ -23,7 +23,7 @@ def _preprocess_connection_shortcut():
         'repl', 'shell', 'exec', 'run',
         'ls', 'cat', 'get', 'put', 'cp', 'mv', 'rm', 'mkdir', 'touch',
         'usage', 'reset', 'format', 'init',
-        'install', 'update', 'search',
+        'install', 'update', 'search', 'i2c', 'gpio', 'adc', 'pwm',
     }
     
     commands_without_connection = {
@@ -352,6 +352,11 @@ def _print_main_help():
             ("pkg", "Manage libraries: search, download, update"),
             ("mpy", "Compile Python files to .mpy bytecode"),
         ]),
+        ("Hardware", [
+            ("i2c", "Scan, read, write, dump I2C devices on the connected board"),
+            ("gpio", "Read, write, and run GPIO sequences on the connected board"),
+            ("adc", "Read ADC pins and run the board-side ADC scope UI"),
+        ]),
     ]
     
     for group_name, commands in command_groups:
@@ -408,7 +413,7 @@ def cli(
         raise typer.Exit()
 
 
-from .commands import file, device, exec, package, utility, firmware
+from .commands import file, device, exec, package, utility, firmware, i2c, gpio, adc, pwm
 
 def main():
     if len(sys.argv) == 1:

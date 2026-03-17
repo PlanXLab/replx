@@ -673,15 +673,10 @@ Delete files or directories from the connected device.
     
     client = _create_agent_client()
     
-    def normalize_path(path: str) -> str:
-        if not path.startswith('/'):
-            path = '/' + path
-        return path
-    
     def resolve_patterns(patterns: list[str]) -> list[str]:
         resolved = []
         for pattern in patterns:
-            remote = normalize_path(pattern)
+            remote = OutputHelper.normalize_remote_path(pattern)
             if '*' in pattern or '?' in pattern:
                 dir_path = posixpath.dirname(remote) or '/'
                 basename_pattern = posixpath.basename(remote)
@@ -729,7 +724,7 @@ Delete files or directories from the connected device.
             existing_files = []
             not_found_files = []
             for pattern in args:
-                remote = normalize_path(pattern)
+                remote = OutputHelper.normalize_remote_path(pattern)
                 if check_exists(remote):
                     existing_files.append(pattern)
                 else:
@@ -764,7 +759,7 @@ Delete files or directories from the connected device.
     dir_without_r = []
     
     for pattern in args:
-        remote = normalize_path(pattern)
+        remote = OutputHelper.normalize_remote_path(pattern)
          
         if '*' in pattern or '?' in pattern:
             dir_path = posixpath.dirname(remote) or '/'
@@ -2016,17 +2011,9 @@ Upload files or directories from your computer to the device.
             
             live.update(OutputHelper.create_progress_panel(total_bytes, total_bytes, title=f"Uploading {total_files} item(s)"))
         
-        def format_bytes(b):
-            if b < 1024:
-                return f"{b} B"
-            elif b < 1024 * 1024:
-                return f"{b / 1024:.1f} KB"
-            else:
-                return f"{b / (1024 * 1024):.1f} MB"
-        
         display_remote = remote.replace(device_root_fs, "", 1)
         OutputHelper.print_panel(
-            f"Uploaded [green]{success_count}[/green] out of {total_files} item(s) ([green]{format_bytes(uploaded_bytes[0])}[/green])\nto [bright_blue]{display_remote}[/bright_blue]",
+            f"Uploaded [green]{success_count}[/green] out of {total_files} item(s) ([green]{OutputHelper.format_bytes(uploaded_bytes[0])}[/green])\nto [bright_blue]{display_remote}[/bright_blue]",
             title="Upload Complete",
             border_style="green" if success_count == total_files else "yellow"
         )

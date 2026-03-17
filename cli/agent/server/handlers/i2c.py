@@ -1,0 +1,32 @@
+import sys
+
+from ..command_dispatcher import CommandContext
+
+
+def _norm_port(port: str) -> str:
+    if port and sys.platform.startswith('win'):
+        return port.upper()
+    return port
+
+
+class I2cCommandsMixin:
+    def _i2c_resolve_port(self, ctx: CommandContext) -> str:
+        port = self._resolve_connection_for_session(ctx.ppid, ctx.explicit_port)
+        if not port:
+            raise ValueError("No active connection. Connect to a board first.")
+        return _norm_port(port)
+
+    def _cmd_i2c_bus_set(self, ctx: CommandContext,
+                         sda: int, scl: int, ch: int, freq: int) -> dict:
+        port = self._i2c_resolve_port(ctx)
+        self._i2c_bus[port] = {'sda': sda, 'scl': scl, 'ch': ch, 'freq': freq}
+        return self._i2c_bus[port]
+
+    def _cmd_i2c_bus_get(self, ctx: CommandContext) -> dict:
+        port = self._i2c_resolve_port(ctx)
+        return self._i2c_bus.get(port) or {}
+
+    def _cmd_i2c_bus_clear(self, ctx: CommandContext) -> dict:
+        port = self._i2c_resolve_port(ctx)
+        self._i2c_bus.pop(port, None)
+        return {}

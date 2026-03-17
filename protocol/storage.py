@@ -6,11 +6,7 @@ import posixpath
 from typing import Tuple, List
 
 from replx.utils.exceptions import ProtocolError, TransportError, FileSystemError
-from replx.utils.constants import (
-    DEVICE_CHUNK_SIZE_DEFAULT, DEVICE_CHUNK_SIZE_EFR32MG,
-    PUT_BATCH_BYTES_DEFAULT, PUT_BATCH_BYTES_EFR32MG,
-)
-from replx.utils.device_info import normalize_core
+from replx.utils.device_info import normalize_core, get_core_profile
 
 
 class DeviceStorage:
@@ -21,13 +17,9 @@ class DeviceStorage:
         self.device = device
         self.device_root_fs = device_root_fs
         
-        normalized_core = self.core
-        if normalized_core == "EFR32MG":
-            self._DEVICE_CHUNK_SIZES = DEVICE_CHUNK_SIZE_EFR32MG
-            self._PUT_BATCH_BYTES = PUT_BATCH_BYTES_EFR32MG
-        else:
-            self._DEVICE_CHUNK_SIZES = DEVICE_CHUNK_SIZE_DEFAULT
-            self._PUT_BATCH_BYTES = PUT_BATCH_BYTES_DEFAULT
+        _profile = get_core_profile(self.core)
+        self._DEVICE_CHUNK_SIZES = _profile['chunk_size']
+        self._PUT_BATCH_BYTES = _profile['put_batch_bytes']
         
         if device == "xnode":
             self._ls_detailed_func = self._ls_detailed_xbee
@@ -65,6 +57,7 @@ except Exception as e:
             dir = "/" + dir
         if dir != '/' and dir.endswith('/'):
             dir = dir.rstrip('/')
+        dir = dir.replace("'", "\\'")
         
         command = f"""
 import os
@@ -106,6 +99,7 @@ print(json.dumps(get_detailed_listing('{dir}')))
     def _ls_detailed_xbee(self, dir: str = "/") -> List[list]:
         if not dir.startswith("/"):
             dir = "/" + dir
+        dir = dir.replace("'", "\\'")
         
         command = f"""
 import os
@@ -157,6 +151,7 @@ print(json.dumps(get_detailed_listing('{dir}')))
         dir = self._normalize_remote_path(dir)
         if not dir.startswith("/"):
             dir = "/" + dir
+        safe_dir = dir.replace("'", "\\'")
         
         command = f"""
 import os
@@ -203,7 +198,7 @@ def get_recursive_listing(path, base_path=None):
     
     return sorted(items, key=lambda x: x[0].lower())
 
-print(json.dumps(get_recursive_listing('{dir}')))
+print(json.dumps(get_recursive_listing('{safe_dir}')))
 """
         try:
             out = self.repl.exec(command)
@@ -219,6 +214,7 @@ print(json.dumps(get_recursive_listing('{dir}')))
     def _ls_recursive_xbee(self, dir: str = "/") -> List[list]:
         if not dir.startswith("/"):
             dir = "/" + dir
+        safe_dir = dir.replace("'", "\\'")
         
         command = f"""
 import os
@@ -271,7 +267,7 @@ def get_recursive_listing(path, base_path=None):
     
     return sorted(items, key=lambda x: x[0].lower())
 
-print(json.dumps(get_recursive_listing('{dir}')))
+print(json.dumps(get_recursive_listing('{safe_dir}')))
 """
         try:
             out = self.repl.exec(command)
@@ -314,6 +310,7 @@ print(json.dumps(get_recursive_listing('{dir}')))
 
     def is_dir(self, path: str) -> bool:
         path = self._normalize_remote_path(path)
+        path = path.replace("'", "\\'")
         
         if self.core == "EFR32MG":
             command = f"""
@@ -346,11 +343,12 @@ print(result)
 
     def state(self, path: str) -> int:
         path = self._normalize_remote_path(path)
+        safe_path = path.replace("'", "\\'")
         
         if self.core == "EFR32MG":
             command = f"""
 try:
-    with open('{path}', 'rb') as f:
+    with open('{safe_path}', 'rb') as f:
         f.seek(0, 2)
         size = f.tell()
     print(size)
@@ -358,7 +356,6 @@ except Exception:
     print(0)
 """
         else:
-            safe_path = path.replace("'", "\\'")
             command = f"""
 import os
 try:
@@ -400,6 +397,7 @@ except Exception:
 
     def mkdir(self, dir: str) -> bool:
         dir = dir.replace('\\', '/')
+        dir = dir.replace("'", "\\'")
         command = f"""
 import os
 def mkdir(dir):
@@ -426,6 +424,7 @@ print(mkdir('{dir}'))
             return False
 
     def rm(self, filename: str):
+        filename = filename.replace("'", "\\'")
         command = f"""
 import os
 os.remove('{filename}')
@@ -434,6 +433,7 @@ os.remove('{filename}')
 
     def touch(self, filename: str, core: str = None):
         core = core or self.core
+        filename = filename.replace("'", "\\'")
         if core == "EFR32MG":
             command = f"""
 import os
@@ -451,6 +451,7 @@ except Exception:
         self.repl.exec(command)
 
     def rmdir(self, dir: str):
+        dir = dir.replace("'", "\\'")
         if self.core == "EFR32MG":
             command = f"""
 import os
@@ -486,6 +487,8 @@ rmdir('{dir}')
         self.repl.exec(command)
 
     def cp(self, source: str, dest: str):
+        source = source.replace("'", "\\'")
+        dest = dest.replace("'", "\\'")
         command = f"""
 with open('{source}', 'rb') as src:
     with open('{dest}', 'wb') as dst:
@@ -498,6 +501,8 @@ with open('{source}', 'rb') as src:
         self.repl.exec(command)
 
     def mv(self, source: str, dest: str):
+        source = source.replace("'", "\\'")
+        dest = dest.replace("'", "\\'")
         if self.core == "EFR32MG":
             command = f"""
 import os
