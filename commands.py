@@ -56,6 +56,14 @@ class Cmd:
     I2C_BUS_GET = 'i2c_bus_get'
     I2C_BUS_CLEAR = 'i2c_bus_clear'
 
+    UART_BUS_SET = 'uart_bus_set'
+    UART_BUS_GET = 'uart_bus_get'
+    UART_BUS_CLEAR = 'uart_bus_clear'
+
+    SPI_BUS_SET = 'spi_bus_set'
+    SPI_BUS_GET = 'spi_bus_get'
+    SPI_BUS_CLEAR = 'spi_bus_clear'
+
 class CmdGroups:
     NON_REPL = frozenset({
         Cmd.CONNECT, Cmd.RELEASE, Cmd.DISCONNECT_PORT,
@@ -63,6 +71,8 @@ class CmdGroups:
         Cmd.SESSION_INFO, Cmd.SESSION_SETUP, Cmd.SESSION_DISCONNECT,
         Cmd.SESSION_SWITCH_FG, Cmd.SET_DEFAULT,
         Cmd.I2C_BUS_SET, Cmd.I2C_BUS_GET, Cmd.I2C_BUS_CLEAR,
+        Cmd.UART_BUS_SET, Cmd.UART_BUS_GET, Cmd.UART_BUS_CLEAR,
+        Cmd.SPI_BUS_SET, Cmd.SPI_BUS_GET, Cmd.SPI_BUS_CLEAR,
     })
 
     READ_ONLY = frozenset({
@@ -72,6 +82,8 @@ class CmdGroups:
         Cmd.GET_FILE, Cmd.GET_TO_LOCAL, Cmd.GETDIR_TO_LOCAL,
         Cmd.GET_FILE_BATCH,
         Cmd.I2C_BUS_GET,
+        Cmd.UART_BUS_GET,
+        Cmd.SPI_BUS_GET,
     })
 
     SESSION = frozenset({

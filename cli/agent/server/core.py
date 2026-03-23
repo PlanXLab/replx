@@ -36,6 +36,8 @@ from .handlers import (
     TransferCommandsMixin,
     ReplCommandsMixin,
     I2cCommandsMixin,
+    UartCommandsMixin,
+    SpiCommandsMixin,
     DisconnectedError,
 )
 
@@ -98,6 +100,8 @@ class AgentServer(
     TransferCommandsMixin,
     ReplCommandsMixin,
     I2cCommandsMixin,
+    UartCommandsMixin,
+    SpiCommandsMixin,
 ):
     def __init__(self, port: int = None):
         self.agent_port = port or DEFAULT_AGENT_PORT
@@ -106,6 +110,8 @@ class AgentServer(
         self.connection_manager = ConnectionManager()
         self.session_manager = SessionManager()
         self._i2c_bus: dict = {}
+        self._uart_bus: dict = {}
+        self._spi_bus: dict = {}
 
         self.last_seq: dict = {}
         self._last_seq_lock = threading.Lock()
@@ -596,6 +602,12 @@ class AgentServer(
             'i2c_bus_set': (self._cmd_i2c_bus_set, True),
             'i2c_bus_get': (self._cmd_i2c_bus_get, False),
             'i2c_bus_clear': (self._cmd_i2c_bus_clear, False),
+            'uart_bus_set': (self._cmd_uart_bus_set, True),
+            'uart_bus_get': (self._cmd_uart_bus_get, False),
+            'uart_bus_clear': (self._cmd_uart_bus_clear, False),
+            'spi_bus_set': (self._cmd_spi_bus_set, True),
+            'spi_bus_get': (self._cmd_spi_bus_get, False),
+            'spi_bus_clear': (self._cmd_spi_bus_clear, False),
         }
 
     def _cmd_disconnect_port(self, ctx: CommandContext, port: str = None) -> dict:

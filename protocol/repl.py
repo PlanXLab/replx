@@ -309,9 +309,6 @@ class ReplProtocol:
                         idle_limit = max(timeout * 2, 10)
                         if (time.time() - last_activity) > idle_limit:
                             break
-                    elif data_consumer is None:
-                        if (time.time() - last_activity) > 5:
-                            break
 
             return _get_result()
 

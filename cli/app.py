@@ -23,7 +23,7 @@ def _preprocess_connection_shortcut():
         'repl', 'shell', 'exec', 'run',
         'ls', 'cat', 'get', 'put', 'cp', 'mv', 'rm', 'mkdir', 'touch',
         'usage', 'reset', 'format', 'init',
-        'install', 'update', 'search', 'i2c', 'gpio', 'adc', 'pwm',
+        'install', 'update', 'search', 'i2c', 'gpio', 'adc', 'pwm', 'uart', 'spi',
     }
     
     commands_without_connection = {
@@ -413,7 +413,7 @@ def cli(
         raise typer.Exit()
 
 
-from .commands import file, device, exec, package, utility, firmware, i2c, gpio, adc, pwm
+from .commands import file, device, exec, package, utility, firmware, i2c, gpio, adc, pwm, uart, spi
 
 def main():
     if len(sys.argv) == 1:

@@ -35,19 +35,40 @@ def _parse_data(tokens: list) -> list:
     return [_parse_hex(t) for t in tokens]
 
 
+def _parse_gp_pin(token: str, label: str = 'pin') -> int:
+    """Parse GP<num> format string into an integer pin number."""
+    s = (token or '').strip()
+    if len(s) < 3 or s[:2].lower() != 'gp' or not s[2:].isdigit():
+        raise ValueError(
+            f"Invalid {label}: {token!r}. Use GP<num> format, e.g. GP20"
+        )
+    pin_no = int(s[2:])
+    if pin_no < 0:
+        raise ValueError(f"Invalid {label}: {token!r}")
+    return pin_no
+
+
 def _norm_port(port: str) -> str:
     if port and sys.platform.startswith('win'):
         return port.upper()
     return port
 
 
-def _get_core(client, port: str) -> str:
-    info = client.send_command('session_info', timeout=1.5)
-    norm = _norm_port(port)
-    for c in info.get('connections', []):
-        cp = _norm_port(c.get('port', ''))
-        if cp == norm:
-            return c.get('core', '')
+def _get_core(client, port: Optional[str]) -> str:
+    try:
+        info = client.send_command('session_info', timeout=1.5)
+        connections = info.get('connections', [])
+        if not connections:
+            return ''
+        if port is None:
+            return connections[0].get('core', '')
+        norm = _norm_port(port)
+        for c in connections:
+            cp = _norm_port(c.get('port', ''))
+            if cp == norm:
+                return c.get('core', '')
+    except Exception:
+        pass
     return ''
 
 
@@ -72,20 +93,20 @@ def _resolve_ch(core: str, sda: int, scl: int) -> int:
             ch = 1
         else:
             raise ValueError(
-                f"SDA={sda} is not a valid I2C pin on {core}.\n"
-                f"Valid SDA pins: 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28"
+                f"GP{sda} is not a valid I2C SDA pin on {core}.\n"
+                f"Valid SDA pins: GP0,GP2,GP4,GP6,GP8,GP10,GP12,GP14,GP16,GP18,GP20,GP22,GP24,GP26,GP28"
             )
         if scl != sda + 1:
             raise ValueError(
-                f"SCL must be SDA+1 on {core}. For SDA={sda}, SCL must be {sda + 1}."
+                f"SCL must be SDA+1 on {core}. For SDA=GP{sda}, SCL must be GP{sda + 1}."
             )
         return ch
     if 'MIMXRT1062' in c:
         key = (sda, scl)
         if key not in _TEENSY_PIN_TABLE:
-            valid = ', '.join(f"SDA={k[0]}/SCL={k[1]}" for k in _TEENSY_PIN_TABLE)
+            valid = ', '.join(f"SDA=GP{k[0]}/SCL=GP{k[1]}" for k in _TEENSY_PIN_TABLE)
             raise ValueError(
-                f"SDA={sda}/SCL={scl} is not a valid I2C pin pair on Teensy 4.1.\n"
+                f"SDA=GP{sda}/SCL=GP{scl} is not a valid I2C pin pair on Teensy 4.1.\n"
                 f"Valid pairs: {valid}"
             )
         return _TEENSY_PIN_TABLE[key]
@@ -96,6 +117,47 @@ def _make_init(ch: int, sda: int, scl: int, freq: int) -> str:
     return (
         f"from machine import I2C,Pin\n"
         f"i2c=I2C({ch},sda=Pin({sda}),scl=Pin({scl}),freq={freq})"
+    )
+
+
+# ── I2C Target code-gen ────────────────────────────────────────────────────
+
+def _make_target_open_code(ch: int, sda: int, scl: int, addr: int, mem_size: int) -> str:
+    return (
+        "from machine import I2CTarget, Pin\n"
+        "import json\n"
+        f"_i2c_target_mem = bytearray({mem_size})\n"
+        f"_i2c_target = I2CTarget({ch}, addr={addr}, "
+        f"sda=Pin({sda}), scl=Pin({scl}), mem=_i2c_target_mem)\n"
+        f"print(json.dumps({{'open': True, 'addr': {addr}, 'mem_size': {mem_size}}}))"
+    )
+
+
+def _make_target_mem_read_code(offset: int, nbytes: int) -> str:
+    end = offset + nbytes
+    return (
+        "import json, binascii\n"
+        f"_d = bytes(_i2c_target_mem[{offset}:{end}])\n"
+        f"print(json.dumps({{'hex': binascii.hexlify(_d).decode(), "
+        f"'offset': {offset}, 'len': len(_d)}}))"
+    )
+
+
+def _make_target_mem_write_code(offset: int, data: list) -> str:
+    end = offset + len(data)
+    return (
+        "import json\n"
+        f"_i2c_target_mem[{offset}:{end}] = bytes({data!r})\n"
+        f"print(json.dumps({{'ok': True, 'offset': {offset}, 'len': {len(data)}}}))"
+    )
+
+
+def _make_target_close_code() -> str:
+    return (
+        "import json\n"
+        "_i2c_target.deinit()\n"
+        "del _i2c_target, _i2c_target_mem\n"
+        "print(json.dumps({'closed': True}))"
     )
 
 
@@ -208,11 +270,23 @@ def _display_bus(bus: dict):
             border_style="cyan",
         )
         return
-    OutputHelper.print_panel(
-        _bus_config_line(bus),
-        title="I2C Bus",
-        border_style="cyan",
-    )
+    if bus.get('target'):
+        addr = bus.get('addr', 0)
+        mem_size = bus.get('mem_size', 128)
+        OutputHelper.print_panel(
+            f"[bold yellow]Mode: TARGET[/bold yellow]  "
+            f"I2C Addr: [bright_yellow]0x{addr:02X}[/bright_yellow]\n"
+            f"{_bus_config_line(bus)}\n"
+            f"Mem: [bright_cyan]{mem_size}[/bright_cyan] bytes",
+            title="I2C Bus (Target)",
+            border_style="yellow",
+        )
+    else:
+        OutputHelper.print_panel(
+            _bus_config_line(bus),
+            title="I2C Bus",
+            border_style="cyan",
+        )
 
 
 def _display_read(raw_output: str, addr: int, nbytes: int, reg: Optional[int],
@@ -331,7 +405,7 @@ def _get_bus(client) -> dict:
     if not bus:
         OutputHelper.print_panel(
             "No bus config found. Scan first:\n\n"
-            "  replx PORT i2c scan --sda [yellow]SDA[/yellow] --scl [yellow]SCL[/yellow]",
+            "  replx PORT i2c scan --sda [yellow]GP<num>[/yellow] --scl [yellow]GP<num>[/yellow]",
             title="I2C Error",
             border_style="red",
         )
@@ -339,7 +413,7 @@ def _get_bus(client) -> dict:
     return bus
 
 
-def _subcmd_scan(client, core: str, sda: Optional[int], scl: Optional[int], freq: int):
+def _subcmd_scan(client, core: str, sda: Optional[str], scl: Optional[str], freq: int):
     explicit_pins = sda is not None and scl is not None
 
     if not explicit_pins:
@@ -348,21 +422,23 @@ def _subcmd_scan(client, core: str, sda: Optional[int], scl: Optional[int], freq
             OutputHelper.print_panel(
                 "No bus config saved. Specify pins for the first scan:\n\n"
                 "[bold cyan]Usage:[/bold cyan]\n"
-                "  replx PORT i2c scan --sda [yellow]SDA[/yellow] --scl [yellow]SCL[/yellow]"
+                "  replx PORT i2c scan --sda [yellow]GP<num>[/yellow] --scl [yellow]GP<num>[/yellow]"
                 " [--freq HZ]",
                 title="I2C Error",
                 border_style="red",
             )
             raise typer.Exit(1)
-        sda, scl, ch, freq = bus['sda'], bus['scl'], bus['ch'], bus['freq']
+        sda_no, scl_no, ch, freq = bus['sda'], bus['scl'], bus['ch'], bus['freq']
     else:
         try:
-            ch = _resolve_ch(core, sda, scl)
+            sda_no = _parse_gp_pin(sda, 'SDA')
+            scl_no = _parse_gp_pin(scl, 'SCL')
+            ch = _resolve_ch(core, sda_no, scl_no)
         except ValueError as e:
             OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
             raise typer.Exit(1)
 
-    init = _make_init(ch, sda, scl, freq)
+    init = _make_init(ch, sda_no, scl_no, freq)
     code = (
         f"import json\n{init}\n"
         f"r=[]\n"
@@ -382,10 +458,10 @@ def _subcmd_scan(client, core: str, sda: Optional[int], scl: Optional[int], freq
         OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
         raise typer.Exit(1)
 
-    _display_scan(found, sda, scl, ch, freq)
+    _display_scan(found, sda_no, scl_no, ch, freq)
 
     if explicit_pins:
-        client.send_command('i2c_bus_set', sda=sda, scl=scl, ch=ch, freq=freq)
+        client.send_command('i2c_bus_set', sda=sda_no, scl=scl_no, ch=ch, freq=freq)
 
 
 def _subcmd_bus(client):
@@ -462,8 +538,83 @@ def _subcmd_seq(client, pos_args: list):
     OutputHelper.print_panel(content, title=f"I2C Seq  0x{addr:02X}", border_style="blue")
 
 
+def _render_mem_table(data: bytes, offset: int, bus: dict) -> list:
+    COLS = 16
+    addr = bus.get('addr', 0)
+    lines = [
+        f"  Addr: [bright_yellow]0x{addr:02X}[/bright_yellow]  "
+        f"offset 0x{offset:02X}  {len(data)} bytes  "
+        f"[dim]{_bus_config_line(bus)}[/dim]",
+        "",
+        "  [dim]     " + " ".join(f"{c:02X}" for c in range(COLS)) + "[/dim]",
+        "  [dim]" + "─" * (5 + COLS * 3) + "[/dim]",
+    ]
+    for i in range(0, len(data), COLS):
+        row = data[i:i + COLS]
+        base = offset + i
+        row_str = f"  [dim]{base:02X}:[/dim]  " + " ".join(f"{b:02X}" for b in row)
+        ascii_str = "  " + "".join(chr(b) if 0x20 <= b <= 0x7E else "." for b in row)
+        lines.append(row_str + ascii_str)
+    return lines
+
+
+def _target_mem_read(client, pos_args: list, bus: dict) -> None:
+    mem_size = int(bus.get('mem_size', 128))
+    try:
+        offset = _parse_hex(pos_args[0]) if pos_args else 0
+        nbytes = int(pos_args[1]) if len(pos_args) >= 2 else mem_size - offset
+    except (ValueError, IndexError) as e:
+        OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+        raise typer.Exit(1)
+    raw = _exec(client, _make_target_mem_read_code(offset, nbytes), timeout=3.0)
+    try:
+        d = _parse_json_strict(raw)
+    except RuntimeError as e:
+        OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+        raise typer.Exit(1)
+    data = bytes.fromhex(d.get('hex', ''))
+    lines = _render_mem_table(data, offset, bus)
+    OutputHelper.print_panel("\n".join(lines), title="I2C Target Mem Read", border_style="yellow")
+
+
+def _target_mem_write(client, pos_args: list, bus: dict) -> None:
+    if len(pos_args) < 2:
+        OutputHelper.print_panel(
+            "Usage: replx PORT i2c write [yellow]OFFSET HEX...[/yellow]\n"
+            "[dim](target mode: OFFSET = register address in own mem)[/dim]",
+            title="I2C Error", border_style="red",
+        )
+        raise typer.Exit(1)
+    try:
+        offset = _parse_hex(pos_args[0])
+        data = _parse_data(pos_args[1:])
+    except ValueError as e:
+        OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+        raise typer.Exit(1)
+    raw = _exec(client, _make_target_mem_write_code(offset, data), timeout=3.0)
+    try:
+        _parse_json_strict(raw)
+    except RuntimeError as e:
+        OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+        raise typer.Exit(1)
+    addr = bus.get('addr', 0)
+    OutputHelper.print_panel(
+        f"  Addr: [bright_yellow]0x{addr:02X}[/bright_yellow]  "
+        f"offset [bright_cyan]0x{offset:02X}[/bright_cyan]  "
+        f"[bright_cyan]{len(data)}[/bright_cyan] bytes\n\n"
+        f"  [{_format_hex_bytes(data)}]\n"
+        f"  [green]\u2192 mem[0x{offset:02X}:0x{offset + len(data):02X}] written[/green]",
+        title="I2C Target Mem Write", border_style="yellow",
+    )
+
+
 def _subcmd_read(client, pos_args: list, addr16: bool, repeat: int, interval: int):
-    if not pos_args or len(pos_args) < 2:
+    bus = _get_bus(client)
+    if bus.get('target'):
+        _target_mem_read(client, pos_args, bus)
+        return
+
+    if len(pos_args) < 2:
         OutputHelper.print_panel(
             "Missing ADDR NBYTES.\n\n"
             "[bold cyan]Usage:[/bold cyan]\n"
@@ -481,7 +632,6 @@ def _subcmd_read(client, pos_args: list, addr16: bool, repeat: int, interval: in
         OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
         raise typer.Exit(1)
 
-    bus = _get_bus(client)
     ch, sda, scl, freq = bus['ch'], bus['sda'], bus['scl'], bus['freq']
     init = _make_init(ch, sda, scl, freq)
     addrsize = 16 if addr16 else 8
@@ -526,6 +676,11 @@ def _subcmd_read(client, pos_args: list, addr16: bool, repeat: int, interval: in
 
 
 def _subcmd_write(client, pos_args: list, addr16: bool, repeat: int, interval: int):
+    bus = _get_bus(client)
+    if bus.get('target'):
+        _target_mem_write(client, pos_args, bus)
+        return
+
     if len(pos_args) < 2:
         OutputHelper.print_panel(
             "Missing ADDR DATA.\n\n"
@@ -543,7 +698,6 @@ def _subcmd_write(client, pos_args: list, addr16: bool, repeat: int, interval: i
         OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
         raise typer.Exit(1)
 
-    bus = _get_bus(client)
     ch, sda, scl, freq = bus['ch'], bus['sda'], bus['scl'], bus['freq']
     init = _make_init(ch, sda, scl, freq)
     data_bytes = "bytes([" + ",".join(hex(b) for b in data) + "])"
@@ -632,56 +786,200 @@ def _subcmd_dump(client, pos_args: list, addr16: bool, repeat: int, interval: in
     _display_dump(raw, addr, from_r, to_r, repeat, bus)
 
 
+def _subcmd_open(
+    client,
+    core: str,
+    sda: Optional[str],
+    scl: Optional[str],
+    freq: int,
+    target: bool,
+    addr_str: Optional[str],
+    mem_size: int,
+) -> None:
+    if sda is None or scl is None:
+        OutputHelper.print_panel(
+            "--sda and --scl are required for [green]open[/green].\n\n"
+            "[bold cyan]Usage:[/bold cyan]\n"
+            "  replx PORT i2c open --sda [yellow]GP<num>[/yellow] --scl [yellow]GP<num>[/yellow]"
+            " [[yellow]--freq HZ[/yellow]]\n"
+            "  replx PORT i2c open --sda [yellow]GP<num>[/yellow] --scl [yellow]GP<num>[/yellow]"
+            " [yellow]--target --addr 0xNN[/yellow] [[yellow]--mem-size N[/yellow]]",
+            title="I2C Error",
+            border_style="red",
+        )
+        raise typer.Exit(1)
+
+    try:
+        sda_no = _parse_gp_pin(sda, 'SDA')
+        scl_no = _parse_gp_pin(scl, 'SCL')
+        ch = _resolve_ch(core, sda_no, scl_no)
+    except ValueError as e:
+        OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+        raise typer.Exit(1)
+
+    if target:
+        if 'RP2350' not in core:
+            OutputHelper.print_panel(
+                f"I2C Target mode requires RP2350. Detected core: [yellow]{core}[/yellow]",
+                title="I2C Error",
+                border_style="red",
+            )
+            raise typer.Exit(1)
+        if addr_str is None:
+            OutputHelper.print_panel(
+                "--addr is required for target mode.",
+                title="I2C Error",
+                border_style="red",
+            )
+            raise typer.Exit(1)
+        try:
+            addr = int(addr_str, 16) if addr_str.startswith('0x') or addr_str.startswith('0X') \
+                else int(addr_str, 16)
+            if not 1 <= addr <= 127:
+                raise ValueError(f"I2C address must be 1–127, got {addr}")
+        except ValueError as e:
+            OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+            raise typer.Exit(1)
+
+        raw = _exec(client, _make_target_open_code(ch, sda_no, scl_no, addr, mem_size), timeout=5.0)
+        try:
+            _parse_json_strict(raw)
+        except RuntimeError as e:
+            OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+            raise typer.Exit(1)
+
+        cfg = dict(sda=sda_no, scl=scl_no, ch=ch, freq=freq,
+                   target=True, addr=addr, mem_size=mem_size)
+        client.send_command('i2c_bus_set', **cfg)
+        _display_bus(cfg)
+    else:
+        cfg = dict(sda=sda_no, scl=scl_no, ch=ch, freq=freq)
+        client.send_command('i2c_bus_set', **cfg)
+        _display_bus(cfg)
+
+
+def _subcmd_mem(client, pos_args: list) -> None:
+    bus = _get_bus(client)
+    if not bus.get('target'):
+        OutputHelper.print_panel(
+            "[green]mem[/green] subcommand is only available in target mode.\n"
+            "Open target first:  replx PORT i2c open ... [yellow]--target --addr 0xNN[/yellow]",
+            title="I2C Error",
+            border_style="red",
+        )
+        raise typer.Exit(1)
+
+    mem_size = int(bus.get('mem_size', 128))
+    try:
+        offset = _parse_hex(pos_args[0]) if pos_args else 0
+        nbytes = int(pos_args[1]) if len(pos_args) >= 2 else mem_size - offset
+    except (ValueError, IndexError) as e:
+        OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+        raise typer.Exit(1)
+
+    raw = _exec(client, _make_target_mem_read_code(offset, nbytes), timeout=3.0)
+    try:
+        d = _parse_json_strict(raw)
+    except RuntimeError as e:
+        OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+        raise typer.Exit(1)
+
+    data = bytes.fromhex(d.get('hex', ''))
+    lines = _render_mem_table(data, offset, bus)
+    OutputHelper.print_panel(
+        "\n".join(lines),
+        title=f"I2C Target Mem Snapshot  ({mem_size} bytes total)",
+        border_style="yellow",
+    )
+
+
+def _subcmd_close(client) -> None:
+    bus = _get_bus(client)
+    if bus.get('target'):
+        raw = _exec(client, _make_target_close_code(), timeout=3.0)
+        try:
+            _parse_json_strict(raw)
+        except RuntimeError as e:
+            OutputHelper.print_panel(str(e), title="I2C Error", border_style="red")
+            raise typer.Exit(1)
+    client.send_command('i2c_bus_clear')
+    OutputHelper.print_panel(
+        "  I2C bus released. Run [green]scan[/green] or [green]open[/green] to reconfigure.",
+        title="I2C Closed",
+        border_style="cyan",
+    )
+
+
 def _print_i2c_help():
     help_text = """\
 Interact with I2C devices connected to the board without writing a script.
 
-[bold cyan]Usage:[/bold cyan]
-  replx PORT i2c scan  --sda [yellow]SDA[/yellow] --scl [yellow]SCL[/yellow] [[yellow]--freq HZ[/yellow]]
+[bold cyan]Usage (Controller mode):[/bold cyan]
+  replx PORT i2c scan  --sda [yellow]GP<num>[/yellow] --scl [yellow]GP<num>[/yellow] [[yellow]--freq HZ[/yellow]]
+  replx PORT i2c open  --sda [yellow]GP<num>[/yellow] --scl [yellow]GP<num>[/yellow] [[yellow]--freq HZ[/yellow]]
   replx PORT i2c bus
   replx PORT i2c read  [yellow]ADDR NBYTES[/yellow] [[yellow]REG[/yellow]] [[yellow]--addr16[/yellow]] [[yellow]-n N[/yellow] [yellow]--interval MS[/yellow]]
   replx PORT i2c write [yellow]ADDR DATA...[/yellow]      [[yellow]--addr16[/yellow]] [[yellow]-n N[/yellow] [yellow]--interval MS[/yellow]]
   replx PORT i2c dump  [yellow]ADDR[/yellow] [[yellow]FROM[/yellow] [[yellow]TO[/yellow]]]  [[yellow]--addr16[/yellow]] [[yellow]-n N[/yellow] [yellow]--interval MS[/yellow]]
   replx PORT i2c seq   [yellow]ADDR TOKEN...[/yellow]
+  replx PORT i2c close
+
+[bold yellow]Usage (Target mode — RP2350 only):[/bold yellow]
+  replx PORT i2c open --sda [yellow]GP<num>[/yellow] --scl [yellow]GP<num>[/yellow] [yellow]--target --addr 0xNN[/yellow] [[yellow]--mem-size N[/yellow]]
+  replx PORT i2c bus
+  replx PORT i2c read  [[yellow]OFFSET[/yellow] [[yellow]NBYTES[/yellow]]]      [dim](read bytes written by controller)[/dim]
+  replx PORT i2c write [yellow]OFFSET HEX...[/yellow]           [dim](preload bytes for controller to read)[/dim]
+  replx PORT i2c mem   [[yellow]OFFSET[/yellow] [[yellow]NBYTES[/yellow]]]      [dim](full mem snapshot)[/dim]
+  replx PORT i2c close
 
 [bold cyan]Subcommands:[/bold cyan]
-  [green]scan[/green]   Scan I2C bus for responding devices.
-         First scan requires --sda/--scl; subsequent scans use saved bus config.
+  [green]scan[/green]   Scan I2C bus for responding devices (controller).
+  [green]open[/green]   Configure I2C bus without scanning. --target activates I2CTarget.
   [green]bus[/green]    Show saved bus config [dim](in-memory, cleared on agent restart)[/dim].
-  [green]read[/green]   Read bytes. With REG: readfrom_mem. Without REG: readfrom.
-  [green]write[/green]  Write bytes via writeto [dim](first DATA byte = register if needed)[/dim].
-  [green]dump[/green]   Dump register range via readfrom_mem [dim](default: 0x00–0x7F)[/dim].
-  [green]seq[/green]    Execute a write+delay sequence in a single board call.
+  [green]read[/green]   Controller: read bytes from device. Target: read own mem region.
+  [green]write[/green]  Controller: write bytes to device. Target: write own mem region.
+  [green]dump[/green]   Dump device register range (controller only).
+  [green]seq[/green]    Execute a write+delay sequence in a single board call (controller).
          TOKEN: hex byte [dim](e.g. 3C)[/dim]  u<N> [dim]= sleep_us[/dim]  m<N> [dim]= sleep_ms[/dim]
+  [green]mem[/green]    Snapshot entire target mem buffer (target mode only).
+  [green]close[/green]  Release I2C peripheral and clear bus config.
 
 [bold cyan]Options:[/bold cyan]
-  [yellow]--sda PIN[/yellow]         SDA GPIO number [red](scan: required)[/red]
-  [yellow]--scl PIN[/yellow]         SCL GPIO number [red](scan: required)[/red]
+  [yellow]--sda GP<num>[/yellow]     SDA GPIO pin [red](open/scan: required)[/red]  e.g. [cyan]GP12[/cyan]
+  [yellow]--scl GP<num>[/yellow]     SCL GPIO pin [red](open/scan: required)[/red]  e.g. [cyan]GP13[/cyan]
   [yellow]--freq HZ[/yellow]         I2C clock frequency Hz [dim](default: 400000)[/dim]
+  [yellow]--target[/yellow]          Activate I2CTarget (RP2350 only)
+  [yellow]--addr 0xNN[/yellow]       7-bit I2C address for target mode [dim](1-127)[/dim]
+  [yellow]--mem-size N[/yellow]      Target mem buffer size bytes [dim](default: 256)[/dim]
   [yellow]--addr16[/yellow]          16-bit register addresses [dim](default: 8-bit)[/dim]
   [yellow]-n, --repeat N[/yellow]    Repeat N times, N≥1 [dim](default: 1)[/dim]
   [yellow]--interval MS[/yellow]     Delay between repeats ms [dim](default: 1000, requires -n≥2)[/dim]
 
-[bold cyan]Arguments:[/bold cyan]
+[bold cyan]Arguments (controller mode):[/bold cyan]
   [yellow]ADDR[/yellow]      Device address  [dim]hex, 0x optional · e.g.[/dim] [cyan]68[/cyan] [cyan]0x68[/cyan]
   [yellow]NBYTES[/yellow]    Bytes to read   [dim]decimal           · e.g.[/dim] [cyan]6[/cyan]
   [yellow]REG[/yellow]       Register addr   [dim]hex, 0x optional · e.g.[/dim] [cyan]3B[/cyan] [cyan]0x3B[/cyan]
   [yellow]DATA[/yellow]      Bytes to write  [dim]hex space-sep     · e.g.[/dim] [cyan]6B 00[/cyan]
   [yellow]FROM TO[/yellow]   Dump range      [dim]hex, default[/dim] [cyan]00[/cyan][dim]–[/dim][cyan]7F[/cyan]
 
+[bold cyan]Arguments (target mode):[/bold cyan]
+  [yellow]OFFSET[/yellow]    Offset into target mem buffer  [dim]hex, 0x optional[/dim]
+  [yellow]NBYTES[/yellow]    Bytes to read/write            [dim]decimal[/dim]
+  [yellow]HEX...[/yellow]    Bytes to write to mem          [dim]hex space-sep  · e.g.[/dim] [cyan]DE AD BE EF[/cyan]
+
 [bold cyan]Bus config:[/bold cyan]
-  Saved in agent memory on successful scan. Read/write/dump rely on it.
-  Cleared only when the agent restarts. Run scan again to update pins.
+  Saved in agent memory on successful scan/open. Read/write/dump rely on it.
+  Cleared only when the agent restarts or [green]close[/green] is called.
 
 [bold cyan]Board support:[/bold cyan]
-  RP2350    SDA%4==0→CH0, SDA%4==2→CH1, SCL must equal SDA+1
-  Teensy    Fixed Wire pairs: (18,19)→0  (17,16)→1  (25,24)→2  (38,37)→3
+  RP2350    GP%4==0→CH0, GP%4==2→CH1, SCL must equal SDA+1
+  Teensy    Fixed Wire pairs: (GP18,GP19)→0  (GP17,GP16)→1  (GP25,GP24)→2  (GP38,GP37)→3
   ESP32     Any GPIO, CH=0 [dim](GPIO matrix)[/dim]
   EFR32MG   [red]Not supported[/red]
 
-[bold cyan]Examples:[/bold cyan]
+[bold cyan]Examples (controller):[/bold cyan]
   [dim]# Scan and save bus config[/dim]
-  replx COM3 i2c scan --sda 12 --scl 13
+  replx COM3 i2c scan --sda GP12 --scl GP13
 
   [dim]# Show saved bus config[/dim]
   replx COM3 i2c bus
@@ -701,28 +999,46 @@ Interact with I2C devices connected to the board without writing a script.
   [dim]# Dump all registers (0x00–0x7F)[/dim]
   replx COM3 i2c dump 0x68
 
-  [dim]# Partial dump[/dim]
-  replx COM3 i2c dump 0x68 3B 50
+  [dim]# PCF8574 LCD: pulse(0x30)×3 → 4-bit mode[/dim]
+  replx COM3 i2c seq 27  3C u500 38 u100  m5  3C u500 38 u100  u200  3C u500 38 u100
 
-  [dim]# PCF8574 LCD: pulse(0x30)×3 → 4-bit mode, all in one exec[/dim]
-  replx COM3 i2c seq 27  3C u500 38 u100  m5  3C u500 38 u100  u200  3C u500 38 u100  u200  2C u500 28 u100
+[bold yellow]Examples (target):[/bold yellow]
+  [dim]# Open as I2CTarget at address 0x42 with 256-byte mem[/dim]
+  replx COM4 i2c open --sda GP12 --scl GP13 --target --addr 0x42 --mem-size 256
 
-  [dim]# PCF8574 LCD: cmd(0x28) Function Set[/dim]
-  replx COM3 i2c seq 27  28 u500 2C u500 28 u100  88 u500 8C u500 88 u100"""
+  [dim]# Preload bytes at offset 0x10 (controller will read these)[/dim]
+  replx COM4 i2c write 0x10 DE AD BE EF
+
+  [dim]# Inspect what the controller wrote at offset 0x00[/dim]
+  replx COM4 i2c read 0x00 16
+
+  [dim]# Full mem snapshot[/dim]
+  replx COM4 i2c mem
+
+  [dim]# Release target[/dim]
+  replx COM4 i2c close"""
     OutputHelper.print_panel(help_text, title="i2c", border_style="dim")
+
+
 
 
 @app.command(name="i2c", rich_help_panel="Hardware")
 def i2c_cmd(
     args: Optional[list[str]] = typer.Argument(
-        None, help="Subcommand: scan  bus  read  write  dump"
+        None, help="Subcommand: scan  open  close  bus  read  write  dump  seq  mem"
     ),
-    sda: Optional[int] = typer.Option(None, "--sda", metavar="PIN",
-                                      help="SDA GPIO pin (scan only)"),
-    scl: Optional[int] = typer.Option(None, "--scl", metavar="PIN",
-                                      help="SCL GPIO pin (scan only)"),
+    sda: Optional[str] = typer.Option(None, "--sda", metavar="GP<num>",
+                                      help="SDA GPIO pin in GP<num> format (open/scan) e.g. GP20"),
+    scl: Optional[str] = typer.Option(None, "--scl", metavar="GP<num>",
+                                      help="SCL GPIO pin in GP<num> format (open/scan) e.g. GP21"),
     freq: int = typer.Option(400000, "--freq", metavar="HZ",
                              help="I2C clock frequency in Hz"),
+    target: bool = typer.Option(False, "--target",
+                                help="Activate I2CTarget mode (RP2350 only, use with open)"),
+    addr: Optional[str] = typer.Option(None, "--addr", metavar="0xNN",
+                                       help="7-bit I2C address for target mode (1-127)"),
+    mem_size: int = typer.Option(256, "--mem-size", metavar="N",
+                                 help="Target mem buffer size in bytes (default: 256)"),
     addr16: bool = typer.Option(False, "--addr16",
                                 help="Use 16-bit register addresses"),
     repeat: int = typer.Option(1, "--repeat", "-n", metavar="N",
@@ -739,16 +1055,17 @@ def i2c_cmd(
     subcmd = args[0].lower()
     pos_args = args[1:]
 
-    if subcmd not in ('scan', 'bus', 'read', 'write', 'dump', 'seq'):
+    _VALID = ('scan', 'open', 'close', 'bus', 'read', 'write', 'dump', 'seq', 'mem')
+    if subcmd not in _VALID:
         OutputHelper.print_panel(
             f"Unknown subcommand: {subcmd!r}\n\n"
-            "Valid subcommands: scan  bus  read  write  dump  seq",
+            "Valid subcommands: " + "  ".join(_VALID),
             title="I2C Error",
             border_style="red",
         )
         raise typer.Exit(1)
 
-    if subcmd != 'scan' and repeat < 1:
+    if subcmd not in ('scan', 'open', 'close', 'bus') and repeat < 1:
         OutputHelper.print_panel(
             "--repeat must be >= 1",
             title="I2C Error",
@@ -765,11 +1082,17 @@ def i2c_cmd(
             _subcmd_bus(client)
             return
 
+        if subcmd == 'close':
+            _subcmd_close(client)
+            return
+
         core = _get_core(client, port)
         _validate_core(core)
 
         if subcmd == 'scan':
             _subcmd_scan(client, core, sda, scl, freq)
+        elif subcmd == 'open':
+            _subcmd_open(client, core, sda, scl, freq, target, addr, mem_size)
         elif subcmd == 'read':
             _subcmd_read(client, pos_args, addr16, repeat, interval)
         elif subcmd == 'write':
@@ -778,3 +1101,5 @@ def i2c_cmd(
             _subcmd_dump(client, pos_args, addr16, repeat, interval)
         elif subcmd == 'seq':
             _subcmd_seq(client, pos_args)
+        elif subcmd == 'mem':
+            _subcmd_mem(client, pos_args)

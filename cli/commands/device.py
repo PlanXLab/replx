@@ -211,7 +211,7 @@ def _create_vscode_files_and_typehints(vscode_dir: str, core: str, device: str, 
 
 @app.command(rich_help_panel="Connection & Session")
 def setup(
-    args: list[str] = typer.Argument(None, help="Subcommand: clean"),
+    clean: bool = typer.Option(False, "--clean", help="Delete .vscode folder in current project"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
@@ -232,16 +232,16 @@ Run this once per project folder to set up your workspace.
 
 [bold cyan]Usage:[/bold cyan]
   replx [yellow]PORT[/yellow] setup             [dim]# Serial: COM3, /dev/ttyUSB0[/dim]
-  replx [yellow]PORT[/yellow] setup clean       [dim]# Reset config with only this port[/dim]
+  replx setup [yellow]--clean[/yellow]          [dim]# Delete .vscode folder (no PORT needed)[/dim]
 
-[bold cyan]Subcommands:[/bold cyan]
-  [yellow]clean[/yellow]   Reset .replx file: set PORT as default and remove all history
-          This clears all other saved connections.
+[bold cyan]Options:[/bold cyan]
+  [yellow]--clean[/yellow]   Delete the [yellow].vscode[/yellow] folder in the current project directory.
+            All configuration and typehints will be removed.
 
 [bold cyan]Examples:[/bold cyan]
   replx COM3 setup              [dim]# Windows serial port[/dim]
   replx /dev/ttyACM0 setup      [dim]# Linux serial port[/dim]
-  replx COM3 setup clean        [dim]# Reset config, keep only COM3[/dim]
+  replx setup --clean           [dim]# Remove .vscode folder[/dim]
 
 [bold cyan]After setup, you can:[/bold cyan]
   replx ls                      [dim]# List files on device[/dim]
@@ -256,9 +256,48 @@ Run this once per project folder to set up your workspace.
         OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
-    
-    clean_mode = args and len(args) > 0 and args[0].lower() == "clean"
-    
+
+    if clean:
+        _port = _get_global_options().get('port')
+        if _port:
+            OutputHelper.print_panel(
+                "[yellow]--clean[/yellow] does not take a PORT argument.\n\n"
+                "Usage: [bright_green]replx setup --clean[/bright_green]",
+                title="Invalid Usage",
+                border_style="red"
+            )
+            raise typer.Exit(1)
+        import shutil
+        current = os.path.realpath(os.getcwd())
+        root = os.path.abspath(os.sep)
+        vscode_dir = None
+        search_dir = current
+        visited = set()
+        while search_dir not in visited:
+            visited.add(search_dir)
+            candidate = os.path.join(search_dir, ".vscode")
+            if os.path.isdir(candidate):
+                vscode_dir = candidate
+                break
+            parent = os.path.dirname(search_dir)
+            if parent == search_dir or parent == root:
+                break
+            search_dir = parent
+        if vscode_dir:
+            shutil.rmtree(vscode_dir)
+            OutputHelper.print_panel(
+                "All settings have been removed.",
+                title="Clean Complete",
+                border_style="green"
+            )
+        else:
+            OutputHelper.print_panel(
+                "No [yellow].vscode[/yellow] folder found in current project.",
+                title="Nothing to Clean",
+                border_style="dim"
+            )
+        raise typer.Exit()
+
     global_opts = _get_global_options()
     port = global_opts.get('port')
     agent_port = global_opts.get('agent_port')
@@ -511,29 +550,16 @@ Run this once per project folder to set up your workspace.
     
     set_as_default = True
     
-    if clean_mode:
-        from ..config import ConfigManager
-        fresh_connections = {
-            port: {
-                'version': STATE.version,
-                'core': STATE.core,
-                'device': STATE.device,
-                'manufacturer': STATE.manufacturer,
-                'agent_port': agent_port
-            }
-        }
-        ConfigManager.write(env_path, fresh_connections, default=port)
-    else:
-        _update_connection_config(
-            env_path,
-            port,
-            version=STATE.version,
-            core=STATE.core,
-            device=STATE.device,
-            manufacturer=STATE.manufacturer,
-            agent_port=agent_port,
-            set_default=set_as_default
-        )
+    _update_connection_config(
+        env_path,
+        port,
+        version=STATE.version,
+        core=STATE.core,
+        device=STATE.device,
+        manufacturer=STATE.manufacturer,
+        agent_port=agent_port,
+        set_default=set_as_default
+    )
     
     typehint_paths = _create_vscode_files_and_typehints(vscode_dir, STATE.core, STATE.device, overwrite=True)
     
@@ -548,12 +574,10 @@ Run this once per project folder to set up your workspace.
     content += f"Workspace: [dim]{workspace}[/dim]\n"
     if typehint_paths:
         content += f"Typehints: [dim]{len(typehint_paths)} path(s) configured[/dim]"
-    if clean_mode:
-        content += "\n\n[dim]History cleared. Only this connection is saved.[/dim]"
-    
+
     OutputHelper.print_panel(
         content,
-        title="Setup Complete" + (" (Clean)" if clean_mode else ""),
+        title="Setup Complete",
         border_style="green"
     )
 

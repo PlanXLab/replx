@@ -16,10 +16,9 @@ class I2cCommandsMixin:
             raise ValueError("No active connection. Connect to a board first.")
         return _norm_port(port)
 
-    def _cmd_i2c_bus_set(self, ctx: CommandContext,
-                         sda: int, scl: int, ch: int, freq: int) -> dict:
+    def _cmd_i2c_bus_set(self, ctx: CommandContext, **kwargs) -> dict:
         port = self._i2c_resolve_port(ctx)
-        self._i2c_bus[port] = {'sda': sda, 'scl': scl, 'ch': ch, 'freq': freq}
+        self._i2c_bus[port] = dict(kwargs)
         return self._i2c_bus[port]
 
     def _cmd_i2c_bus_get(self, ctx: CommandContext) -> dict:

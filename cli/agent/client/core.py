@@ -109,7 +109,8 @@ class AgentClient:
                         echo: bool = False,
                         output_callback: Callable[[bytes, str], None] = None,
                         input_provider: Callable[[], Optional[bytes]] = None,
-                        stop_check: Callable[[], bool] = None) -> Dict[str, Any]:
+                        stop_check: Callable[[], bool] = None,
+                        ctrl_c_grace_s: float = 3.0) -> Dict[str, Any]:
         if not self.sock:
             self.connect()
 
@@ -160,8 +161,6 @@ class AgentClient:
         try:
             while True:
                 if stop_check and stop_check():
-                    # Flush any remaining pending input (e.g. CTRL_C) before stopping,
-                    # so the board receives the interrupt signal before run_stop is called.
                     if input_provider:
                         for _ in range(16):
                             try:
@@ -174,12 +173,7 @@ class AgentClient:
                             except Exception:
                                 break
 
-                    # Grace period: wait for the board to finish its KeyboardInterrupt
-                    # handler (e.g. finally blocks, cleanup code, print statements).
-                    # If the script completes within the grace period, we receive all
-                    # output and break cleanly without calling run_stop.
-                    # Only force-stop if the board does not exit on its own.
-                    grace_deadline = time.time() + 3.0
+                    grace_deadline = time.time() + ctrl_c_grace_s
                     graceful = False
                     while time.time() < grace_deadline:
                         try:
@@ -203,7 +197,7 @@ class AgentClient:
 
                     if not graceful:
                         try:
-                            self.send_command(Cmd.RUN_STOP, timeout=0.5)
+                            self.send_command(Cmd.RUN_STOP, timeout=2.0)
                         except Exception:
                             pass
                     break
@@ -251,12 +245,13 @@ class AgentClient:
 
         except KeyboardInterrupt:
             try:
-                self.send_command(Cmd.RUN_STOP, timeout=0.5)
+                self.send_command(Cmd.RUN_STOP, timeout=2.0)
             except Exception:
                 pass
             raise
 
-        self.sock.settimeout(self.TIMEOUT)
+        finally:
+            self.sock.settimeout(self.TIMEOUT)
 
         return {"run": True, "completed": True}
 

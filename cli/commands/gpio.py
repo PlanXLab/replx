@@ -6,15 +6,19 @@ import sys
 from typing import Optional
 
 import typer
+from rich.live import Live
+from rich.panel import Panel
+from rich.spinner import Spinner
+from rich.table import Table
+from rich.text import Text
 
 from replx.utils.constants import CTRL_C
-from ..helpers import OutputHelper
+from ..helpers import OutputHelper, get_panel_box, CONSOLE_WIDTH
 from ..connection import _ensure_connected, _create_agent_client
 from ..app import app
 
 
 _READ_ACTIONS = {"read", "wait_h", "wait_l", "pulse_h", "pulse_l"}
-_EDGE_MODES = {"rising", "falling", "both"}
 _EXPR_FUNCS = {
     'abs': abs,
     'round': round,
@@ -38,19 +42,6 @@ def _parse_logic(token: str) -> int:
     if s not in ("0", "1"):
         raise ValueError(f"Invalid logic value: {token!r}. Use 0 or 1")
     return int(s)
-
-
-def _parse_edge(token: Optional[str]) -> Optional[str]:
-    if token is None:
-        return None
-    edge = token.strip().lower()
-    if edge not in _EDGE_MODES:
-        raise ValueError("--edge must be one of: rising, falling, both")
-    return edge
-
-
-def _is_repeat_explicit() -> bool:
-    return '--repeat' in sys.argv or '-n' in sys.argv
 
 
 def _validate_expr_ast(node: ast.AST, allowed_names: set[str]) -> None:
@@ -124,7 +115,7 @@ def _parse_json_strict(raw: str):
         raise RuntimeError(f"Device error:\n{raw}")
 
 
-def _run_interactive_script(client, code: str, *, live_output: bool = False) -> str:
+def _run_interactive_script(client, code: str, *, live_output: bool = False, ctrl_c_grace_s: float = 3.0) -> str:
     stop_requested = False
     pending_input: list[bytes] = []
     stdout_parts: list[str] = []
@@ -162,6 +153,7 @@ def _run_interactive_script(client, code: str, *, live_output: bool = False) -> 
             output_callback=output_callback,
             input_provider=input_provider,
             stop_check=stop_check,
+            ctrl_c_grace_s=ctrl_c_grace_s,
         )
     finally:
         signal.signal(signal.SIGINT, original_sigint)
@@ -173,13 +165,6 @@ def _run_interactive_script(client, code: str, *, live_output: bool = False) -> 
     if stop_requested and not raw.strip():
         raise typer.Exit(130)
     return raw.strip()
-
-
-def _format_values(values: list[int]) -> str:
-    chunks = []
-    for i in range(0, len(values), 32):
-        chunks.append(' '.join(str(v) for v in values[i:i + 32]))
-    return '\n'.join(chunks) if chunks else '-'
 
 
 def _format_seq_ops(ops: list[tuple[str, int]]) -> str:
@@ -245,33 +230,230 @@ def _parse_seq_tokens(tokens: list[str], write_pin_name: str) -> tuple[list[tupl
     return ops, read_pin_no, read_action, read_pin_name
 
 
-def _make_read_code(pin_no: int, pin_name: str, repeat: int) -> str:
-    return (
-        "from machine import Pin\n"
-        "import json\n"
-        f"p=Pin({pin_no},Pin.IN)\n"
-        "vals=[]\n"
-        f"for _ in range({repeat}):\n"
-        "    vals.append(p.value())\n"
-        f"print(json.dumps({{'pin':{pin_name!r},'values':vals}}))"
+_GPIO_SCOPE_TEMPLATE = r'''import sys
+import time
+import array
+import select as _sel
+from machine import Pin
+from termviz import Term, Canvas, Plot, Scope
+
+_PIN_NO      = __PIN_NO__
+_INTERVAL_MS = __INTERVAL_MS__
+_BUF_SIZE    = 128
+
+_CV_COLS    = 78
+_CV_ROWS    = 14
+_STATS_ROW  = _CV_ROWS + 1
+_CHANGE_ROW = _CV_ROWS + 2
+_LOG_N      = 8
+_LOG_START  = _CV_ROWS + 3
+_HELP_ROW   = _CV_ROWS + 3 + _LOG_N
+_REGION     = (0, 4, 6, 4)
+_COLORS     = [(80, 255, 120), (80, 180, 255)]
+_ARROW_UP   = "\uf062"
+_ARROW_DOWN = "\uf063"
+_ICON_DELTA = "\uf252"
+
+_ts_buf     = array.array('l', [0] * _BUF_SIZE)
+_lv_buf     = array.array('b', [0] * _BUF_SIZE)
+_wr         = 0
+_rd         = 0
+_overflow   = False
+_next_level = bytearray(1)
+
+
+def _isr(pin):
+    """Hard-IRQ handler: zero heap allocation."""
+    global _wr, _overflow
+    nxt = (_wr + 1) % _BUF_SIZE
+    if nxt == _rd:
+        _overflow = True
+    else:
+        _ts_buf[_wr] = time.ticks_us()
+        _lv_buf[_wr] = _next_level[0]
+        _next_level[0] ^= 1
+        _wr = nxt
+
+
+def _flush_buf():
+    """Drain all pending edges into a plain list (called from main loop only)."""
+    global _rd, _overflow
+    edges = []
+    while _rd != _wr:
+        edges.append((_ts_buf[_rd], int(_lv_buf[_rd])))
+        _rd = (_rd + 1) % _BUF_SIZE
+    ov = _overflow
+    _overflow = False
+    return edges, ov
+
+
+def _make_plot():
+    W  = _CV_COLS * 2
+    H  = _CV_ROWS * 4
+    rl, rt, rr, rb = _REGION
+    cv = Canvas(_CV_COLS, _CV_ROWS)
+    ax = Plot(cv,
+              region_px=(rl, rt, W - rl - rr, H - rt - rb),
+              xlim=(0, W), ylim=(-0.1, 1.1),
+              color_cycle=[_COLORS[0]])
+    ax.title(f"GPIO  GP{_PIN_NO}", color=(180, 220, 180))
+    ax.yticks([0.0, 1.0], ["0", "1"])
+    ax.grid(False)
+    sc = Scope(ax, vmin=-0.1, vmax=1.1, colors=[_COLORS[0]], px_step=2, show_zero=False)
+    ax._legend_on = False
+    ax.clear_legend_items()
+    ax._ylabel = None
+    return cv, sc
+
+
+def _poll_key():
+    """Return the first pending character, or None. Raises KeyboardInterrupt on Ctrl+C."""
+    r, _, _ = _sel.select([sys.stdin], [], [], 0)
+    if not r:
+        return None
+    ch = sys.stdin.read(1)
+    if ch == "\x03":
+        raise KeyboardInterrupt
+    return ch
+
+
+def _draw_log(w, log_buf, log_pos):
+    """Redraw all 8 edge-log rows (oldest at top, newest at bottom)."""
+    for i in range(_LOG_N):
+        idx = (log_pos - _LOG_N + i) % _LOG_N
+        entry = log_buf[idx]
+        w(Term.cursor_to(_LOG_START + i, 1) +
+          (entry if entry else Term.FG.MUTED + "  ---" + Term.RESET + " " * 60))
+
+
+def main():
+    pin = Pin(_PIN_NO, Pin.IN)
+    _next_level[0] = pin.value() ^ 1   # first edge is opposite of current idle level
+    pin.irq(handler=_isr, trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, hard=True)
+    cv, sc = _make_plot()
+    w = sys.stdout.write
+    last_change_t = time.ticks_us()
+    arrow = None
+    sweep_idx = 0
+    paused = False
+    log_buf = [""] * _LOG_N
+    log_pos = 0
+    log_pair_first_t = None
+    log_pair_first_v = None
+    last_irq_level = pin.value()
+    _draw_log(w, log_buf, log_pos)
+    w(Term.cursor_to(_HELP_ROW, 1) +
+      Term.FG.MUTED + "  [SPACE] pause   [Ctrl+C] exit              " + Term.RESET + "     ")
+    try:
+        while True:
+            ch = _poll_key()
+            if ch == " ":
+                paused = not paused
+                if paused:
+                    w(Term.cursor_to(_HELP_ROW, 1) +
+                      Term.rgb(255, 220, 60) + "  \u23f8 PAUSED  " + Term.RESET + "  [SPACE] resume  [Ctrl+C] exit" + "     ")
+                else:
+                    w(Term.cursor_to(_HELP_ROW, 1) +
+                      Term.FG.MUTED + "  [SPACE] pause   [Ctrl+C] exit              " + Term.RESET + "     ")
+            if paused:
+                time.sleep_ms(_INTERVAL_MS)
+                continue
+
+            edges, overflow = _flush_buf()
+            edge_fired = len(edges) > 0
+
+            for t_us, v in edges:
+                last_change_t = t_us
+                arrow = _ARROW_UP if v else _ARROW_DOWN
+                e_name = "rising" if v else "falling"
+                e_col = Term.rgb(80, 255, 120) if v else Term.rgb(255, 80, 80)
+                t_str = "{:>9}".format(t_us // 1000)
+                e_padded = "{:<7}".format(e_name)
+                if log_pair_first_t is None:
+                    d_str = " " * 16
+                    log_pair_first_t = t_us
+                    log_pair_first_v = v
+                else:
+                    delta = time.ticks_diff(t_us, log_pair_first_t)
+                    if log_pair_first_v:
+                        lv_col = Term.rgb(80, 255, 120)
+                        lv_ch = "H"
+                    else:
+                        lv_col = Term.rgb(255, 80, 80)
+                        lv_ch = "L"
+                    d_str = _ICON_DELTA + "{:>7} ms  ".format(delta // 1000) + lv_col + lv_ch + Term.FG.MUTED
+                    log_pair_first_t = None
+                    log_pair_first_v = None
+                log_buf[log_pos % _LOG_N] = (
+                    Term.rgb(255, 220, 60) + "  " + t_str + Term.RESET +
+                    Term.FG.MUTED + " ms   " + Term.RESET +
+                    e_col + arrow + "  " + e_padded + Term.RESET +
+                    Term.FG.MUTED + "   " + d_str + Term.RESET + "   "
+                )
+                log_pos += 1
+
+            t_now = time.ticks_us()
+            held = time.ticks_diff(t_now, last_change_t)
+            # Update last known level from IRQ edge history (avoids pin.value() race)
+            if edges:
+                last_irq_level = edges[-1][1]
+            # Advance scope exactly one tick per render loop with correct level
+            _pt = sc._t
+            sc.tick([float(last_irq_level)])
+            if sc._t <= _pt:
+                sweep_idx ^= 1
+                sc._colors[0] = sc.cv.pack_rgb(_COLORS[sweep_idx])
+            v_now = last_irq_level
+
+            val_color = Term.rgb(80, 255, 120) if v_now else Term.rgb(255, 80, 80)
+            ov_str = "  \u26a0 OVERFLOW" if overflow else "          "
+            w(Term.cursor_to(_STATS_ROW, 1) +
+              Term.FG.MUTED + f"  GP{_PIN_NO}  " + Term.RESET +
+              Term.FG.MUTED + f"t={t_now // 1000} ms  render={_INTERVAL_MS} ms  " + Term.RESET +
+              "Value: " + val_color + str(v_now) + Term.RESET +
+              (Term.rgb(255, 80, 80) + ov_str + Term.RESET if overflow else "     "))
+            if arrow is None:
+                w(Term.cursor_to(_CHANGE_ROW, 1) +
+                  Term.FG.MUTED + "  last change: --" + Term.RESET + "                                      ")
+            else:
+                w(Term.cursor_to(_CHANGE_ROW, 1) +
+                  Term.FG.MUTED + f"  last change: {arrow} " + Term.RESET +
+                  Term.rgb(255, 220, 60) + f"at {last_change_t // 1000} ms" + Term.RESET +
+                  Term.FG.MUTED + f"  held {held // 1000} ms" + Term.RESET + "     ")
+            if edge_fired:
+                _draw_log(w, log_buf, log_pos)
+            time.sleep_ms(_INTERVAL_MS)
+    except KeyboardInterrupt:
+        pin.irq(handler=None, trigger=0, hard=True)
+    finally:
+        cv.end()
+
+
+main()
+'''
+
+
+def _preflight_scope_libs(client) -> None:
+    code = (
+        "try:\n"
+        " import termviz\n"
+        " print('ok')\n"
+        "except Exception as e:\n"
+        " print('missing:'+str(e))\n"
     )
+    raw = _exec(client, code, timeout=3.0)
+    if 'ok' not in raw:
+        raise RuntimeError(
+            "gpio scope requires termviz on the board.\n"
+            f"Board response: {raw}"
+        )
 
 
-def _make_watch_code(pin_no: int, edge: str) -> str:
+def _build_scope_code(pin_no: int, interval_ms: int) -> str:
     return (
-        "from machine import Pin\n"
-        "import time\n"
-        f"p=Pin({pin_no},Pin.IN)\n"
-        f"edge={edge!r}\n"
-        "last=p.value()\n"
-        "while True:\n"
-        "    v=p.value()\n"
-        "    if v!=last:\n"
-        "        e='rising' if v else 'falling'\n"
-        "        if edge=='both' or edge==e:\n"
-        "            print(str(time.ticks_ms())+' '+e)\n"
-        "        last=v\n"
-        "    time.sleep_ms(1)"
+        _GPIO_SCOPE_TEMPLATE
+        .replace('__PIN_NO__', str(int(pin_no)))
+        .replace('__INTERVAL_MS__', str(int(interval_ms)))
     )
 
 
@@ -285,12 +467,27 @@ def _make_write_code(pin_no: int, pin_name: str, value: int) -> str:
     )
 
 
+def _mk_timeout_exit(action: str, read_pin_name: str, indent: int = 12) -> str:
+    """Generate the MicroPython timeout-exit snippet (used inside while loops)."""
+    pad = " " * indent
+    return (
+        f"{pad}res['read_action']={action!r}\n"
+        f"{pad}res['read_pin']={read_pin_name!r}\n"
+        f"{pad}res['timeout']=True\n"
+        f"{pad}res['timeout_ms']=timeout_ms\n"
+        f"{pad}res['value']=rp.value()\n"
+        f"{pad}print(json.dumps(res))\n"
+        f"{pad}raise SystemExit\n"
+    )
+
+
 def _make_seq_code(write_pin_no: int, write_pin_name: str, ops: list[tuple[str, int]], read_pin_no: Optional[int], read_pin_name: str, read_action: Optional[str], timeout_ms: int) -> str:
     py_ops = repr(ops)
     action_expr = repr(read_action)
     read_pin_expr = 'None' if read_pin_no is None else str(read_pin_no)
+    te = {a: _mk_timeout_exit(a, read_pin_name) for a in ('wait_h', 'wait_l')}
     return (
-        "from machine import Pin\n"
+        "from machine import Pin,time_pulse_us\n"
         "import time,json\n"
         f"wp=Pin({write_pin_no},Pin.OUT)\n"
         f"ops={py_ops}\n"
@@ -310,132 +507,231 @@ def _make_seq_code(write_pin_no: int, write_pin_name: str, ops: list[tuple[str, 
         f"res={{'write_pin':{write_pin_name!r},'writes':writes,'value':wp.value()}}\n"
         "def _expired(t0):\n"
         "    return timeout_ms > 0 and time.ticks_diff(time.ticks_ms(), t0) >= timeout_ms\n"
+        "if action is not None and rp is None:\n"
+        f"    rp=Pin({write_pin_no},Pin.IN)\n"
         "if action=='read':\n"
         "    res['read_action']='read'\n"
         f"    res['read_pin']={read_pin_name!r}\n"
-        "    if rp is None:\n"
-        f"        rp=Pin({write_pin_no},Pin.IN)\n"
         "    res['value']=rp.value()\n"
         "elif action=='wait_h':\n"
-        "    if rp is None:\n"
-        f"        rp=Pin({write_pin_no},Pin.IN)\n"
         "    t0=time.ticks_ms()\n"
         "    while rp.value()==0:\n"
         "        if _expired(t0):\n"
-        "            res['read_action']='wait_h'\n"
-        f"            res['read_pin']={read_pin_name!r}\n"
-        "            res['timeout']=True\n"
-        "            res['timeout_ms']=timeout_ms\n"
-        "            res['value']=rp.value()\n"
-        "            print(json.dumps(res))\n"
-        "            raise SystemExit\n"
+        + te['wait_h'] +
         "        time.sleep_us(50)\n"
         "    res['read_action']='wait_h'\n"
         f"    res['read_pin']={read_pin_name!r}\n"
         "    res['wait_ms']=time.ticks_diff(time.ticks_ms(),t0)\n"
         "    res['value']=rp.value()\n"
         "elif action=='wait_l':\n"
-        "    if rp is None:\n"
-        f"        rp=Pin({write_pin_no},Pin.IN)\n"
         "    t0=time.ticks_ms()\n"
         "    while rp.value()==1:\n"
         "        if _expired(t0):\n"
-        "            res['read_action']='wait_l'\n"
-        f"            res['read_pin']={read_pin_name!r}\n"
-        "            res['timeout']=True\n"
-        "            res['timeout_ms']=timeout_ms\n"
-        "            res['value']=rp.value()\n"
-        "            print(json.dumps(res))\n"
-        "            raise SystemExit\n"
+        + te['wait_l'] +
         "        time.sleep_us(50)\n"
         "    res['read_action']='wait_l'\n"
         f"    res['read_pin']={read_pin_name!r}\n"
         "    res['wait_ms']=time.ticks_diff(time.ticks_ms(),t0)\n"
         "    res['value']=rp.value()\n"
         "elif action=='pulse_h':\n"
-        "    if rp is None:\n"
-        f"        rp=Pin({write_pin_no},Pin.IN)\n"
-        "    t0=time.ticks_ms()\n"
-        "    while rp.value()==0:\n"
-        "        if _expired(t0):\n"
-        "            res['read_action']='pulse_h'\n"
-        f"            res['read_pin']={read_pin_name!r}\n"
-        "            res['timeout']=True\n"
-        "            res['timeout_ms']=timeout_ms\n"
-        "            res['value']=rp.value()\n"
-        "            print(json.dumps(res))\n"
-        "            raise SystemExit\n"
-        "        time.sleep_us(50)\n"
-        "    t1=time.ticks_us()\n"
-        "    while rp.value()==1:\n"
-        "        if _expired(t0):\n"
-        "            res['read_action']='pulse_h'\n"
-        f"            res['read_pin']={read_pin_name!r}\n"
-        "            res['timeout']=True\n"
-        "            res['timeout_ms']=timeout_ms\n"
-        "            res['value']=rp.value()\n"
-        "            print(json.dumps(res))\n"
-        "            raise SystemExit\n"
-        "        time.sleep_us(50)\n"
+        "    if timeout_ms>0:\n"
+        "        r=time_pulse_us(rp,1,timeout_ms*1000)\n"
+        "    else:\n"
+        "        while rp.value()==0:\n"
+        "            time.sleep_us(10)\n"
+        "        r=time_pulse_us(rp,1,60000000)\n"
+        "    if r<0:\n"
+        "        res['read_action']='pulse_h'\n"
+        f"        res['read_pin']={read_pin_name!r}\n"
+        "        res['timeout']=True\n"
+        "        res['timeout_ms']=timeout_ms\n"
+        "        res['value']=rp.value()\n"
+        "        print(json.dumps(res))\n"
+        "        raise SystemExit\n"
         "    res['read_action']='pulse_h'\n"
         f"    res['read_pin']={read_pin_name!r}\n"
-        "    res['pulse_us']=time.ticks_diff(time.ticks_us(),t1)\n"
+        "    res['pulse_us']=r\n"
         "    res['value']=rp.value()\n"
         "elif action=='pulse_l':\n"
-        "    if rp is None:\n"
-        f"        rp=Pin({write_pin_no},Pin.IN)\n"
-        "    t0=time.ticks_ms()\n"
-        "    while rp.value()==1:\n"
-        "        if _expired(t0):\n"
-        "            res['read_action']='pulse_l'\n"
-        f"            res['read_pin']={read_pin_name!r}\n"
-        "            res['timeout']=True\n"
-        "            res['timeout_ms']=timeout_ms\n"
-        "            res['value']=rp.value()\n"
-        "            print(json.dumps(res))\n"
-        "            raise SystemExit\n"
-        "        time.sleep_us(50)\n"
-        "    t1=time.ticks_us()\n"
-        "    while rp.value()==0:\n"
-        "        if _expired(t0):\n"
-        "            res['read_action']='pulse_l'\n"
-        f"            res['read_pin']={read_pin_name!r}\n"
-        "            res['timeout']=True\n"
-        "            res['timeout_ms']=timeout_ms\n"
-        "            res['value']=rp.value()\n"
-        "            print(json.dumps(res))\n"
-        "            raise SystemExit\n"
-        "        time.sleep_us(50)\n"
+        "    if timeout_ms>0:\n"
+        "        r=time_pulse_us(rp,0,timeout_ms*1000)\n"
+        "    else:\n"
+        "        while rp.value()==1:\n"
+        "            time.sleep_us(10)\n"
+        "        r=time_pulse_us(rp,0,60000000)\n"
+        "    if r<0:\n"
+        "        res['read_action']='pulse_l'\n"
+        f"        res['read_pin']={read_pin_name!r}\n"
+        "        res['timeout']=True\n"
+        "        res['timeout_ms']=timeout_ms\n"
+        "        res['value']=rp.value()\n"
+        "        print(json.dumps(res))\n"
+        "        raise SystemExit\n"
         "    res['read_action']='pulse_l'\n"
         f"    res['read_pin']={read_pin_name!r}\n"
-        "    res['pulse_us']=time.ticks_diff(time.ticks_us(),t1)\n"
+        "    res['pulse_us']=r\n"
         "    res['value']=rp.value()\n"
         "print(json.dumps(res))"
     )
 
 
+def _make_repeat_code(pin_no: int, pin_name: str, action: str, repeat: int) -> str:
+    n_expr = '0' if repeat == 0 else str(repeat)
+    pn = repr(pin_name)
+    if action == 'pulse_h':
+        body = (
+            "    _acc=0\n"
+            "    while True:\n"
+            "        _r=time_pulse_us(rp,1,100000)\n"
+            "        if _r>=0:\n"
+            "            _acc+=_r\n"
+            "            break\n"
+            "        if rp.value()==0:\n"
+            "            if _acc>0:\n"
+            "                _acc=-1\n"
+            "                break\n"
+            "        else:\n"
+            "            _acc+=100000\n"
+            "    r=_acc\n"
+            "    if r<0:\n"
+            f"        print(json.dumps({{'read_pin':{pn},'read_action':'pulse_h','timeout':True,'value':rp.value()}}))\n"
+            "        continue\n"
+            f"    print(json.dumps({{'read_pin':{pn},'read_action':'pulse_h','pulse_us':r,'value':rp.value()}}))\n"
+        )
+    elif action == 'pulse_l':
+        body = (
+            "    _acc=0\n"
+            "    while True:\n"
+            "        _r=time_pulse_us(rp,0,100000)\n"
+            "        if _r>=0:\n"
+            "            _acc+=_r\n"
+            "            break\n"
+            "        if rp.value()==1:\n"
+            "            if _acc>0:\n"
+            "                _acc=-1\n"
+            "                break\n"
+            "        else:\n"
+            "            _acc+=100000\n"
+            "    r=_acc\n"
+            "    if r<0:\n"
+            f"        print(json.dumps({{'read_pin':{pn},'read_action':'pulse_l','timeout':True,'value':rp.value()}}))\n"
+            "        continue\n"
+            f"    print(json.dumps({{'read_pin':{pn},'read_action':'pulse_l','pulse_us':r,'value':rp.value()}}))\n"
+        )
+    elif action == 'wait_h':
+        body = (
+            "    while rp.value()==1:\n"
+            "        time.sleep_us(50)\n"
+            "    t0=time.ticks_ms()\n"
+            "    while rp.value()==0:\n"
+            "        time.sleep_us(50)\n"
+            "    wms=time.ticks_diff(time.ticks_ms(),t0)\n"
+            f"    print(json.dumps({{'read_pin':{pn},'read_action':'wait_h','wait_ms':wms,'value':rp.value()}}))\n"
+        )
+    elif action == 'wait_l':
+        body = (
+            "    while rp.value()==0:\n"
+            "        time.sleep_us(50)\n"
+            "    t0=time.ticks_ms()\n"
+            "    while rp.value()==1:\n"
+            "        time.sleep_us(50)\n"
+            "    wms=time.ticks_diff(time.ticks_ms(),t0)\n"
+            f"    print(json.dumps({{'read_pin':{pn},'read_action':'wait_l','wait_ms':wms,'value':rp.value()}}))\n"
+        )
+    else:
+        raise ValueError(f"Unsupported repeat action: {action}")
+    return (
+        "from machine import Pin,time_pulse_us\n"
+        "import time,json\n"
+        f"rp=Pin({pin_no},Pin.IN)\n"
+        f"_n={n_expr}\n"
+        "_i=0\n"
+        "while _n==0 or _i<_n:\n"
+        "    _i+=1\n"
+        + body
+    )
+
+
+def _run_repeat_interactive(client, code: str, on_line, ctrl_c_grace_s: float = 3.0) -> None:
+    stop_requested = False
+    pending_input: list[bytes] = []
+    line_buf = bytearray()
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def sigint_handler(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+        pending_input.append(CTRL_C)
+
+    def output_callback(data: bytes, stream_type: str = "stdout"):
+        nonlocal line_buf
+        if stream_type == 'stderr':
+            return
+        line_buf += data
+        while b'\n' in line_buf:
+            line, _, line_buf = line_buf.partition(b'\n')
+            text = line.decode('utf-8', errors='replace').strip()
+            if text:
+                on_line(text)
+
+    def input_provider() -> bytes:
+        if pending_input:
+            return pending_input.pop(0)
+        return b''
+
+    def stop_check() -> bool:
+        return stop_requested
+
+    try:
+        signal.signal(signal.SIGINT, sigint_handler)
+        client.run_interactive(
+            script_content=code,
+            echo=False,
+            output_callback=output_callback,
+            input_provider=input_provider,
+            stop_check=stop_check,
+            ctrl_c_grace_s=ctrl_c_grace_s,
+        )
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+
+
 def _print_gpio_help() -> None:
     help_text = """\
-GPIO read/write/sequence command for a single pin.
+GPIO monitor/read/write/sequence command for a single pin.
 
 [bold cyan]Usage:[/bold cyan]
   replx gpio [yellow]SUBCOMMAND[/yellow] ...
 
 [bold cyan]Subcommands:[/bold cyan]
-  [green]read[/green]   Read one GPIO in input mode.
-  [green]write[/green]  Drive one GPIO in output mode.
-  [green]seq[/green]    Execute a write+delay sequence with an optional read_action.
+  [green]monitor[/green]  Live scope — sample one GPIO in input mode until Ctrl+C.
+  [green]read[/green]     One-shot read action (pulse/wait) on a single input pin.
+  [green]write[/green]    Drive one GPIO in output mode.
+  [green]seq[/green]      Execute a write+delay sequence with an optional read_action.
 
 [bold cyan]Pin Format:[/bold cyan]
   [yellow]GP<num>[/yellow] only, case-insensitive. Example: [cyan]GP1[/cyan], [cyan]gp26[/cyan]
 
+[bold cyan]Monitor:[/bold cyan]
+  replx gpio monitor [yellow]GP<num>[/yellow] [[green]--interval MS[/green]]
+  [dim]--interval MS[/dim]  render interval in milliseconds [dim](default 1, min 1)[/dim]
+                   [dim]Edges are captured by IRQ (\u223010-50 µs accuracy) independent of[/dim]
+                   [dim]this interval. Renders scope + edge log at --interval rate.[/dim]
+                   [dim]Requires termviz on board.[/dim]
+
 [bold cyan]Read:[/bold cyan]
-  replx gpio read [yellow]GP<num>[/yellow] [green]--repeat N[/green] [green]--edge MODE[/green]
-  [dim]--repeat=1[/dim]   read once [dim](default)[/dim]
-  [dim]--repeat>1[/dim]   read N times in one board call
-  [dim]--repeat=0[/dim]   continuous watch until Ctrl+C [dim](prints only on state change)[/dim]
-  [dim]--edge MODE[/dim]  edge watch filter: [cyan]rising[/cyan], [cyan]falling[/cyan], [cyan]both[/cyan]
-               [dim]When --edge is used, repeat defaults to 0 and any nonzero repeat is invalid.[/dim]
+  replx gpio read [yellow]GP<num>[/yellow] [magenta]ACTION[/magenta] [[green]--timeout MS[/green]] [[green]--expr EXPR[/green]]
+
+  [bold]ACTION[/bold]
+    [magenta]wait_h[/magenta]   block until pin goes High
+    [magenta]wait_l[/magenta]   block until pin goes Low
+    [magenta]pulse_h[/magenta]  wait for a High pulse and report its width in µs
+    [magenta]pulse_l[/magenta]  wait for a Low  pulse and report its width in µs
+
+  [dim]--timeout MS   timeout in ms (0 = infinite, default 100)[/dim]
+  [dim]--repeat N     repeat N times; 0 = infinite until Ctrl+C (default 1)[/dim]
+  [dim]--expr EXPR    post-process result; variables: pulse_us, wait_ms[/dim]
+  [dim]               functions: abs, round, min, max[/dim]
 
 [bold cyan]Write:[/bold cyan]
   replx gpio write [yellow]GP<num>[/yellow] [yellow]0|1[/yellow]
@@ -443,7 +739,7 @@ GPIO read/write/sequence command for a single pin.
 [bold cyan]Sequence:[/bold cyan]
   replx gpio seq [yellow]GP<num>[/yellow] [cyan]TOKEN[/cyan]... [[magenta]read_action[/magenta]]
   replx gpio seq [yellow]WRITE_GP[/yellow] [cyan]TOKEN[/cyan]... [[yellow]READ_GP[/yellow] [magenta]read_action[/magenta]]
-                             [[green]--expr EXPR[/green]] [[green]--timeout MS[/green]]
+                              [[green]--expr EXPR[/green]] [[green]--timeout MS[/green]]
 
   [bold]Write Tokens[/bold]
     [cyan]0[/cyan] [cyan]1[/cyan]      drive low/high
@@ -463,15 +759,17 @@ GPIO read/write/sequence command for a single pin.
     [dim]--expr can use: value, writes, pulse_us, wait_ms and functions abs, round, min, max.[/dim]
 
 [bold cyan]Examples:[/bold cyan]
-  replx COM3 gpio read GP1
-  replx COM3 gpio read GP1 --repeat 8
-  replx COM3 gpio read GP1 --repeat 0
-  replx COM3 gpio read GP1 --edge rising
-  replx COM3 gpio read GP1 --edge both
+  replx COM3 gpio monitor GP1
+  replx COM3 gpio monitor GP1 --interval 50
+  replx COM3 gpio read GP2 pulse_h
+  replx COM3 gpio read GP2 pulse_h --timeout 0
+  replx COM3 gpio read GP2 pulse_h --timeout 0 --repeat 0
+  replx COM3 gpio read GP2 pulse_h --timeout 0 --expr "pulse_us/58"
+  replx COM3 gpio read GP2 wait_h --timeout 5000
   replx COM3 gpio write GP1 1
   replx COM3 gpio seq GP20 1 u10 0 pulse_h
   replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h
-    replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h --timeout 100
+  replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h --timeout 100
   replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h --expr "pulse_us/58"
   replx COM3 gpio seq GP1 1 u50 0 m1 1 read
   replx COM3 gpio seq GP1 1 u10 0 wait_h
@@ -479,58 +777,115 @@ GPIO read/write/sequence command for a single pin.
 
 [bold cyan]Notes:[/bold cyan]
   • One GPIO only.
-  • No GPIO scope mode.
-  • [yellow]gpio read[/yellow] supports only [yellow]--repeat[/yellow] and [yellow]--edge[/yellow].
+  • [yellow]gpio monitor[/yellow] uses IRQ edge capture (~10-50 µs). [yellow]--interval[/yellow] sets render rate only. Requires [yellow]termviz[/yellow].
+  • [yellow]gpio read[/yellow] supports [yellow]--timeout[/yellow] and [yellow]--expr[/yellow].
   • [yellow]seq[/yellow] requires at least one write token."""
     OutputHelper.print_panel(help_text, title="gpio", border_style="dim")
 
 
-def _subcmd_read(client, pos_args: list[str], repeat: int, edge: Optional[str]) -> None:
+def _subcmd_monitor(client, pos_args: list[str], interval_ms: int) -> None:
     if len(pos_args) != 1:
-        raise ValueError("Usage: replx gpio read GP<num> [--repeat N] [--edge MODE]")
+        raise ValueError("Usage: replx gpio monitor GP<num> [--interval MS]")
 
+    if interval_ms < 1:
+        raise ValueError("--interval must be >= 1 (ms)")
+    # canvas window = interval_ms × _CV_COLS ms
+
+    pin_no, pin_name = _parse_gp(pos_args[0])
+
+    _preflight_scope_libs(client)
+    code = _build_scope_code(pin_no, interval_ms)
+    from .exec import _run_interactive_mode
+    _run_interactive_mode(client, code, None, False)
+
+
+_READ_ONLY_ACTIONS = {"pulse_h", "pulse_l", "wait_h", "wait_l"}
+
+
+def _read_panel(pin_name: str, action: str, data: Optional[dict], expr: Optional[str], title: str) -> Panel:
+    is_pulse = action.startswith('pulse')
+    label = "Pulse" if is_pulse else "Wait"
+
+    grid = Table.grid(padding=0)
+    grid.add_column()
+    grid.add_row(Text.from_markup(f"Read pin: [bright_green]{pin_name}[/bright_green]"))
+    grid.add_row(Text.from_markup(f"Action: [magenta]{action}[/magenta]"))
+
+    if data is None:
+        # Animated spinner while waiting for measurement
+        spin_row = Table.grid(padding=0)
+        spin_row.add_column()
+        spin_row.add_column()
+        spin_row.add_row(Text(f"{label}: "), Spinner("dots", style="cyan"))
+        grid.add_row(spin_row)
+    else:
+        if data.get('timeout'):
+            grid.add_row(Text.from_markup(f"Timeout: [bright_red]{int(data.get('timeout_ms', 0))} ms[/bright_red]"))
+        elif is_pulse:
+            grid.add_row(Text.from_markup(f"Pulse: [bright_cyan]{int(data.get('pulse_us', 0))} us[/bright_cyan]"))
+            if expr is not None:
+                result = _eval_expr(expr, data)
+                grid.add_row(Text.from_markup(f"Expr: [magenta]{expr}[/magenta] = [bright_cyan]{result}[/bright_cyan]"))
+        else:
+            grid.add_row(Text.from_markup(f"Wait: [bright_cyan]{int(data.get('wait_ms', 0))} ms[/bright_cyan]"))
+            if expr is not None:
+                result = _eval_expr(expr, data)
+                grid.add_row(Text.from_markup(f"Expr: [magenta]{expr}[/magenta] = [bright_cyan]{result}[/bright_cyan]"))
+
+    return Panel(
+        grid,
+        title=title,
+        border_style="green",
+        box=get_panel_box(),
+        expand=True,
+        width=CONSOLE_WIDTH,
+        title_align="left",
+    )
+
+
+def _subcmd_read(client, pos_args: list[str], expr: Optional[str], repeat: int) -> None:
+    if len(pos_args) != 2:
+        raise ValueError(
+            "Usage: replx gpio read GP<num> pulse_h|pulse_l|wait_h|wait_l"
+        )
     if repeat < 0:
         raise ValueError("--repeat must be >= 0")
 
     pin_no, pin_name = _parse_gp(pos_args[0])
-
-    if edge is not None and repeat != 0:
-        raise ValueError("--edge requires --repeat 0. When --edge is specified, nonzero repeat is not allowed")
-
-    if repeat == 0:
-        if edge is None:
-            edge = 'both'
-        OutputHelper.print_panel(
-            f"Watching [bright_green]{pin_name}[/bright_green]. Press Ctrl+C to stop.\n"
-            f"Only matching edges are printed as: [cyan]<ticks_ms> {edge}[/cyan]",
-            title="GPIO Watch",
-            border_style="green",
+    action = pos_args[1].lower()
+    if action not in _READ_ONLY_ACTIONS:
+        raise ValueError(
+            f"gpio read action must be one of: {', '.join(sorted(_READ_ONLY_ACTIONS))}"
         )
-        code = _make_watch_code(pin_no, edge)
-        raw = _run_interactive_script(client, code, live_output=True)
-        if raw and not raw.endswith('\n'):
-            print()
-        return
-
-    raw = _exec(client, _make_read_code(pin_no, pin_name, repeat), timeout=min(30.0, 2.0 + repeat * 0.01))
-    data = _parse_json_strict(raw)
-    values = [int(v) for v in data.get('values', [])]
 
     if repeat == 1:
-        OutputHelper.print_panel(
-            f"[bright_green]{pin_name}[/bright_green] = [bright_cyan]{values[0]}[/bright_cyan]",
-            title="GPIO Read",
-            border_style="green",
-        )
+        code = _make_seq_code(pin_no, pin_name, [], pin_no, pin_name, action, 0)
+        placeholder = _read_panel(pin_name, action, None, expr, "GPIO Read")
+        with Live(placeholder, console=OutputHelper._console, refresh_per_second=4) as live:
+            try:
+                raw = _run_interactive_script(client, code, live_output=False, ctrl_c_grace_s=1.5)
+                data = _parse_json_strict(raw)
+                live.update(_read_panel(pin_name, action, data, expr, "GPIO Read"))
+            except KeyboardInterrupt:
+                pass
         return
 
-    OutputHelper.print_panel(
-        f"Pin: [bright_green]{pin_name}[/bright_green]\n"
-        f"Samples: [bright_cyan]{len(values)}[/bright_cyan]\n"
-        f"Values:\n{_format_values(values)}",
-        title="GPIO Read",
-        border_style="green",
-    )
+    code = _make_repeat_code(pin_no, pin_name, action, repeat)
+    counter = [0]
+    with Live(_read_panel(pin_name, action, None, expr, "GPIO Read #1"), console=OutputHelper._console, refresh_per_second=4) as live:
+        def on_line(json_str: str) -> None:
+            counter[0] += 1
+            idx = counter[0]
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                return
+            live.console.print(_read_panel(pin_name, action, data, expr, f"GPIO Read #{idx}"))
+            live.update(_read_panel(pin_name, action, None, expr, f"GPIO Read #{idx + 1}"))
+        try:
+            _run_repeat_interactive(client, code, on_line, ctrl_c_grace_s=1.5)
+        except KeyboardInterrupt:
+            pass
 
 
 def _subcmd_write(client, pos_args: list[str]) -> None:
@@ -593,10 +948,10 @@ def gpio_cmd(
     args: Optional[list[str]] = typer.Argument(
         None, help="Subcommand: read  write  seq"
     ),
-    repeat: int = typer.Option(1, "--repeat", "-n", metavar="N", help="Repeat count for gpio read (0=infinite)"),
-    edge: Optional[str] = typer.Option(None, "--edge", metavar="MODE", help="Edge watch mode for gpio read: rising, falling, both"),
-    expr: Optional[str] = typer.Option(None, "--expr", metavar="EXPR", help="Post-process gpio seq result with an arithmetic expression"),
-    timeout: int = typer.Option(100, "--timeout", metavar="MS", help="Timeout in ms for gpio seq wait/pulse actions (0=infinite)"),
+    expr: Optional[str] = typer.Option(None, "--expr", metavar="EXPR", help="Post-process gpio seq/read result with an arithmetic expression"),
+    timeout: int = typer.Option(100, "--timeout", metavar="MS", help="Timeout in ms for gpio seq wait/pulse actions (0=infinite). Not used by gpio read (always infinite)."),
+    interval: int = typer.Option(10, "--interval", metavar="MS", help="Render interval in milliseconds for gpio monitor (default 10, min 1 ms). Canvas window = interval × 78 ms. Edges are captured by IRQ independently."),
+    repeat: int = typer.Option(1, "--repeat", metavar="N", help="Repeat gpio read N times (0=infinite until Ctrl+C, default 1)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
     if show_help or not args:
@@ -606,34 +961,26 @@ def gpio_cmd(
     subcmd = args[0].lower()
     pos_args = args[1:]
 
-    if subcmd not in ('read', 'write', 'seq'):
+    if subcmd not in ('monitor', 'read', 'write', 'seq'):
         OutputHelper.print_panel(
             f"Unknown subcommand: {subcmd!r}\n\n"
-            "Valid subcommands: read  write  seq",
+            "Valid subcommands: monitor  read  write  seq",
             title="GPIO Error",
             border_style="red",
         )
         raise typer.Exit(1)
 
-    if subcmd != 'read' and repeat != 1:
+    if subcmd != 'monitor' and interval != 10:
         OutputHelper.print_panel(
-            "--repeat is supported only for gpio read",
+            "--interval is only supported for gpio monitor (sets render rate)",
             title="GPIO Error",
             border_style="red",
         )
         raise typer.Exit(1)
 
-    if subcmd != 'read' and edge is not None:
+    if subcmd not in ('seq', 'read') and expr is not None:
         OutputHelper.print_panel(
-            "--edge is supported only for gpio read",
-            title="GPIO Error",
-            border_style="red",
-        )
-        raise typer.Exit(1)
-
-    if subcmd != 'seq' and expr is not None:
-        OutputHelper.print_panel(
-            "--expr is supported only for gpio seq",
+            "--expr is supported only for gpio read and gpio seq",
             title="GPIO Error",
             border_style="red",
         )
@@ -647,16 +994,22 @@ def gpio_cmd(
         )
         raise typer.Exit(1)
 
+    if subcmd != 'read' and repeat != 1:
+        OutputHelper.print_panel(
+            "--repeat is supported only for gpio read",
+            title="GPIO Error",
+            border_style="red",
+        )
+        raise typer.Exit(1)
+
     _ensure_connected()
 
     try:
-        edge = _parse_edge(edge)
-        if subcmd == 'read' and edge is not None and not _is_repeat_explicit():
-            repeat = 0
-
         with _create_agent_client() as client:
-            if subcmd == 'read':
-                _subcmd_read(client, pos_args, repeat, edge)
+            if subcmd == 'monitor':
+                _subcmd_monitor(client, pos_args, interval)
+            elif subcmd == 'read':
+                _subcmd_read(client, pos_args, expr, repeat)
             elif subcmd == 'write':
                 _subcmd_write(client, pos_args)
             elif subcmd == 'seq':

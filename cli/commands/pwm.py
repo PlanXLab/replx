@@ -286,6 +286,170 @@ def _make_stop_code(pin_no: int, pin_name: str) -> str:
     )
 
 
+_MONITOR_TEMPLATE = r'''import sys
+import select as _sel
+from machine import Pin, time_pulse_us
+from termviz import Term, Canvas, Plot, Scope
+
+_PIN_NO    = __PIN_NO__
+_TIMEOUT_US = __TIMEOUT_US__
+
+_CV_COLS  = 78
+_CV_ROWS  = 18
+_STATS_ROW = _CV_ROWS + 1
+_HELP_ROW  = _CV_ROWS + 2
+_REGION    = (0, 6, 8, 6)
+_COLOR     = (80, 255, 120)
+_flush     = getattr(sys.stdout, 'flush', lambda: None)
+
+
+def _make_plot():
+    W  = _CV_COLS * 2
+    H  = _CV_ROWS * 4
+    rl, rt, rr, rb = _REGION
+    cv = Canvas(_CV_COLS, _CV_ROWS)
+    ax = Plot(cv,
+              region_px=(rl, rt, W - rl - rr, H - rt - rb),
+              xlim=(0, W), ylim=(0.0, 100.0),
+              color_cycle=[_COLOR])
+    ax.title(f'PWM Monitor  GP{_PIN_NO}', color=(180, 220, 180))
+    ax.yticks([0, 25, 50, 75, 100], [''] * 5)
+    ax.grid(True)
+    sc = Scope(ax, vmin=0.0, vmax=100.0, colors=[_COLOR], px_step=2, show_zero=False)
+    ax._legend_on = False
+    ax.clear_legend_items()
+    ax._ylabel = None
+    return cv, sc
+
+
+def _poll_key():
+    r, _, _ = _sel.select([sys.stdin], [], [], 0)
+    if r:
+        ch = sys.stdin.read(1)
+        if ch == '\x03':
+            raise KeyboardInterrupt
+
+
+def _write_y_labels(sc):
+    w = sys.stdout.write
+    ax = sc.ax
+    right_col = (ax.vx + ax.vw) // 2 + 2
+    for v, label in ((0, '  0%'), (25, ' 25%'), (50, ' 50%'), (75, ' 75%'), (100, '100%')):
+        py = ax._wy(float(v))
+        row = (py >> 2) + 1
+        if 1 <= row <= _CV_ROWS:
+            w(Term.cursor_save() +
+              Term.cursor_to(row, right_col) +
+              Term.rgb(210, 210, 210) + label + Term.RESET +
+              Term.cursor_restore())
+
+
+def main():
+    pin  = Pin(_PIN_NO, Pin.IN)
+    cv, sc = _make_plot()
+    w    = sys.stdout.write
+    freq = 0.0
+    duty = 0.0
+    high_us = 0
+    low_us  = 0
+    try:
+        while True:
+            _poll_key()
+            h = time_pulse_us(pin, 1, _TIMEOUT_US)
+            if h < 0:
+                sc.tick([0.0])
+                _write_y_labels(sc)
+                w(Term.cursor_to(_STATS_ROW, 1) +
+                  Term.FG.WARNING +
+                  f'  GP{_PIN_NO}  No signal  (timeout {_TIMEOUT_US // 1000} ms)' +
+                  Term.RESET + '                    ')
+                w(Term.cursor_to(_HELP_ROW, 1) +
+                  Term.FG.MUTED + '  [Ctrl+C] exit' + Term.RESET + '     ')
+                _flush()
+                continue
+            l = time_pulse_us(pin, 0, _TIMEOUT_US)
+            if l < 0:
+                sc.tick([0.0])
+                _write_y_labels(sc)
+                w(Term.cursor_to(_STATS_ROW, 1) +
+                  Term.FG.WARNING +
+                  f'  GP{_PIN_NO}  No signal  (timeout {_TIMEOUT_US // 1000} ms)' +
+                  Term.RESET + '                    ')
+                w(Term.cursor_to(_HELP_ROW, 1) +
+                  Term.FG.MUTED + '  [Ctrl+C] exit' + Term.RESET + '     ')
+                _flush()
+                continue
+            period = h + l
+            if period == 0:
+                continue
+            freq    = 1_000_000.0 / period
+            duty    = 100.0 * h / period
+            high_us = h
+            low_us  = l
+            sc.tick([duty])
+            _write_y_labels(sc)
+            w(Term.cursor_to(_STATS_ROW, 1) +
+              Term.FG.MUTED + f'  GP{_PIN_NO}  ' + Term.RESET +
+              'Freq: ' + Term.rgb(255, 255, 100) + f'{freq:.2f} Hz' + Term.RESET +
+              f'   Period: {period} us' +
+              f'   High: {high_us} us   Low: {low_us} us' +
+              '   Duty: ' + Term.rgb(80, 255, 120) + f'{duty:.1f}%' + Term.RESET +
+              '     ')
+            w(Term.cursor_to(_HELP_ROW, 1) +
+              Term.FG.MUTED + '  [Ctrl+C] exit' + Term.RESET + '     ')
+            _flush()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cv.end()
+
+
+main()
+'''
+
+
+def _preflight_monitor_libs(client) -> None:
+    code = (
+        "try:\n"
+        " import termviz\n"
+        " print('ok')\n"
+        "except Exception as e:\n"
+        " print('missing:'+str(e))\n"
+    )
+    raw = _exec(client, code, timeout=3.0)
+    if 'ok' not in raw:
+        raise RuntimeError(
+            "pwm monitor requires termviz on the board.\n"
+            f"Board response: {raw}"
+        )
+
+
+def _build_monitor_script(pin_no: int, timeout_ms: int) -> str:
+    timeout_us = max(200_000, timeout_ms * 1_000)
+    return (
+        _MONITOR_TEMPLATE
+        .replace('__PIN_NO__', str(int(pin_no)))
+        .replace('__TIMEOUT_US__', str(int(timeout_us)))
+    )
+
+
+def _subcmd_monitor(client, pos_args: list[str], timeout_ms: int) -> None:
+    if len(pos_args) != 1:
+        raise ValueError("Usage: replx pwm monitor GP<num> [--timeout MS]")
+    pin_no, pin_name = _parse_gp(pos_args[0])
+    _preflight_monitor_libs(client)
+    code = _build_monitor_script(pin_no, timeout_ms)
+    OutputHelper.print_panel(
+        f"Pin: [bright_green]{pin_name}[/bright_green]\n"
+        f"Timeout: [bright_cyan]{timeout_ms} ms[/bright_cyan]  (no-signal wait per half-cycle)\n\n"
+        "Controls: [cyan]Ctrl+C[/cyan] exit",
+        title="PWM Monitor",
+        border_style="green",
+    )
+    from .exec import _run_interactive_mode
+    _run_interactive_mode(client, code, None, False)
+
+
 def _print_pwm_help() -> None:
     help_text = """\
 PWM write/sequence/stop command for a single pin.
@@ -294,9 +458,10 @@ PWM write/sequence/stop command for a single pin.
   replx pwm [yellow]SUBCOMMAND[/yellow] ...
 
 [bold cyan]Subcommands:[/bold cyan]
-  [green]write[/green]  Start/update PWM on one pin.
-  [green]seq[/green]    Execute a duty+delay pattern in one board call.
-  [green]stop[/green]   Stop PWM on one pin and drive it low.
+  [green]write[/green]    Start/update PWM on one pin.
+  [green]seq[/green]      Execute a duty+delay pattern in one board call.
+  [green]stop[/green]     Stop PWM on one pin and drive it low.
+  [green]monitor[/green]  Live duty-cycle scope on an input pin. Requires [yellow]termviz[/yellow] on board.
 
 [bold cyan]Pin Format:[/bold cyan]
   [yellow]GP<num>[/yellow] only, case-insensitive. Example: [cyan]GP15[/cyan]
@@ -320,6 +485,14 @@ PWM write/sequence/stop command for a single pin.
 [bold cyan]Stop:[/bold cyan]
   replx pwm stop [yellow]GP<num>[/yellow]
 
+[bold cyan]Monitor:[/bold cyan]
+  replx pwm monitor [yellow]GP<num>[/yellow] [[green]--timeout MS[/green]]
+
+  Live scrolling scope showing duty-cycle trend on a [bold]receiving[/bold] board.
+  [dim]--timeout MS[/dim]  no-signal wait timeout [dim](default 2000 ms)[/dim]
+  [dim]Measures each half-cycle via time_pulse_us(). Range: ~1 Hz – 100 kHz.[/dim]
+  [dim]Requires [yellow]termviz[/yellow] on the board.[/dim]
+
 [bold cyan]Examples:[/bold cyan]
   replx COM3 pwm write GP15 --freq 50 --pulse-us 1500
   replx COM3 pwm write GP15 --freq 1000 --duty-percent 25
@@ -327,12 +500,15 @@ PWM write/sequence/stop command for a single pin.
   replx COM3 pwm seq GP15 --freq 100 --duty percent 0 m200 25 m200 50 m200 75 m200 100
   replx COM3 pwm seq GP15 --freq 50 --duty pulse_us 1000 m500 1500 m500 2000
   replx COM3 pwm stop GP15
+  replx COM4 pwm monitor GP2
+  replx COM4 pwm monitor GP2 --timeout 5000
 
 [bold cyan]Notes:[/bold cyan]
   • One PWM pin only.
   • [yellow]write[/yellow] requires [yellow]--freq[/yellow] and exactly one duty option.
   • [yellow]seq[/yellow] requires [yellow]--freq[/yellow], [yellow]--duty[/yellow], and at least one duty token.
-  • [yellow]pulse_us[/yellow] values must not exceed the PWM period for the selected frequency."""
+  • [yellow]pulse_us[/yellow] values must not exceed the PWM period for the selected frequency.
+  • [yellow]monitor[/yellow] measures one period at a time via [cyan]time_pulse_us()[/cyan]; reliable up to ~100 kHz."""
     OutputHelper.print_panel(help_text, title="pwm", border_style="dim")
 
 
@@ -423,13 +599,14 @@ def _subcmd_stop(client, pos_args: list[str]) -> None:
 @app.command(name="pwm", rich_help_panel="Hardware")
 def pwm_cmd(
     args: Optional[list[str]] = typer.Argument(
-        None, help="Subcommand: write  seq  stop"
+        None, help="Subcommand: write  seq  stop  monitor"
     ),
     freq: Optional[int] = typer.Option(None, "--freq", metavar="HZ", help="PWM frequency in Hz"),
     duty: Optional[str] = typer.Option(None, "--duty", metavar="MODE", help="Duty basis for pwm seq: percent, u16, pulse_us"),
     duty_percent: Optional[float] = typer.Option(None, "--duty-percent", metavar="P", help="Duty percent for pwm write (0..100)"),
     duty_u16: Optional[int] = typer.Option(None, "--duty-u16", metavar="N", help="Duty u16 for pwm write (0..65535)"),
     pulse_us: Optional[float] = typer.Option(None, "--pulse-us", metavar="US", help="Pulse width in microseconds for pwm write"),
+    timeout_ms: int = typer.Option(2000, "--timeout", metavar="MS", help="No-signal timeout ms for pwm monitor (default 2000)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
     if show_help or not args:
@@ -439,10 +616,11 @@ def pwm_cmd(
     subcmd = args[0].lower()
     pos_args = args[1:]
 
-    if subcmd not in ('write', 'seq', 'stop'):
+    _VALID_SUBCMDS = ('write', 'seq', 'stop', 'monitor')
+    if subcmd not in _VALID_SUBCMDS:
         OutputHelper.print_panel(
             f"Unknown subcommand: {subcmd!r}\n\n"
-            "Valid subcommands: write  seq  stop",
+            "Valid subcommands: write  seq  stop  monitor",
             title="PWM Error",
             border_style="red",
         )
@@ -459,6 +637,14 @@ def pwm_cmd(
     if subcmd != 'write' and any(v is not None for v in (duty_percent, duty_u16, pulse_us)):
         OutputHelper.print_panel(
             "--duty-percent, --duty-u16, and --pulse-us are supported only for pwm write",
+            title="PWM Error",
+            border_style="red",
+        )
+        raise typer.Exit(1)
+
+    if subcmd != 'monitor' and timeout_ms != 2000:
+        OutputHelper.print_panel(
+            "--timeout is supported only for pwm monitor",
             title="PWM Error",
             border_style="red",
         )
@@ -482,6 +668,8 @@ def pwm_cmd(
                 _subcmd_seq(client, pos_args, freq, duty)
             elif subcmd == 'stop':
                 _subcmd_stop(client, pos_args)
+            elif subcmd == 'monitor':
+                _subcmd_monitor(client, pos_args, timeout_ms)
     except ValueError as e:
         OutputHelper.print_panel(str(e), title="PWM Error", border_style="red")
         raise typer.Exit(1)
