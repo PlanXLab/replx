@@ -782,7 +782,7 @@ def _subcmd_xfer(client, pos_args: list[str], count_n: Optional[int], timeout_ms
         raise ValueError("Specify text to send.  e.g. uart xfer \"Hello\\n\"")
 
     if count_n is not None and count_n < 1:
-        raise ValueError("--count N must be >= 1")
+        raise ValueError("--rx-bytes N must be >= 1")
 
     if hex_mode:
         try:
@@ -884,8 +884,8 @@ UART open/write/read/xfer/monitor/close command.
   replx PORT uart write   [yellow]TEXT...[/yellow]
   replx PORT uart write   [green]--hex[/green] [yellow]HEX...[/yellow]
   replx PORT uart read    [[yellow]NBYTES[/yellow]] [[green]--timeout MS[/green]] [[green]--any[/green]]
-  replx PORT uart xfer    [yellow]TEXT...[/yellow] [[green]--count N[/green]] [[green]--timeout MS[/green]]
-  replx PORT uart xfer    [green]--hex[/green] [yellow]HEX...[/yellow] [[green]--count N[/green]] [[green]--timeout MS[/green]]
+  replx PORT uart xfer    [yellow]TEXT...[/yellow] [[green]--rx-bytes N[/green]] [[green]--timeout MS[/green]]
+  replx PORT uart xfer    [green]--hex[/green] [yellow]HEX...[/yellow] [[green]--rx-bytes N[/green]] [[green]--timeout MS[/green]]
   replx PORT uart monitor [[green]--width 8|16[/green]] [[green]--idle MS[/green]] [[green]--text[/green]] [[green]--chunk[/green]]
   replx PORT uart close
 
@@ -902,7 +902,7 @@ UART open/write/read/xfer/monitor/close command.
            [dim]--any: drain current RX buffer immediately (no waiting).[/dim]
   [green]xfer[/green]     Write TX then receive. Default: wait for any data up to --timeout.
            [dim]Default text mode; --hex for raw bytes.[/dim]
-           [dim]--count N: receive exactly N bytes (wait up to --timeout).[/dim]
+           [dim]--rx-bytes N: receive exactly N bytes (wait up to --timeout).[/dim]
   [green]monitor[/green]  Live RX display until Ctrl+C.
            [dim]Default: 16-byte hex+ASCII dump rows.[/dim]
            [dim]--text: stream raw UTF-8 output.[/dim]
@@ -927,7 +927,7 @@ UART open/write/read/xfer/monitor/close command.
   [yellow]--timeout MS[/yellow]        RX wait timeout ms [dim](read/xfer only; 0 = infinite; default: 2000)[/dim]
                       [dim]Not valid with [bold]open[/bold] or [bold]monitor[/bold]. UART hardware timeout is fixed at 1000 ms.[/dim]
   [yellow]--any[/yellow]               Drain RX buffer immediately (read only)
-  [yellow]--count N[/yellow]           RX exact byte count for xfer [dim](optional; omit to wait for any data)[/dim]
+  [yellow]--rx-bytes N[/yellow]        RX exact byte count for xfer [dim](optional; omit to wait for any data)[/dim]
   [yellow]--width 8|16[/yellow]        Hex dump row width [dim](default: 16)[/dim]
   [yellow]--idle MS[/yellow]           Idle separator threshold ms [dim](default: 0 = off)[/dim]
   [yellow]--text[/yellow]              Monitor text/ASCII stream mode
@@ -948,9 +948,9 @@ UART open/write/read/xfer/monitor/close command.
   replx COM3 uart read --timeout 0               [dim]# infinite wait (Ctrl+C to abort)[/dim]
   replx COM3 uart read --any                     [dim]# drain RX buffer immediately[/dim]
   replx COM3 uart xfer "AT+RST\\r\\n"              [dim]# wait for any response (default 2s)[/dim]
-  replx COM3 uart xfer "AT+RST\\r\\n" --count 8    [dim]# wait for exactly 8 bytes[/dim]
+  replx COM3 uart xfer "AT+RST\\r\\n" --rx-bytes 8    [dim]# wait for exactly 8 bytes[/dim]
   replx COM3 uart xfer "AT" --timeout 3000       [dim]# wait up to 3s for any response[/dim]
-  replx COM3 uart xfer --hex 01 03 00 00 00 0A --count 25
+  replx COM3 uart xfer --hex 01 03 00 00 00 0A --rx-bytes 25
   replx COM3 uart monitor
   replx COM3 uart monitor --width 8 --idle 200
   replx COM3 uart monitor --text
@@ -971,7 +971,7 @@ def uart_cmd(
     stop: int = typer.Option(1, "--stop", metavar="1|2", help="Stop bits"),
     timeout_ms: Optional[int] = typer.Option(None, "--timeout", metavar="MS", help="RX wait timeout ms (0=infinite, default 2000). read/xfer only; forbidden with open."),
     any_mode: bool = typer.Option(False, "--any", help="Drain RX buffer immediately (read only)"),
-    count_n: Optional[int] = typer.Option(None, "--count", metavar="N", help="RX exact byte count for xfer (optional; omit to wait for any data)"),
+    count_n: Optional[int] = typer.Option(None, "--rx-bytes", metavar="N", help="RX exact byte count for xfer (optional; omit to wait for any data)"),
     width: int = typer.Option(16, "--width", metavar="8|16", help="Hex dump row width (monitor)"),
     idle_ms: int = typer.Option(0, "--idle", metavar="MS", help="Idle separator ms (monitor, 0=off)"),
     text_mode: bool = typer.Option(False, "--text", help="Monitor text/ASCII stream mode"),

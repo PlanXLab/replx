@@ -1,11 +1,17 @@
 import json
+import shutil
+import signal
+import sys
+import time
 from typing import Optional
 
 import typer
 
 from ..helpers import OutputHelper
+from replx.utils.constants import CTRL_C
 from ..connection import _ensure_connected, _create_agent_client
 from ..app import app
+from ...terminal import enable_vt_mode
 
 _MAX_CHANNELS = 3
 _DEFAULT_SCOPE_PINS = [26, 27, 28]
@@ -56,13 +62,15 @@ def _raw_to_volts(raw: int, vref: float) -> float:
 
 def _adc_read_code(pins: list[int], repeat: int, interval: int) -> str:
     adcs = ','.join(f"ADC(Pin({pin}))" for pin in pins)
+    loop_line = "while True:\n" if repeat == 0 else f"for _ in range({repeat}):\n"
+    sleep_stmt = f"    time.sleep_ms({interval})\n" if interval > 0 else ""
     return (
         "from machine import ADC,Pin\n"
         "import json,time\n"
         f"adcs=[{adcs}]\n"
-        f"for _ in range({repeat}):\n"
+        f"{loop_line}"
         "    print(json.dumps([a.read_u16() for a in adcs]))\n"
-        + (f"    time.sleep_ms({interval})\n" if repeat > 1 else "")
+        + sleep_stmt
     )
 
 
@@ -953,14 +961,14 @@ ADC read/scope command for board analog inputs.
     [cyan]Ctrl+C[/cyan]     exit scope
 
 [bold cyan]Options:[/bold cyan]
-  [yellow]-n, --repeat N[/yellow]    Repeat count for adc read [dim](default: 1)[/dim]
+  [yellow]--repeat N[/yellow]        Repeat count for adc read [dim](0=infinite, default: 1)[/dim]
   [yellow]--interval MS[/yellow]     Delay between repeated reads [dim](default: 1000)[/dim]
   [yellow]--vref V[/yellow]          ADC reference voltage [dim](default: 3.3)[/dim]
   [yellow]--sample MS[/yellow]       Initial scope render rate [dim](0,1,2,5,10,20,50,100 · default: 10)[/dim]
 
 [bold cyan]Examples:[/bold cyan]
   replx COM3 adc read GP26
-  replx COM3 adc read GP26 GP27 GP28 -n 5 --interval 200
+  replx COM3 adc read GP26 GP27 GP28 --repeat 5 --interval 200
   replx COM3 adc read GP26 --vref 3.3
   replx COM3 adc scope
   replx COM3 adc scope GP26
@@ -973,24 +981,138 @@ ADC read/scope command for board analog inputs.
     OutputHelper.print_panel(help_text, title="adc", border_style="dim")
 
 
+_ADC_D   = '\033[38;2;150;150;150m'
+_ADC_C   = '\033[38;2;80;200;255m'
+_ADC_G   = '\033[38;2;80;255;120m'
+_ADC_RST = '\033[0m'
+
+
+def _setup_adc_scroll_screen(header: str, sep_w: int) -> None:
+    enable_vt_mode()
+    _, rows = shutil.get_terminal_size(fallback=(80, 24))
+    w = sys.stdout.buffer.write
+    w(b'\033[?1049h')
+    w(b'\033[2J\033[H\033[?25l')
+    w((header + '\n').encode())
+    w(('  ' + '\u2500' * sep_w + '\n').encode())
+    w(f'\033[3;{rows}r\033[3;1H'.encode())
+    sys.stdout.buffer.flush()
+
+
+def _teardown_adc_scroll_screen() -> None:
+    w = sys.stdout.buffer.write
+    w(b'\033[r\033[?25h')
+    w(b'\033[?1049l')
+    sys.stdout.buffer.flush()
+
+
+def _run_adc_stream(client, code: str, on_line) -> None:
+    stop_requested = False
+    pending_input: list[bytes] = []
+    line_buf = bytearray()
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def sigint_handler(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+        pending_input.append(CTRL_C)
+
+    def output_callback(data: bytes, stream_type: str = "stdout"):
+        nonlocal line_buf
+        if stream_type == 'stderr':
+            return
+        line_buf += data
+        while b'\n' in line_buf:
+            line, _, line_buf = line_buf.partition(b'\n')
+            text = line.decode('utf-8', errors='replace').strip()
+            if text:
+                on_line(text)
+
+    def input_provider() -> bytes:
+        if pending_input:
+            return pending_input.pop(0)
+        return b''
+
+    def stop_check() -> bool:
+        return stop_requested
+
+    try:
+        signal.signal(signal.SIGINT, sigint_handler)
+        client.run_interactive(
+            script_content=code,
+            echo=False,
+            output_callback=output_callback,
+            input_provider=input_provider,
+            stop_check=stop_check,
+            ctrl_c_grace_s=1.5,
+        )
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+
+
 def _subcmd_read(client, pos_args: list[str], repeat: int, interval: int, vref: float) -> None:
     pins = _parse_gp_pins(pos_args)
-    if repeat < 1:
-        raise ValueError("--repeat must be >= 1")
+    if repeat < 0:
+        raise ValueError("--repeat must be >= 0")
     if interval < 0:
         raise ValueError("--interval must be >= 0")
     if vref <= 0:
         raise ValueError("--vref must be > 0")
 
-    raw = _exec(client, _adc_read_code(pins, repeat, interval), timeout=min(120.0, 2.0 + repeat * (interval / 1000.0 + 0.1)))
-    lines = [ln for ln in raw.splitlines() if ln.strip()]
-    samples = [_parse_json_strict(ln) for ln in lines]
-    if len(samples) != repeat:
-        raise RuntimeError(f"Unexpected ADC read result count: expected {repeat}, got {len(samples)}")
+    if repeat == 1:
+        raw = _exec(client, _adc_read_code(pins, 1, 0), timeout=3.0)
+        samples = [_parse_json_strict(raw)]
+        body = _format_read_rows(pins, samples, vref)
+        OutputHelper.print_panel(body, title="ADC Read", border_style="green")
+        return
 
-    body = _format_read_rows(pins, samples, vref)
-    title = "ADC Read" if repeat == 1 else f"ADC Read ×{repeat}"
-    OutputHelper.print_panel(body, title=title, border_style="green")
+    code = _adc_read_code(pins, repeat, interval)
+    n_ch = len(pins)
+    sep_width = 14 + n_ch * 19 + (n_ch - 1) * 7
+
+    def fmt_ch_col(pin, raw):
+        volt = _raw_to_volts(raw, vref)
+        return (
+            _ADC_D + f'GP{pin:<2}' + _ADC_RST
+            + '  ' + _ADC_C + f'{raw:5d}' + _ADC_RST
+            + '  ' + _ADC_G + f'{volt:5.3f}V' + _ADC_RST
+        )
+
+    pins_str = '  '.join(f'GP{p}' for p in pins)
+    repeat_str = '\u221e' if repeat == 0 else f'\u00d7{repeat}'
+    hint = 'Ctrl+C exit' if repeat == 0 else 'Ctrl+C cancel'
+    hdr = (
+        f'  {_ADC_D}ADC Read{_ADC_RST}  {pins_str}  {repeat_str}  '
+        f'interval={interval} ms  {_ADC_D}[{hint}]{_ADC_RST}'
+    )
+    _setup_adc_scroll_screen(hdr, sep_width)
+
+    start_t = time.monotonic()
+    counter = [0]
+
+    def on_line(json_str):
+        try:
+            raw_vals = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            return
+        counter[0] += 1
+        s = int(time.monotonic() - start_t)
+        ts = f'{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}'
+        ch_sep = '   ' + _ADC_D + '\u2502' + _ADC_RST + '   '
+        cols = ch_sep.join(fmt_ch_col(p, r) for p, r in zip(pins, raw_vals))
+        sys.stdout.write(f'  {_ADC_D}{ts}{_ADC_RST}    {cols}\n')
+        sys.stdout.flush()
+
+    try:
+        _run_adc_stream(client, code, on_line)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _teardown_adc_scroll_screen()
+    total = counter[0]
+    done_msg = f'Stopped: {total} samples' if repeat == 0 else f'Done: {total}/{repeat} samples'
+    sys.stdout.write(f'  {done_msg}\n')
+    sys.stdout.flush()
 
 
 def _subcmd_scope(client, pos_args: list[str], sample: int, vref: float) -> None:
@@ -1017,7 +1139,7 @@ def _subcmd_scope(client, pos_args: list[str], sample: int, vref: float) -> None
 @app.command(name="adc", rich_help_panel="Hardware")
 def adc_cmd(
     args: Optional[list[str]] = typer.Argument(None, help="Subcommand: read  scope"),
-    repeat: int = typer.Option(1, "--repeat", "-n", metavar="N", help="Repeat count for adc read"),
+    repeat: int = typer.Option(1, "--repeat", metavar="N", help="Repeat count for adc read (0=infinite)"),
     interval: int = typer.Option(1000, "--interval", metavar="MS", help="Delay between repeated adc reads in ms"),
     vref: float = typer.Option(3.3, "--vref", metavar="V", help="ADC reference voltage"),
     sample: int = typer.Option(10, "--sample", metavar="MS", help="Initial scope render rate"),

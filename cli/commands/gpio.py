@@ -328,7 +328,7 @@ def _draw_log(w, log_buf, log_pos):
 
 def main():
     pin = Pin(_PIN_NO, Pin.IN)
-    _next_level[0] = pin.value() ^ 1   # first edge is opposite of current idle level
+    _next_level[0] = pin.value() ^ 1
     pin.irq(handler=_isr, trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, hard=True)
     cv, sc = _make_plot()
     w = sys.stdout.write
@@ -575,6 +575,158 @@ def _make_seq_code(write_pin_no: int, write_pin_name: str, ops: list[tuple[str, 
     )
 
 
+def _make_seq_repeat_code(
+    write_pin_no: int, write_pin_name: str,
+    ops: list[tuple[str, int]],
+    read_pin_no: Optional[int], read_pin_name: str,
+    read_action: Optional[str],
+    timeout_ms: int,
+    repeat: int,
+    interval_ms: int = 0,
+) -> str:
+    n_expr = '0' if repeat == 0 else str(repeat)
+    py_ops = repr(ops)
+    pn_w = repr(write_pin_name)
+    pn_r = repr(read_pin_name)
+    read_pin_expr = str(write_pin_no) if read_pin_no is None else str(read_pin_no)
+    use_read_pin = read_action is not None
+
+    header = (
+        "from machine import Pin,time_pulse_us\n"
+        "import time,json\n"
+        f"wp=Pin({write_pin_no},Pin.OUT)\n"
+        f"ops={py_ops}\n"
+    )
+    if use_read_pin:
+        header += f"rp=Pin({read_pin_expr},Pin.IN)\n"
+    header += (
+        f"_n={n_expr}\n"
+        "_i=0\n"
+        "while _n==0 or _i<_n:\n"
+        "    _i+=1\n"
+    )
+
+    write_body = (
+        "    writes=0\n"
+        "    for kind,val in ops:\n"
+        "        if kind=='w':\n"
+        "            wp.value(val)\n"
+        "            writes+=1\n"
+        "        elif kind=='u':\n"
+        "            time.sleep_us(val)\n"
+        "        elif kind=='m':\n"
+        "            time.sleep_ms(val)\n"
+    )
+
+    if read_action is None:
+        read_body = f"    print(json.dumps({{'write_pin':{pn_w},'writes':writes,'value':wp.value()}}))\n"
+    elif read_action == 'read':
+        read_body = f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'read','writes':writes,'value':rp.value()}}))\n"
+    elif read_action == 'wait_h':
+        if timeout_ms > 0:
+            read_body = (
+                "    t0=time.ticks_ms()\n"
+                f"    while rp.value()==0 and time.ticks_diff(time.ticks_ms(),t0)<{timeout_ms}:\n"
+                "        time.sleep_us(50)\n"
+                "    if rp.value()==0:\n"
+                f"        print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'wait_h','timeout':True,'value':rp.value()}}))\n"
+                "        continue\n"
+                "    wms=time.ticks_diff(time.ticks_ms(),t0)\n"
+                f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'wait_h','wait_ms':wms,'value':rp.value()}}))\n"
+            )
+        else:
+            read_body = (
+                "    t0=time.ticks_ms()\n"
+                "    while rp.value()==0:\n"
+                "        time.sleep_us(50)\n"
+                "    wms=time.ticks_diff(time.ticks_ms(),t0)\n"
+                f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'wait_h','wait_ms':wms,'value':rp.value()}}))\n"
+            )
+    elif read_action == 'wait_l':
+        if timeout_ms > 0:
+            read_body = (
+                "    t0=time.ticks_ms()\n"
+                f"    while rp.value()==1 and time.ticks_diff(time.ticks_ms(),t0)<{timeout_ms}:\n"
+                "        time.sleep_us(50)\n"
+                "    if rp.value()==1:\n"
+                f"        print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'wait_l','timeout':True,'value':rp.value()}}))\n"
+                "        continue\n"
+                "    wms=time.ticks_diff(time.ticks_ms(),t0)\n"
+                f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'wait_l','wait_ms':wms,'value':rp.value()}}))\n"
+            )
+        else:
+            read_body = (
+                "    t0=time.ticks_ms()\n"
+                "    while rp.value()==1:\n"
+                "        time.sleep_us(50)\n"
+                "    wms=time.ticks_diff(time.ticks_ms(),t0)\n"
+                f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'wait_l','wait_ms':wms,'value':rp.value()}}))\n"
+            )
+    elif read_action == 'pulse_h':
+        if timeout_ms > 0:
+            read_body = (
+                f"    r=time_pulse_us(rp,1,{timeout_ms * 1000})\n"
+                "    if r<0:\n"
+                f"        print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'pulse_h','timeout':True,'value':rp.value()}}))\n"
+                "        continue\n"
+                f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'pulse_h','pulse_us':r,'value':rp.value()}}))\n"
+            )
+        else:
+            read_body = (
+                "    _acc=0\n"
+                "    while True:\n"
+                "        _r=time_pulse_us(rp,1,100000)\n"
+                "        if _r>=0:\n"
+                "            _acc+=_r\n"
+                "            break\n"
+                "        if rp.value()==0:\n"
+                "            if _acc>0:\n"
+                "                _acc=-1\n"
+                "                break\n"
+                "        else:\n"
+                "            _acc+=100000\n"
+                "    r=_acc\n"
+                "    if r<0:\n"
+                f"        print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'pulse_h','timeout':True,'value':rp.value()}}))\n"
+                "        continue\n"
+                f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'pulse_h','pulse_us':r,'value':rp.value()}}))\n"
+            )
+    elif read_action == 'pulse_l':
+        if timeout_ms > 0:
+            read_body = (
+                f"    r=time_pulse_us(rp,0,{timeout_ms * 1000})\n"
+                "    if r<0:\n"
+                f"        print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'pulse_l','timeout':True,'value':rp.value()}}))\n"
+                "        continue\n"
+                f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'pulse_l','pulse_us':r,'value':rp.value()}}))\n"
+            )
+        else:
+            read_body = (
+                "    _acc=0\n"
+                "    while True:\n"
+                "        _r=time_pulse_us(rp,0,100000)\n"
+                "        if _r>=0:\n"
+                "            _acc+=_r\n"
+                "            break\n"
+                "        if rp.value()==1:\n"
+                "            if _acc>0:\n"
+                "                _acc=-1\n"
+                "                break\n"
+                "        else:\n"
+                "            _acc+=100000\n"
+                "    r=_acc\n"
+                "    if r<0:\n"
+                f"        print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'pulse_l','timeout':True,'value':rp.value()}}))\n"
+                "        continue\n"
+                f"    print(json.dumps({{'write_pin':{pn_w},'read_pin':{pn_r},'read_action':'pulse_l','pulse_us':r,'value':rp.value()}}))\n"
+            )
+    else:
+        raise ValueError(f"Unsupported seq repeat action: {read_action}")
+
+    sleep_stmt = f"    time.sleep_ms({interval_ms})\n" if interval_ms > 0 else ""
+    return header + write_body + read_body + sleep_stmt
+
+
 def _make_repeat_code(pin_no: int, pin_name: str, action: str, repeat: int) -> str:
     n_expr = '0' if repeat == 0 else str(repeat)
     pn = repr(pin_name)
@@ -739,7 +891,7 @@ GPIO monitor/read/write/sequence command for a single pin.
 [bold cyan]Sequence:[/bold cyan]
   replx gpio seq [yellow]GP<num>[/yellow] [cyan]TOKEN[/cyan]... [[magenta]read_action[/magenta]]
   replx gpio seq [yellow]WRITE_GP[/yellow] [cyan]TOKEN[/cyan]... [[yellow]READ_GP[/yellow] [magenta]read_action[/magenta]]
-                              [[green]--expr EXPR[/green]] [[green]--timeout MS[/green]]
+                              [[green]--expr EXPR[/green]] [[green]--timeout MS[/green]] [[green]--repeat N[/green]] [[green]--interval MS[/green]]
 
   [bold]Write Tokens[/bold]
     [cyan]0[/cyan] [cyan]1[/cyan]      drive low/high
@@ -756,6 +908,9 @@ GPIO monitor/read/write/sequence command for a single pin.
     [dim]If only read_action is given, the write pin is also used as the read pin.[/dim]
     [dim]If READ_GP read_action is given, the write pin and read pin can be different.[/dim]
     [dim]wait_* and pulse_* honor --timeout in ms. Use 0 for infinite wait.[/dim]
+    [dim]--repeat N     repeat the full seq N times; 0 = infinite until Ctrl+C (default 1)[/dim]
+    [dim]               N > 1 or 0: runs as a single on-board loop (no round-trip per iteration)[/dim]
+    [dim]--interval MS  delay in ms between iterations (requires --repeat; default 10)[/dim]
     [dim]--expr can use: value, writes, pulse_us, wait_ms and functions abs, round, min, max.[/dim]
 
 [bold cyan]Examples:[/bold cyan]
@@ -771,6 +926,8 @@ GPIO monitor/read/write/sequence command for a single pin.
   replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h
   replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h --timeout 100
   replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h --expr "pulse_us/58"
+  replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h --expr "pulse_us/58" --repeat 5
+  replx COM3 gpio seq GP20 0 u5 1 u10 0 GP21 pulse_h --expr "pulse_us/58" --repeat 0
   replx COM3 gpio seq GP1 1 u50 0 m1 1 read
   replx COM3 gpio seq GP1 1 u10 0 wait_h
   replx COM3 gpio seq GP1 0 u10 1 pulse_l
@@ -779,7 +936,8 @@ GPIO monitor/read/write/sequence command for a single pin.
   • One GPIO only.
   • [yellow]gpio monitor[/yellow] uses IRQ edge capture (~10-50 µs). [yellow]--interval[/yellow] sets render rate only. Requires [yellow]termviz[/yellow].
   • [yellow]gpio read[/yellow] supports [yellow]--timeout[/yellow] and [yellow]--expr[/yellow].
-  • [yellow]seq[/yellow] requires at least one write token."""
+  • [yellow]seq[/yellow] requires at least one write token.
+  • [yellow]seq --repeat[/yellow] runs the full seq+read loop on-board; no round-trip per iteration."""
     OutputHelper.print_panel(help_text, title="gpio", border_style="dim")
 
 
@@ -789,7 +947,6 @@ def _subcmd_monitor(client, pos_args: list[str], interval_ms: int) -> None:
 
     if interval_ms < 1:
         raise ValueError("--interval must be >= 1 (ms)")
-    # canvas window = interval_ms × _CV_COLS ms
 
     pin_no, pin_name = _parse_gp(pos_args[0])
 
@@ -831,6 +988,52 @@ def _read_panel(pin_name: str, action: str, data: Optional[dict], expr: Optional
             if expr is not None:
                 result = _eval_expr(expr, data)
                 grid.add_row(Text.from_markup(f"Expr: [magenta]{expr}[/magenta] = [bright_cyan]{result}[/bright_cyan]"))
+
+    return Panel(
+        grid,
+        title=title,
+        border_style="green",
+        box=get_panel_box(),
+        expand=True,
+        width=CONSOLE_WIDTH,
+        title_align="left",
+    )
+
+
+def _seq_repeat_panel(
+    write_pin_name: str, seq_str: str,
+    read_pin_name: Optional[str], read_action: Optional[str],
+    data: Optional[dict], expr: Optional[str], title: str,
+) -> Panel:
+    grid = Table.grid(padding=0)
+    grid.add_column()
+    grid.add_row(Text.from_markup(f"Write pin: [bright_green]{write_pin_name}[/bright_green]"))
+    grid.add_row(Text.from_markup(f"Seq: [bright_cyan]{seq_str}[/bright_cyan]"))
+
+    if read_action is not None:
+        grid.add_row(Text.from_markup(f"Read pin: [bright_green]{read_pin_name}[/bright_green]"))
+        grid.add_row(Text.from_markup(f"Action: [magenta]{read_action}[/magenta]"))
+
+    if data is None:
+        if read_action in ('pulse_h', 'pulse_l', 'wait_h', 'wait_l'):
+            label = "Pulse" if read_action.startswith('pulse') else "Wait"
+            spin_row = Table.grid(padding=0)
+            spin_row.add_column()
+            spin_row.add_column()
+            spin_row.add_row(Text(f"{label}: "), Spinner("dots", style="cyan"))
+            grid.add_row(spin_row)
+    else:
+        if data.get('timeout'):
+            grid.add_row(Text.from_markup(f"Timeout: [bright_red]{int(data.get('timeout_ms', 0))} ms[/bright_red]"))
+        elif read_action in ('pulse_h', 'pulse_l'):
+            grid.add_row(Text.from_markup(f"Pulse: [bright_cyan]{int(data.get('pulse_us', 0))} us[/bright_cyan]"))
+            if expr is not None:
+                result = _eval_expr(expr, data)
+                grid.add_row(Text.from_markup(f"Expr: [magenta]{expr}[/magenta] = [bright_cyan]{result}[/bright_cyan]"))
+        elif read_action in ('wait_h', 'wait_l'):
+            grid.add_row(Text.from_markup(f"Wait: [bright_cyan]{int(data.get('wait_ms', 0))} ms[/bright_cyan]"))
+        else:
+            grid.add_row(Text.from_markup(f"Value: [bright_cyan]{int(data.get('value', 0))}[/bright_cyan]"))
 
     return Panel(
         grid,
@@ -904,7 +1107,7 @@ def _subcmd_write(client, pos_args: list[str]) -> None:
     )
 
 
-def _subcmd_seq(client, pos_args: list[str], expr: Optional[str], timeout_ms: int) -> None:
+def _subcmd_seq(client, pos_args: list[str], expr: Optional[str], timeout_ms: int, repeat: int, interval_ms: int = 0) -> None:
     if len(pos_args) < 2:
         raise ValueError("Usage: replx gpio seq GP<num> TOKEN... [read_action]")
     if timeout_ms < 0:
@@ -912,35 +1115,56 @@ def _subcmd_seq(client, pos_args: list[str], expr: Optional[str], timeout_ms: in
 
     write_pin_no, write_pin_name = _parse_gp(pos_args[0])
     ops, read_pin_no, read_action, read_pin_name = _parse_seq_tokens(pos_args[1:], write_pin_name)
-    code = _make_seq_code(write_pin_no, write_pin_name, ops, read_pin_no, read_pin_name, read_action, timeout_ms)
 
-    if read_action in {'wait_h', 'wait_l', 'pulse_h', 'pulse_l'}:
-        raw = _run_interactive_script(client, code, live_output=False)
-    else:
-        timeout = 10.0 + sum(value / 1000.0 for kind, value in ops if kind == 'm') + sum(value / 1_000_000.0 for kind, value in ops if kind == 'u')
-        raw = _exec(client, code, timeout=min(max(timeout, 5.0), 120.0))
+    if repeat == 1:
+        code = _make_seq_code(write_pin_no, write_pin_name, ops, read_pin_no, read_pin_name, read_action, timeout_ms)
 
-    data = _parse_json_strict(raw)
-    lines = [
-        f"Write pin: [bright_green]{data.get('write_pin', write_pin_name)}[/bright_green]",
-        f"Seq: [bright_cyan]{_format_seq_ops(ops)}[/bright_cyan]",
-    ]
-    if read_action is None:
-        lines.append(f"Final value: [bright_cyan]{int(data.get('value', 0))}[/bright_cyan]")
-    if read_action:
-        lines.append(f"Read pin: [bright_green]{data.get('read_pin', read_pin_name)}[/bright_green]")
-        lines.append(f"Action: [magenta]{read_action}[/magenta]")
-    if data.get('timeout'):
-        lines.append(f"Timeout: [bright_red]{int(data.get('timeout_ms', timeout_ms))} ms[/bright_red]")
-    if 'wait_ms' in data:
-        lines.append(f"Wait: [bright_cyan]{int(data['wait_ms'])} ms[/bright_cyan]")
-    if 'pulse_us' in data:
-        lines.append(f"Pulse: [bright_cyan]{int(data['pulse_us'])} us[/bright_cyan]")
-    if expr is not None and not data.get('timeout'):
-        result = _eval_expr(expr, data)
-        lines.append(f"Expr: [magenta]{expr}[/magenta] = [bright_cyan]{result}[/bright_cyan]")
+        if read_action in {'wait_h', 'wait_l', 'pulse_h', 'pulse_l'}:
+            raw = _run_interactive_script(client, code, live_output=False)
+        else:
+            timeout = 10.0 + sum(value / 1000.0 for kind, value in ops if kind == 'm') + sum(value / 1_000_000.0 for kind, value in ops if kind == 'u')
+            raw = _exec(client, code, timeout=min(max(timeout, 5.0), 120.0))
 
-    OutputHelper.print_panel('\n'.join(lines), title="GPIO Seq", border_style="green")
+        data = _parse_json_strict(raw)
+        lines = [
+            f"Write pin: [bright_green]{data.get('write_pin', write_pin_name)}[/bright_green]",
+            f"Seq: [bright_cyan]{_format_seq_ops(ops)}[/bright_cyan]",
+        ]
+        if read_action is None:
+            lines.append(f"Final value: [bright_cyan]{int(data.get('value', 0))}[/bright_cyan]")
+        if read_action:
+            lines.append(f"Read pin: [bright_green]{data.get('read_pin', read_pin_name)}[/bright_green]")
+            lines.append(f"Action: [magenta]{read_action}[/magenta]")
+        if data.get('timeout'):
+            lines.append(f"Timeout: [bright_red]{int(data.get('timeout_ms', timeout_ms))} ms[/bright_red]")
+        if 'wait_ms' in data:
+            lines.append(f"Wait: [bright_cyan]{int(data['wait_ms'])} ms[/bright_cyan]")
+        if 'pulse_us' in data:
+            lines.append(f"Pulse: [bright_cyan]{int(data['pulse_us'])} us[/bright_cyan]")
+        if expr is not None and not data.get('timeout'):
+            result = _eval_expr(expr, data)
+            lines.append(f"Expr: [magenta]{expr}[/magenta] = [bright_cyan]{result}[/bright_cyan]")
+
+        OutputHelper.print_panel('\n'.join(lines), title="GPIO Seq", border_style="green")
+        return
+
+    seq_str = _format_seq_ops(ops)
+    code = _make_seq_repeat_code(write_pin_no, write_pin_name, ops, read_pin_no, read_pin_name, read_action, timeout_ms, repeat, interval_ms)
+    counter = [0]
+    with Live(_seq_repeat_panel(write_pin_name, seq_str, read_pin_name, read_action, None, expr, "GPIO Seq #1"), console=OutputHelper._console, refresh_per_second=4) as live:
+        def on_line(json_str: str) -> None:
+            counter[0] += 1
+            idx = counter[0]
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                return
+            live.console.print(_seq_repeat_panel(write_pin_name, seq_str, read_pin_name, read_action, data, expr, f"GPIO Seq #{idx}"))
+            live.update(_seq_repeat_panel(write_pin_name, seq_str, read_pin_name, read_action, None, expr, f"GPIO Seq #{idx + 1}"))
+        try:
+            _run_repeat_interactive(client, code, on_line, ctrl_c_grace_s=1.5)
+        except KeyboardInterrupt:
+            pass
 
 
 @app.command(name="gpio", rich_help_panel="Hardware")
@@ -970,9 +1194,17 @@ def gpio_cmd(
         )
         raise typer.Exit(1)
 
-    if subcmd != 'monitor' and interval != 10:
+    if interval != 10 and subcmd not in ('monitor', 'seq'):
         OutputHelper.print_panel(
-            "--interval is only supported for gpio monitor (sets render rate)",
+            "--interval is supported only for gpio monitor (render rate) and gpio seq --repeat (inter-iteration delay)",
+            title="GPIO Error",
+            border_style="red",
+        )
+        raise typer.Exit(1)
+
+    if interval != 10 and subcmd == 'seq' and repeat == 1:
+        OutputHelper.print_panel(
+            "--interval requires --repeat N (N > 1 or 0) for gpio seq",
             title="GPIO Error",
             border_style="red",
         )
@@ -994,9 +1226,9 @@ def gpio_cmd(
         )
         raise typer.Exit(1)
 
-    if subcmd != 'read' and repeat != 1:
+    if subcmd not in ('read', 'seq') and repeat != 1:
         OutputHelper.print_panel(
-            "--repeat is supported only for gpio read",
+            "--repeat is supported only for gpio read and gpio seq",
             title="GPIO Error",
             border_style="red",
         )
@@ -1013,7 +1245,7 @@ def gpio_cmd(
             elif subcmd == 'write':
                 _subcmd_write(client, pos_args)
             elif subcmd == 'seq':
-                _subcmd_seq(client, pos_args, expr, timeout)
+                _subcmd_seq(client, pos_args, expr, timeout, repeat, interval if repeat != 1 else 0)
     except ValueError as e:
         OutputHelper.print_panel(str(e), title="GPIO Error", border_style="red")
         raise typer.Exit(1)

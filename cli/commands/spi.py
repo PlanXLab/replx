@@ -7,6 +7,7 @@ import typer
 from ..helpers import OutputHelper
 from ..connection import _ensure_connected, _create_agent_client, _get_device_port
 from ..app import app
+from ...utils import device_name_to_path
 
 
 _RP_SPI_SCK_CH: dict[int, int] = {
@@ -33,6 +34,23 @@ def _get_core(client, port: Optional[str]) -> str:
         for c in connections:
             if _norm_port(c.get('port', '')) == norm:
                 return c.get('core', '')
+    except Exception:
+        pass
+    return ''
+
+
+def _get_device(client, port: Optional[str]) -> str:
+    try:
+        info = client.send_command('session_info', timeout=1.5)
+        connections = info.get('connections', [])
+        if not connections:
+            return ''
+        if port is None:
+            return connections[0].get('device', '')
+        norm = _norm_port(port)
+        for c in connections:
+            if _norm_port(c.get('port', '')) == norm:
+                return c.get('device', '')
     except Exception:
         pass
     return ''
@@ -150,16 +168,17 @@ def _make_xfer_code(cfg: dict, tx_data: list[int], cs_no: Optional[int]) -> str:
     )
 
 
-def _make_slave_open_code(cfg: dict) -> str:
+def _make_slave_open_code(cfg: dict, device: str) -> str:
     sck      = cfg['sck']
     mosi     = cfg['mosi']
     cs       = cfg['cs']
     miso     = cfg.get('miso')
     buf_size = cfg.get('buf_size', 8192)
     miso_arg = f", miso={miso}" if miso is not None else ""
+    mod = device_name_to_path(device) + '.spi' if device else 'spi'
     return (
         f"import json\n"
-        f"from spi import SpiSlave\n"
+        f"from {mod} import SpiSlave\n"
         f"_spi_slave = SpiSlave(sck={sck}, mosi={mosi}, cs={cs}{miso_arg}, buf_size={buf_size})\n"
         f"print(json.dumps({{'ok':True,'sck':{sck},'mosi':{mosi},'cs':{cs},"
         f"'miso':{miso!r},'buf_size':{buf_size}}}))"
@@ -398,7 +417,8 @@ def _subcmd_open(client, port: str, core: str,
             raise typer.Exit(1)
         cfg = dict(sck=sck_no, mosi=mosi_no, cs=cs_no, miso=miso_no,
                    buf_size=slave_buf, slave=True)
-        code = _make_slave_open_code(cfg)
+        device = _get_device(client, port)
+        code = _make_slave_open_code(cfg, device)
         raw = _exec(client, code, timeout=5.0)
         try:
             _parse_json_strict(raw)
