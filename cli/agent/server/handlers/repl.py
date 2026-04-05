@@ -8,6 +8,26 @@ from ..command_dispatcher import CommandContext
 from ..connection_manager import BoardConnection
 
 class ReplCommandsMixin:
+    @staticmethod
+    def _read_repl_chunk(repl) -> bytes:
+        """Read pending REPL output, with a 1-byte fallback for platforms where in_waiting can lag."""
+        count = repl.in_waiting()
+        if count > 0:
+            return repl.read_bytes(count)
+
+        transport = getattr(repl, 'transport', None)
+        if transport is None or not hasattr(transport, 'read_byte'):
+            return b''
+
+        first = transport.read_byte(timeout=0.02)
+        if not first:
+            return b''
+
+        extra = repl.in_waiting()
+        if extra > 0:
+            return first + repl.read_bytes(extra)
+        return first
+
     async def _repl_reader_task(self, conn: BoardConnection) -> None:
         loop = asyncio.get_running_loop()
         repl = conn.repl_protocol
@@ -15,15 +35,11 @@ class ReplCommandsMixin:
         try:
             while conn.repl.active and conn.repl_protocol:
                 try:
-                    count = await loop.run_in_executor(
-                        self._slow_executor, repl.in_waiting
+                    data = await loop.run_in_executor(
+                        self._slow_executor, self._read_repl_chunk, repl
                     )
-                    if count > 0:
-                        data = await loop.run_in_executor(
-                            self._slow_executor, repl.read_bytes, count
-                        )
-                        if data:
-                            conn.repl.append_output(data)
+                    if data:
+                        conn.repl.append_output(data)
                         consecutive_transient = 0
                     else:
                         consecutive_transient = 0
@@ -45,11 +61,9 @@ class ReplCommandsMixin:
         consecutive_transient = 0
         while conn.repl.active and conn.repl_protocol:
             try:
-                count = repl.in_waiting()
-                if count > 0:
-                    data = repl.read_bytes(count)
-                    if data:
-                        conn.repl.append_output(data)
+                data = self._read_repl_chunk(repl)
+                if data:
+                    conn.repl.append_output(data)
                     consecutive_transient = 0
                 else:
                     consecutive_transient = 0
