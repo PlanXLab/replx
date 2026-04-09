@@ -69,10 +69,7 @@ class SerialTransport:
             if "clearcommerror" in error_msg or "not exist" in error_msg or "cannot find" in error_msg:
                 raise TransportError("Serial port disconnected (device removed or cable unplugged)") from e
             raise TransportError(f"Serial read_available error: {e}") from e
-    
-    def read_all(self) -> bytes:
-        return self.read_available()
-    
+
     def in_waiting(self) -> int:
         try:
             return self._serial.in_waiting

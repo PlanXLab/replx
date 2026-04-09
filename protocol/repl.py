@@ -845,10 +845,7 @@ class ReplProtocol:
         except Exception:
             self._leave_repl()
             raise
-            raise
-    
 
-    
     def close(self):
         self.transport.close()
 
