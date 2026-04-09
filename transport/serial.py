@@ -1,6 +1,5 @@
 import gc
 import sys
-from .base import Transport
 from replx.utils.exceptions import TransportError
 
 try:
@@ -9,7 +8,7 @@ except ImportError:
     raise ImportError("pyserial is required. Install with: pip install pyserial")
 
 
-class SerialTransport(Transport):
+class SerialTransport:
     
     def __init__(self, port: str, baudrate: int = 115200, timeout: float = 1.0):
         self.port = port

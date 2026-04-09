@@ -353,9 +353,12 @@ def _print_main_help():
             ("mpy", "Compile Python files to .mpy bytecode"),
         ]),
         ("Hardware", [
-            ("i2c", "Scan, read, write, dump I2C devices on the connected board"),
             ("gpio", "Read, write, and run GPIO sequences on the connected board"),
+            ("pwm", "Generate and monitor PWM signals on the connected board"),
             ("adc", "Read ADC pins and run the board-side ADC scope UI"),
+            ("uart", "Open, write, read, monitor UART on the connected board"),
+            ("spi", "Open, write, read, xfer SPI devices on the connected board"),
+            ("i2c", "Scan, read, write, dump I2C devices on the connected board"),
         ]),
     ]
     

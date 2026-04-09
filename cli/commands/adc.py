@@ -1145,9 +1145,19 @@ def adc_cmd(
     sample: int = typer.Option(10, "--sample", metavar="MS", help="Initial scope render rate"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
-    if show_help or not args:
+    if show_help:
         _print_adc_help()
         raise typer.Exit()
+    if not args:
+        OutputHelper.print_panel(
+            "Subcommands: [bright_blue]read[/bright_blue]  [bright_blue]scope[/bright_blue]\n\n"
+            "  [bright_green]replx PORT adc read GP26[/bright_green]\n"
+            "  [bright_green]replx PORT adc scope GP26 GP27 GP28[/bright_green]\n\n"
+            "Use [bright_blue]replx adc --help[/bright_blue] for details.",
+            title="ADC",
+            border_style="yellow",
+        )
+        raise typer.Exit(1)
 
     subcmd = args[0].lower()
     pos_args = args[1:]

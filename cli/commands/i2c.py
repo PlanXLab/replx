@@ -1,5 +1,8 @@
 import json
+import shutil
+import signal
 import sys
+import time
 from typing import Optional
 
 import typer
@@ -7,6 +10,8 @@ import typer
 from ..helpers import OutputHelper, CONSOLE_WIDTH
 from ..connection import _ensure_connected, _create_agent_client, _get_device_port
 from ..app import app
+from replx.utils.constants import CTRL_C
+from ...terminal import enable_vt_mode
 
 _ADDR_COLORS = [
     'bright_yellow', 'bright_cyan', 'bright_green',
@@ -36,7 +41,6 @@ def _parse_data(tokens: list) -> list:
 
 
 def _parse_gp_pin(token: str, label: str = 'pin') -> int:
-    """Parse GP<num> format string into an integer pin number."""
     s = (token or '').strip()
     if len(s) < 3 or s[:2].lower() != 'gp' or not s[2:].isdigit():
         raise ValueError(
@@ -119,8 +123,6 @@ def _make_init(ch: int, sda: int, scl: int, freq: int) -> str:
         f"i2c=I2C({ch},sda=Pin({sda}),scl=Pin({scl}),freq={freq})"
     )
 
-
-# ── I2C Target code-gen ────────────────────────────────────────────────────
 
 def _make_target_open_code(ch: int, sda: int, scl: int, addr: int, mem_size: int) -> str:
     return (
@@ -317,6 +319,131 @@ def _display_read(raw_output: str, addr: int, nbytes: int, reg: Optional[int],
             content.append("")
 
     OutputHelper.print_panel("\n".join(content), title=title, border_style="blue")
+
+
+_I2C_D = '\033[38;2;150;150;150m'
+_I2C_C = '\033[38;2;80;200;255m'
+_I2C_R = '\033[38;2;255;100;100m'
+_I2C_RST = '\033[0m'
+_I2C_SEP_W = 72
+
+
+def _setup_i2c_scroll_screen(header: str) -> None:
+    enable_vt_mode()
+    _, rows = shutil.get_terminal_size(fallback=(80, 24))
+    w = sys.stdout.buffer.write
+    w(b'\033[?1049h')
+    w(b'\033[2J\033[H\033[?25l')
+    w((header + '\n').encode())
+    w(('  ' + '\u2500' * _I2C_SEP_W + '\n').encode())
+    w(f'\033[3;{rows}r\033[3;1H'.encode())
+    sys.stdout.buffer.flush()
+
+
+def _teardown_i2c_scroll_screen() -> None:
+    w = sys.stdout.buffer.write
+    w(b'\033[r\033[?25h')
+    w(b'\033[?1049l')
+    sys.stdout.buffer.flush()
+
+
+def _run_i2c_stream(client, code: str, on_line) -> None:
+    stop_requested = False
+    pending_input: list = []
+    line_buf = bytearray()
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    def sigint_handler(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+        pending_input.append(CTRL_C)
+
+    def output_callback(data: bytes, stream_type: str = 'stdout'):
+        nonlocal line_buf
+        if stream_type == 'stderr':
+            return
+        line_buf += data
+        while b'\n' in line_buf:
+            line, _, line_buf = line_buf.partition(b'\n')
+            text = line.decode('utf-8', errors='replace').strip()
+            if text:
+                on_line(text)
+
+    def input_provider() -> bytes:
+        if pending_input:
+            return pending_input.pop(0)
+        return b''
+
+    def stop_check() -> bool:
+        return stop_requested
+
+    try:
+        signal.signal(signal.SIGINT, sigint_handler)
+        client.run_interactive(
+            script_content=code,
+            echo=False,
+            output_callback=output_callback,
+            input_provider=input_provider,
+            stop_check=stop_check,
+            ctrl_c_grace_s=1.5,
+        )
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+
+
+def _display_read_scroll(client, code: str, addr: int, nbytes: int,
+                         reg: Optional[int], repeat: int, bus: dict) -> None:
+    reg_str = f"reg 0x{reg:02X}  " if reg is not None else ""
+    repeat_str = '\u221e' if repeat == 0 else f'\u00d7{repeat}'
+    hint = 'Ctrl+C exit' if repeat == 0 else 'Ctrl+C cancel'
+    hdr = (
+        f'  {_I2C_D}I2C Read{_I2C_RST}  '
+        f'{_I2C_C}0x{addr:02X}{_I2C_RST}  '
+        f'{reg_str}{nbytes} bytes  '
+        f'{repeat_str}  '
+        f'{_I2C_D}{_bus_config_line(bus)}  [{hint}]{_I2C_RST}'
+    )
+    _setup_i2c_scroll_screen(hdr)
+
+    start_t = time.monotonic()
+    counter = [0]
+
+    def on_line(json_str: str) -> None:
+        try:
+            parsed = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            return
+        counter[0] += 1
+        s = int(time.monotonic() - start_t)
+        ts = f'{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}'
+        n = counter[0]
+        if isinstance(parsed, dict) and 'error' in parsed:
+            line = (
+                f'  {_I2C_D}{ts}{_I2C_RST}  '
+                f'{_I2C_D}#{n}{_I2C_RST}  '
+                f'{_I2C_R}Error: {parsed["error"]}{_I2C_RST}'
+            )
+        else:
+            hex_str = ' '.join(f'{b:02X}' for b in parsed)
+            line = (
+                f'  {_I2C_D}{ts}{_I2C_RST}  '
+                f'{_I2C_D}#{n}{_I2C_RST}  '
+                f'{_I2C_C}[{hex_str}]{_I2C_RST}'
+            )
+        sys.stdout.write(line + '\n')
+        sys.stdout.flush()
+
+    try:
+        _run_i2c_stream(client, code, on_line)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _teardown_i2c_scroll_screen()
+
+    total = counter[0]
+    done_msg = f'Stopped: {total} reads' if repeat == 0 else f'Done: {total}/{repeat} reads'
+    sys.stdout.write(f'  {_I2C_D}{done_msg}{_I2C_RST}\n')
+    sys.stdout.flush()
 
 
 def _display_write(raw_output: str, addr: int, data: list, repeat: int, bus: dict):
@@ -654,25 +781,24 @@ def _subcmd_read(client, pos_args: list, addr16: bool, repeat: int, interval: in
             f"except OSError as e:\n"
             f" print(json.dumps({{'error':str(e)}}))"
         )
+        timeout = _calc_timeout(1, 0, op_ms=200)
+        raw = _exec(client, code, timeout=timeout)
+        if not raw:
+            OutputHelper.print_panel("No output from device", title="I2C Error", border_style="red")
+            raise typer.Exit(1)
+        _display_read(raw, addr, nbytes, reg, 1, bus)
     else:
+        loop_line = "while True:\n" if repeat == 0 else f"for _ in range({repeat}):\n"
         code = (
             f"import json,time\n{init}\n"
-            f"for _ in range({repeat}):\n"
+            f"{loop_line}"
             f" try:\n"
             f" {inner}\n"
             f" except OSError as e:\n"
             f"  print(json.dumps({{'error':str(e)}}))\n"
             f" time.sleep_ms({interval})"
         )
-
-    timeout = _calc_timeout(repeat, interval, op_ms=200)
-    raw = _exec(client, code, timeout=timeout)
-
-    if not raw:
-        OutputHelper.print_panel("No output from device", title="I2C Error", border_style="red")
-        raise typer.Exit(1)
-
-    _display_read(raw, addr, nbytes, reg, repeat, bus)
+        _display_read_scroll(client, code, addr, nbytes, reg, repeat, bus)
 
 
 def _subcmd_write(client, pos_args: list, addr16: bool, repeat: int, interval: int):
@@ -758,20 +884,21 @@ def _subcmd_dump(client, pos_args: list, addr16: bool, repeat: int, interval: in
     addrsize = 16 if addr16 else 8
 
     single_dump = (
-        f" r={{}}\n"
-        f" for a in range({from_r},{to_r + 1}):\n"
-        f"  try:r[a]=i2c.readfrom_mem({hex(addr)},a,1,addrsize={addrsize})[0]\n"
-        f"  except OSError:r[a]=None\n"
-        f" print(json.dumps(r))"
+        "r={}\n"
+        f"for a in range({from_r},{to_r + 1}):\n"
+        f" try:r[a]=i2c.readfrom_mem({hex(addr)},a,1,addrsize={addrsize})[0]\n"
+        " except OSError:r[a]=None\n"
+        "print(json.dumps(r))"
     )
 
     if repeat == 1:
         code = f"import json\n{init}\n{single_dump}"
     else:
+        indented = "\n".join(" " + ln for ln in single_dump.splitlines())
         code = (
             f"import json,time\n{init}\n"
             f"for _ in range({repeat}):\n"
-            f"{single_dump}\n"
+            f"{indented}\n"
             f" time.sleep_ms({interval})"
         )
 
@@ -1048,9 +1175,20 @@ def i2c_cmd(
     show_help: bool = typer.Option(False, "--help", "-h",
                                    is_eager=True, hidden=True),
 ):
-    if show_help or not args:
+    if show_help:
         _print_i2c_help()
         raise typer.Exit()
+    if not args:
+        OutputHelper.print_panel(
+            "Subcommands: [bright_blue]scan  open  close  bus  read  write  dump  seq  mem[/bright_blue]\n\n"
+            "  [bright_green]replx PORT i2c scan --sda GP12 --scl GP13[/bright_green]\n"
+            "  [bright_green]replx PORT i2c read 0x68 6 3B[/bright_green]\n"
+            "  [bright_green]replx PORT i2c write 0x68 6B 00[/bright_green]\n\n"
+            "Use [bright_blue]replx i2c --help[/bright_blue] for details.",
+            title="I2C",
+            border_style="yellow",
+        )
+        raise typer.Exit(1)
 
     subcmd = args[0].lower()
     pos_args = args[1:]

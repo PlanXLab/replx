@@ -10,7 +10,6 @@ from ..connection_manager import BoardConnection
 class ReplCommandsMixin:
     @staticmethod
     def _read_repl_chunk(repl) -> bytes:
-        """Read pending REPL output, with a 1-byte fallback for platforms where in_waiting can lag."""
         count = repl.in_waiting()
         if count > 0:
             return repl.read_bytes(count)
@@ -150,6 +149,10 @@ class ReplCommandsMixin:
             return {"exited": False, "reason": "Not the REPL session owner"}
 
         conn.repl.stop()
+        try:
+            conn.repl_protocol.reset()
+        except Exception:
+            pass
         conn.release()
 
         return {"exited": True}

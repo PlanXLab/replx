@@ -57,10 +57,10 @@ class ReplProtocol:
         return self.transport.read(n)
         
     def __init__(self, connection_string, baudrate:int=115200, core:str="RP2350", device_root_fs:str="/"):
-        from replx.transport import Transport
+        from replx.transport import SerialTransport
         
         try:
-            if isinstance(connection_string, Transport):
+            if isinstance(connection_string, SerialTransport):
                 self.transport = connection_string
             else:
                 self.transport = create_transport(connection_string, baudrate=baudrate)

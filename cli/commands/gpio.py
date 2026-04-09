@@ -263,7 +263,6 @@ _next_level = bytearray(1)
 
 
 def _isr(pin):
-    """Hard-IRQ handler: zero heap allocation."""
     global _wr, _overflow
     nxt = (_wr + 1) % _BUF_SIZE
     if nxt == _rd:
@@ -276,7 +275,6 @@ def _isr(pin):
 
 
 def _flush_buf():
-    """Drain all pending edges into a plain list (called from main loop only)."""
     global _rd, _overflow
     edges = []
     while _rd != _wr:
@@ -307,7 +305,6 @@ def _make_plot():
 
 
 def _poll_key():
-    """Return the first pending character, or None. Raises KeyboardInterrupt on Ctrl+C."""
     r, _, _ = _sel.select([sys.stdin], [], [], 0)
     if not r:
         return None
@@ -318,7 +315,6 @@ def _poll_key():
 
 
 def _draw_log(w, log_buf, log_pos):
-    """Redraw all 8 edge-log rows (oldest at top, newest at bottom)."""
     for i in range(_LOG_N):
         idx = (log_pos - _LOG_N + i) % _LOG_N
         entry = log_buf[idx]
@@ -394,10 +390,8 @@ def main():
 
             t_now = time.ticks_us()
             held = time.ticks_diff(t_now, last_change_t)
-            # Update last known level from IRQ edge history (avoids pin.value() race)
             if edges:
                 last_irq_level = edges[-1][1]
-            # Advance scope exactly one tick per render loop with correct level
             _pt = sc._t
             sc.tick([float(last_irq_level)])
             if sc._t <= _pt:
@@ -468,7 +462,6 @@ def _make_write_code(pin_no: int, pin_name: str, value: int) -> str:
 
 
 def _mk_timeout_exit(action: str, read_pin_name: str, indent: int = 12) -> str:
-    """Generate the MicroPython timeout-exit snippet (used inside while loops)."""
     pad = " " * indent
     return (
         f"{pad}res['read_action']={action!r}\n"
@@ -1178,9 +1171,20 @@ def gpio_cmd(
     repeat: int = typer.Option(1, "--repeat", metavar="N", help="Repeat gpio read N times (0=infinite until Ctrl+C, default 1)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
-    if show_help or not args:
+    if show_help:
         _print_gpio_help()
         raise typer.Exit()
+    if not args:
+        OutputHelper.print_panel(
+            "Subcommands: [bright_blue]monitor[/bright_blue]  [bright_blue]read[/bright_blue]  [bright_blue]write[/bright_blue]  [bright_blue]seq[/bright_blue]\n\n"
+            "  [bright_green]replx PORT gpio read GP1[/bright_green]\n"
+            "  [bright_green]replx PORT gpio write GP25 1[/bright_green]\n"
+            "  [bright_green]replx PORT gpio monitor GP1[/bright_green]\n\n"
+            "Use [bright_blue]replx gpio --help[/bright_blue] for details.",
+            title="GPIO",
+            border_style="yellow",
+        )
+        raise typer.Exit(1)
 
     subcmd = args[0].lower()
     pos_args = args[1:]

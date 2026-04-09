@@ -105,7 +105,6 @@ def _make_spi_init(cfg: dict) -> str:
 
 
 def _cs_context(cs_pin: Optional[int]) -> tuple[str, str]:
-    """Return (assert_code, deassert_code)."""
     if cs_pin is None:
         return '', ''
     setup = f"from machine import Pin as _P\n_cs=_P({cs_pin},_P.OUT,value=1)\n"
@@ -189,11 +188,10 @@ def _make_slave_read_code(timeout_ms: int) -> str:
     return (
         f"import json,binascii\n"
         f"_d=_spi_slave.read(timeout={timeout_ms})\n"
-        f"_ovf=_spi_slave.overflow\n"
         f"if _d:\n"
-        f"    print(json.dumps({{'hex':binascii.hexlify(_d).decode(),'len':len(_d),'ovf':_ovf}}))\n"
+        f"    print(json.dumps({{'hex':binascii.hexlify(_d).decode(),'len':len(_d)}}))\n"
         f"else:\n"
-        f"    print(json.dumps({{'hex':'','len':0,'ovf':_ovf}}))"
+        f"    print(json.dumps({{'hex':'','len':0}}))"
     )
 
 
@@ -213,8 +211,7 @@ def _make_slave_writeinto_code(data: list[int], timeout_ms: int) -> str:
         f"_tx={data_str}\n"
         f"_rx=bytearray(len(_tx))\n"
         f"_n=_spi_slave.writeinto(_tx,_rx,timeout={timeout_ms})\n"
-        f"_ovf=_spi_slave.overflow\n"
-        r"print(json.dumps({'hex':binascii.hexlify(_rx[:_n]).decode(),'len':_n,'ovf':_ovf}))"
+        r"print(json.dumps({'hex':binascii.hexlify(_rx[:_n]).decode(),'len':_n}))"
     )
 
 
@@ -347,22 +344,24 @@ def _parse_cs(cs_str: Optional[str]) -> Optional[int]:
 def _parse_hex_bytes(tokens: list[str]) -> list[int]:
     result: list[int] = []
     for token in tokens:
-        t = token.strip()
-        if t.lower().startswith('0x'):
-            t = t[2:]
-        if not t:
-            continue
-        if len(t) % 2 != 0:
-            raise ValueError(
-                f"Odd-length hex token: {token!r}. "
-                "Each token must have an even number of hex digits."
-            )
-        for i in range(0, len(t), 2):
-            pair = t[i:i + 2]
-            try:
-                result.append(int(pair, 16))
-            except ValueError:
-                raise ValueError(f"Invalid hex byte {pair!r} in token {token!r}")
+        parts = token.split()
+        for part in parts:
+            t = part.strip()
+            if t.lower().startswith('0x'):
+                t = t[2:]
+            if not t:
+                continue
+            if len(t) % 2 != 0:
+                raise ValueError(
+                    f"Odd-length hex token: {part!r}. "
+                    "Each token must have an even number of hex digits."
+                )
+            for i in range(0, len(t), 2):
+                pair = t[i:i + 2]
+                try:
+                    result.append(int(pair, 16))
+                except ValueError:
+                    raise ValueError(f"Invalid hex byte {pair!r} in token {part!r}")
     return result
 
 
@@ -429,7 +428,6 @@ def _subcmd_open(client, port: str, core: str,
         _display_bus(cfg)
         return
 
-    # ── master mode (original) ──────────────────────────────────────────────
     if sck is None:
         raise ValueError("--sck is required. e.g. --sck GP2")
     if mosi is None:
@@ -524,18 +522,16 @@ def _subcmd_read(client, pos_args: list[str], fill: str,
         result = _parse_json_strict(raw)
         hex_str = result.get('hex', '')
         length  = result.get('len', 0)
-        ovf     = result.get('ovf', 0)
-        ovf_warn = f"  [red]overflow={ovf}[/red]" if ovf else ""
         if not hex_str or length == 0:
             OutputHelper.print_panel(
-                f"[dim]No data received (timeout {timeout_ms}ms)[/dim]{ovf_warn}",
+                f"[dim]No data received (timeout {timeout_ms}ms)[/dim]",
                 title="SPI Slave Read",
                 border_style="yellow",
             )
             return
         data = bytes.fromhex(hex_str)
         OutputHelper.print_panel(
-            f"Received: [bright_cyan]{length}[/bright_cyan] bytes{ovf_warn}\n"
+            f"Received: [bright_cyan]{length}[/bright_cyan] bytes\n"
             + _render_hex_dump(data),
             title="SPI Slave Read",
             border_style="blue",
@@ -599,8 +595,6 @@ def _subcmd_xfer(client, pos_args: list[str], cs_str: Optional[str],
         result = _parse_json_strict(raw)
         hex_str = result.get('hex', '')
         length  = result.get('len', 0)
-        ovf     = result.get('ovf', 0)
-        ovf_warn = f"  [red]overflow={ovf}[/red]" if ovf else ""
         rx_section = (
             "\n" + _render_hex_dump(bytes.fromhex(hex_str))
             if hex_str and length > 0
@@ -609,7 +603,7 @@ def _subcmd_xfer(client, pos_args: list[str], cs_str: Optional[str],
         OutputHelper.print_panel(
             f"TX (MISO): [bright_cyan]{len(tx_data)}[/bright_cyan] bytes  [dim]({mode_label})[/dim]  "
             f"[dim]→ {display}[/dim]\n"
-            f"RX (MOSI): [bright_cyan]{length}[/bright_cyan] bytes{ovf_warn}"
+            f"RX (MOSI): [bright_cyan]{length}[/bright_cyan] bytes"
             + rx_section,
             title="SPI Slave Xfer",
             border_style="blue",
@@ -757,9 +751,20 @@ def spi_cmd(
     timeout_ms: int = typer.Option(10_000, "--timeout", metavar="MS", help="Timeout ms for slave read/xfer"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
-    if show_help or not args:
+    if show_help:
         _print_spi_help()
         raise typer.Exit()
+    if not args:
+        OutputHelper.print_panel(
+            "Subcommands: [bright_blue]open  bus  write  read  xfer  close[/bright_blue]\n\n"
+            "  [bright_green]replx PORT spi open --sck GP2 --mosi GP3[/bright_green]\n"
+            "  [bright_green]replx PORT spi write 01 02 03[/bright_green]\n"
+            "  [bright_green]replx PORT spi read 4[/bright_green]\n\n"
+            "Use [bright_blue]replx spi --help[/bright_blue] for details.",
+            title="SPI",
+            border_style="yellow",
+        )
+        raise typer.Exit(1)
 
     subcmd = args[0].lower()
     pos_args = args[1:]

@@ -17,7 +17,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from replx.terminal import IS_WINDOWS, getch, disable_quick_edit_mode, restore_console_mode, LineModeTerminal
+from replx.terminal import IS_WINDOWS, getch, disable_quick_edit_mode, restore_console_mode, LineModeTerminal, utf8_need_follow
 from replx.utils.constants import CTRL_C, CTRL_D
 from ..helpers import (
     OutputHelper, StoreManager,
@@ -35,7 +35,6 @@ from .device import usage
 
 
 def _wrap_trailing_expression_for_print(code: str) -> str:
-    """If the last statement is an expression, rewrite code to print its value."""
     try:
         tree = ast.parse(code, mode="exec")
     except SyntaxError:
@@ -257,7 +256,15 @@ Quick way to execute code without creating a file.
     _ensure_connected()
     with _create_agent_client() as client:
         normalized_command = _wrap_trailing_expression_for_print(command)
-        result = client.send_command('exec', code=normalized_command)
+        try:
+            result = client.send_command('exec', code=normalized_command)
+        except RuntimeError as e:
+            error_msg = str(e)
+            prefix = "ProtocolError: "
+            if error_msg.startswith(prefix):
+                error_msg = error_msg[len(prefix):]
+            OutputHelper.print_panel(error_msg, title="Execution Error", border_style="red")
+            raise typer.Exit(1)
         if result.get('output'):
             print(result['output'], end='')
 
@@ -1454,7 +1461,37 @@ Start a live MicroPython session where you can type code line by line.
 
     _old_console_mode = disable_quick_edit_mode()
 
+    _repl_fd = None
+    _repl_old_settings = None
+    if not IS_WINDOWS:
+        import tty, termios
+        _repl_fd = sys.stdin.fileno()
+        try:
+            _repl_old_settings = termios.tcgetattr(_repl_fd)
+            tty.setraw(_repl_fd)
+        except Exception:
+            pass
+
+    def _repl_getch() -> bytes:
+        if IS_WINDOWS:
+            return getch()
+        try:
+            first = os.read(_repl_fd, 1)
+            if not first:
+                return b''
+            need = utf8_need_follow(first[0])
+            if need:
+                return first + os.read(_repl_fd, need)
+            return first
+        except Exception:
+            return b''
+
     def _restore_console():
+        if _repl_old_settings is not None:
+            try:
+                termios.tcsetattr(_repl_fd, termios.TCSADRAIN, _repl_old_settings)
+            except Exception:
+                pass
         restore_console_mode(_old_console_mode)
 
     import atexit as _atexit
@@ -1533,6 +1570,12 @@ Start a live MicroPython session where you can type code line by line.
         pass
     finally:
         repl_running[0] = False
+        if _repl_old_settings is not None:
+            try:
+                import termios
+                termios.tcsetattr(_repl_fd, termios.TCSADRAIN, _repl_old_settings)
+            except Exception:
+                pass
         restore_console_mode(_old_console_mode)
         _atexit.unregister(_restore_console)
         reader.join(timeout=0.5)

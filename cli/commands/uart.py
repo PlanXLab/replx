@@ -655,22 +655,24 @@ def _subcmd_bus(client) -> None:
 def _parse_hex_args(tokens: list[str]) -> list[int]:
     result: list[int] = []
     for token in tokens:
-        t = token.strip()
-        if t.lower().startswith('0x'):
-            t = t[2:]
-        if not t:
-            continue
-        if len(t) % 2 != 0:
-            raise ValueError(
-                f"Odd-length hex token: {token!r}. "
-                "Each token must have an even number of hex digits."
-            )
-        for i in range(0, len(t), 2):
-            pair = t[i:i + 2]
-            try:
-                result.append(int(pair, 16))
-            except ValueError:
-                raise ValueError(f"Invalid hex byte {pair!r} in token {token!r}")
+        parts = token.split()
+        for part in parts:
+            t = part.strip()
+            if t.lower().startswith('0x'):
+                t = t[2:]
+            if not t:
+                continue
+            if len(t) % 2 != 0:
+                raise ValueError(
+                    f"Odd-length hex token: {part!r}. "
+                    "Each token must have an even number of hex digits."
+                )
+            for i in range(0, len(t), 2):
+                pair = t[i:i + 2]
+                try:
+                    result.append(int(pair, 16))
+                except ValueError:
+                    raise ValueError(f"Invalid hex byte {pair!r} in token {part!r}")
     return result
 
 
@@ -979,9 +981,20 @@ def uart_cmd(
     hex_mode: bool = typer.Option(False, "--hex", help="write: send raw hex bytes instead of text"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
-    if show_help or not args:
+    if show_help:
         _print_uart_help()
         raise typer.Exit()
+    if not args:
+        OutputHelper.print_panel(
+            "Subcommands: [bright_blue]open  bus  write  read  xfer  monitor  close[/bright_blue]\n\n"
+            "  [bright_green]replx PORT uart open --tx GP0 --rx GP1[/bright_green]\n"
+            "  [bright_green]replx PORT uart write Hello[/bright_green]\n"
+            "  [bright_green]replx PORT uart read 8[/bright_green]\n\n"
+            "Use [bright_blue]replx uart --help[/bright_blue] for details.",
+            title="UART",
+            border_style="yellow",
+        )
+        raise typer.Exit(1)
 
     subcmd = args[0].lower()
     pos_args = args[1:]

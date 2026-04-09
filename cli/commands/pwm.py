@@ -926,9 +926,20 @@ def pwm_cmd(
     repeat: int = typer.Option(1, "--repeat", "-n", metavar="N", help="Repeat count for pwm seq (0=infinite, default 1)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
-    if show_help or not args:
+    if show_help:
         _print_pwm_help()
         raise typer.Exit()
+    if not args:
+        OutputHelper.print_panel(
+            "Subcommands: [bright_blue]write[/bright_blue]  [bright_blue]seq[/bright_blue]  [bright_blue]stop[/bright_blue]  [bright_blue]monitor[/bright_blue]\n\n"
+            "  [bright_green]replx PORT pwm write GP15 --freq 1000 --duty-percent 50[/bright_green]\n"
+            "  [bright_green]replx PORT pwm monitor GP15[/bright_green]\n"
+            "  [bright_green]replx PORT pwm stop GP15[/bright_green]\n\n"
+            "Use [bright_blue]replx pwm --help[/bright_blue] for details.",
+            title="PWM",
+            border_style="yellow",
+        )
+        raise typer.Exit(1)
 
     subcmd = args[0].lower()
     pos_args = args[1:]
