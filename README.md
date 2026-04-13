@@ -231,6 +231,17 @@ These commands communicate with the board. Except for `setup`, the port can be o
 | `pkg` | Search, download, and update MicroPython packages. |
 | `mpy` | Compile `.py` files to `.mpy` bytecode. |
 
+#### Hardware
+
+| Command | Description |
+|---|---|
+| `gpio` | Read, write, and run GPIO sequences. |
+| `pwm` | Generate and monitor PWM signals. |
+| `adc` | Read ADC pins and run a board-side scope UI. |
+| `uart` | Open, write, read, and monitor UART. |
+| `spi` | Open, write, read, and transfer SPI data. |
+| `i2c` | Scan, read, write, and dump I2C devices. |
+
 ---
 
 ### Connection / Session
@@ -782,6 +793,204 @@ replx mpy src/
 
 ---
 
+### Hardware
+
+Hardware commands communicate with on-board peripherals through code generated and executed by the agent. Each command manages bus lifecycle (`open`/`close`), data transfer (`read`/`write`/`xfer`), and optional live monitoring. Pin names use the `GP<num>` format (case-insensitive). Bus settings are stored in agent memory until `close` or agent restart.
+
+#### `gpio`
+Read, write, and run sequences on a single GPIO pin. `read` performs a one-shot input read with optional actions (`wait_h`, `wait_l`, `pulse_h`, `pulse_l`). `write` drives the pin high or low. `seq` executes a write+delay pattern in a single board call. `monitor` samples the pin with IRQ edge capture and renders a live scope (requires `termviz` on the board).
+
+Usage:
+```sh
+replx gpio PIN read [ACTION]
+replx gpio PIN write VALUE
+replx gpio PIN seq TOKEN...
+replx gpio PIN monitor
+```
+
+Examples:
+```sh
+replx gpio GP0 read
+replx gpio GP0 read pulse_h --timeout 500
+replx gpio GP15 write 1
+replx gpio GP15 seq 1 m500 0 m500 --repeat 10
+replx gpio GP2 monitor --interval 5
+```
+
+Options:
+- `--timeout MS`: action timeout (default: 100, 0 = unlimited)
+- `--repeat N`: repeat count for `read`/`seq` (0 = unlimited, default: 1)
+- `--interval MS`: monitor render interval (default: 10, min: 1)
+- `--expr EXPR`: post-process expression; variables: `pulse_us`, `wait_ms`, `value`, `writes`
+
+#### `pwm`
+Generate PWM on a single pin. `write` starts or updates PWM with a frequency and one duty specification. `seq` runs a duty+delay pattern in one board call. `stop` halts PWM and drives the pin low. `monitor` measures PWM frequency and duty on an input pin using PIO (RP2350/RP2040) or `time_pulse_us` fallback.
+
+Usage:
+```sh
+replx pwm PIN write --freq HZ --duty-percent P
+replx pwm PIN seq --freq HZ --duty percent TOKEN...
+replx pwm PIN stop
+replx pwm PIN monitor
+```
+
+Examples:
+```sh
+replx pwm GP15 write --freq 1000 --duty-percent 50
+replx pwm GP15 write --freq 50 --pulse-us 1500
+replx pwm GP15 seq --freq 1000 --duty percent 0 m200 25 m200 50 m200 75 m200 100 m200
+replx pwm GP15 stop
+replx pwm GP16 monitor --timeout 5000
+```
+
+Options:
+- `--freq HZ`: PWM frequency (required for `write`/`seq`)
+- `--duty-percent P`: duty cycle 0–100 (`write`)
+- `--duty-u16 N`: duty cycle 0–65535 (`write`)
+- `--pulse-us US`: pulse width in microseconds (`write`)
+- `--duty MODE`: duty basis for `seq` (`percent`, `u16`, `pulse_us`)
+- `--repeat N`: seq repeat count (0 = unlimited, default: 1)
+- `--timeout MS`: monitor signal timeout (default: 2000)
+
+#### `adc`
+Read analog pins or launch a board-side scope UI. `read` samples one to three ADC channels. `scope` runs an interactive waveform viewer on the board (requires `termviz` and `ufilter`).
+
+Usage:
+```sh
+replx adc PIN... read
+replx adc PIN... scope
+```
+
+Examples:
+```sh
+replx adc GP26 read
+replx adc GP26 GP27 read --repeat 0 --interval 500
+replx adc GP26 GP27 GP28 scope --sample 10
+replx adc GP26 scope --vref 3.3
+```
+
+Options:
+- `--repeat N`: read repeat count (0 = unlimited, default: 1)
+- `--interval MS`: delay between repeated reads (default: 1000)
+- `--vref V`: ADC reference voltage (default: 3.3)
+- `--sample MS`: scope render speed (0, 1, 2, 5, 10, 20, 50, 100; default: 10)
+
+#### `uart`
+Manage a UART bus. `open` configures the bus; `write` sends text or hex bytes; `read` receives data; `xfer` writes then reads; `monitor` displays incoming data in real time; `bus` shows settings; `close` releases the peripheral.
+
+Usage:
+```sh
+replx uart open --tx PIN [--rx PIN] [--baud N]
+replx uart write DATA
+replx uart read [NBYTES]
+replx uart xfer DATA [--rx-bytes N]
+replx uart monitor
+replx uart bus
+replx uart close
+```
+
+Examples:
+```sh
+replx uart open --tx GP0 --rx GP1 --baud 9600
+replx uart write "AT\r\n"
+replx uart write --hex 0102FF
+replx uart read 16 --timeout 3000
+replx uart read --any
+replx uart xfer "AT\r\n" --rx-bytes 32
+replx uart monitor --text
+replx uart monitor --chunk --idle 100
+replx uart close
+```
+
+Options:
+- `--tx PIN`, `--rx PIN`: TX/RX pins (TX required for `open`)
+- `--baud N`: baud rate (default: 115200)
+- `--bits 7|8`, `--parity none|odd|even`, `--stop 1|2`: frame format
+- `--timeout MS`: RX wait timeout (default: 2000, 0 = unlimited)
+- `--any`: drain RX buffer immediately (`read` only)
+- `--hex`: send hex bytes instead of text (`write` only)
+- `--text`: stream UTF-8 (`monitor`)
+- `--chunk`: per-chunk display with timestamp (`monitor`)
+- `--idle MS`: silence separator threshold (`monitor`, default: 0 = off)
+
+#### `spi`
+Manage an SPI bus in master or slave mode. `open` configures the bus; `write`/`read`/`xfer` transfer data; `bus` shows settings; `close` releases the peripheral. `--slave` activates PIO+DMA slave mode (RP2350 only).
+
+Usage:
+```sh
+replx spi open --sck PIN --mosi PIN [--miso PIN] [--baud N]
+replx spi write DATA [--cs PIN]
+replx spi read NBYTES [--cs PIN]
+replx spi xfer DATA [--cs PIN]
+replx spi bus
+replx spi close
+```
+
+Examples:
+```sh
+replx spi open --sck GP2 --mosi GP3 --miso GP4 --baud 2000000
+replx spi write 0102FF --cs GP5
+replx spi read 8 --cs GP5 --fill FF
+replx spi xfer 0102FF --cs GP5
+replx spi open --sck GP2 --mosi GP3 --slave
+replx spi close
+```
+
+Options:
+- `--sck PIN`, `--mosi PIN`, `--miso PIN`: bus pins (SCK/MOSI required)
+- `--cs PIN`: chip-select pin (slave: `open` only; master: `write`/`read`/`xfer`)
+- `--baud N`: clock rate (default: 1000000)
+- `--mode 0-3`: SPI mode (default: 0)
+- `--bits 8|16`: word size (default: 8)
+- `--lsb`: LSB-first bit order
+- `--slave`: enable PIO+DMA slave mode (`open` only)
+- `--fill HH`: fill byte for master `read` (default: 00)
+- `--text`: text mode for `write`/`xfer`
+- `--timeout MS`: slave RX timeout (default: 10000)
+
+#### `i2c`
+Manage an I2C bus in controller or target mode. `scan` discovers devices; `open` configures the bus; `read`/`write` transfer data; `dump` reads a register range; `seq` runs a write+delay sequence; `mem` reads the target memory buffer; `bus` shows settings; `close` releases the peripheral. `--target` activates I2CTarget mode (RP2350 only).
+
+Usage:
+```sh
+replx i2c scan --sda PIN --scl PIN
+replx i2c open --sda PIN --scl PIN [--freq HZ]
+replx i2c read ADDR NBYTES [--reg REG]
+replx i2c write ADDR DATA [--reg REG]
+replx i2c dump ADDR [REG_START] [REG_END]
+replx i2c seq ADDR TOKEN...
+replx i2c bus
+replx i2c close
+```
+
+Examples:
+```sh
+replx i2c scan --sda GP0 --scl GP1
+replx i2c open --sda GP0 --scl GP1 --freq 400000
+replx i2c read 0x68 6 --reg 0x3B
+replx i2c read 0x68 6 --reg 0x3B --repeat 5 --interval 100
+replx i2c write 0x68 00 --reg 0x6B
+replx i2c dump 0x68
+replx i2c dump 0x68 0x3B 0x48
+replx i2c seq 0x68 6B00 m100 3B:6
+replx i2c open --sda GP0 --scl GP1 --target --addr 0x55 --mem-size 256
+replx i2c mem
+replx i2c close
+```
+
+Options:
+- `--sda PIN`, `--scl PIN`: I2C pins (required for `scan`/`open`)
+- `--freq HZ`: clock frequency (default: 400000)
+- `--reg REG`: register address for `read`/`write`
+- `--addr16`: use 16-bit register addresses
+- `--target`: enable I2CTarget mode (`open` only, RP2350)
+- `--addr 0xNN`: target address (`open --target`)
+- `--mem-size N`: target memory buffer size (`open --target`)
+- `--repeat N`: repeat count for `read`/`seq` (0 = unlimited, default: 1)
+- `--interval MS`: delay between repeats (default: 0)
+
+---
+
 ## Troubleshooting
 
 #### Connection / Session
@@ -827,5 +1036,15 @@ replx mpy src/
 | Files lost after `format/init` | Expected behavior (full wipe) | Back up with `get` before formatting; restore with `put`/`pkg update` |
 | `firmware` unsupported error | Board not supported | Confirm board is a supported model (`ticle-*` series) |
 | `wifi connect` fails | Wrong SSID/PW, AP not visible | `wifi scan` → re-enter credentials → try `wifi off` then retry |
+
+#### Hardware
+
+| Symptom | Likely Cause | Resolution |
+|---|---|---|
+| `open` fails with pin error | Invalid pin for the board's channel mapping | Check pin constraints: RP2350 I2C requires SCL=SDA+1; SPI slave requires MOSI=SCK+1 |
+| `EFR32MG` not supported | I2C/SPI/PWM commands do not support EFR32MG | Use a supported core (RP2350, ESP32, Teensy) |
+| `monitor`/`scope` shows nothing | Missing board-side library | Install `termviz` (gpio/adc) or `ufilter` (adc scope) via `replx pkg` |
+| Slave/Target mode fails | Board not supported | PIO-based slave/target modes require RP2350 or RP2040 |
+| `seq` timeout | Sequence too long for default timeout | Increase `--timeout MS` or set to 0 for unlimited |
 
 ---
