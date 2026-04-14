@@ -223,17 +223,22 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
             rows.append(("core", core_name, stat, f"{rver:.1f}", display_path, pkg_name))
 
     def add_device_rows(dev_name: str, rows: list):
-        for relpath, pkg_meta in RegistryHelper.walk_files_for_device(remote, dev_name, "src"):
-            if not relpath.endswith(".py"):
+        for relpath, pkg_meta in RegistryHelper.walk_files_for_device(remote, dev_name, "src", include_submodules=True):
+            if not (relpath.endswith(".py") or relpath.endswith(".bin")):
                 continue
             rver = RegistryHelper.get_version(pkg_meta)
-            source = pkg_meta.get("source", "")
+            source = pkg_meta.get("_parent_source") or pkg_meta.get("source", "")
             lver, missing = local_ver(source, dev_name, "device")
             stat = status_label(rver, lver, missing)
             pkg_name = pkg_meta.get("source", "").split("/")[-1].replace(".py", "")
             display_path = f"src/{relpath}"
             if relpath.endswith("/__init__.py"):
                 display_path = display_path.replace("/__init__.py", "/")
+            elif relpath == "__init__.py":
+                src_parts = source.split("/")
+                if len(src_parts) >= 2 and src_parts[0] == "device":
+                    pkg_folder = src_parts[1].lstrip("_")
+                    display_path = f"src/{pkg_folder}/"
             rows.append(("device", dev_name, stat, f"{rver:.1f}", display_path, pkg_name))
 
     def resolve_current_dev_core() -> tuple[Optional[str], Optional[str]]:

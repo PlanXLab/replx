@@ -298,7 +298,7 @@ class RegistryHelper:
                 yield (relpath, pkg_meta)
     
     @staticmethod
-    def walk_files_for_device(reg: dict, device_name: str, part: str = "src"):
+    def walk_files_for_device(reg: dict, device_name: str, part: str = "src", include_submodules: bool = False):
         packages = reg.get("packages", {})
         patterns = RegistryHelper.get_packages_for_device(reg, device_name)
         
@@ -402,3 +402,18 @@ class RegistryHelper:
             else:
                 relpath = deploy_path
             yield (relpath, pkg_meta)
+
+            if include_submodules and part == "src":
+                deploy_dir = "/".join(deploy_path.split("/")[:-1])
+                sub_base = {k: v for k, v in pkg_meta.items() if k not in ("submodules", "submodules_typehints")}
+                sub_base["submodules"] = []
+                sub_base["submodules_typehints"] = []
+                sub_base["_parent_source"] = pkg_meta.get("source", "")
+                for sub_src in pkg_meta.get("submodules", []):
+                    sub_filename = sub_src.split("/")[-1]
+                    if sub_filename.endswith(".pyi"):
+                        continue
+                    sub_relpath = (deploy_dir + "/" + sub_filename) if deploy_dir else sub_filename
+                    sub_meta = sub_base.copy()
+                    sub_meta["source"] = sub_src
+                    yield (sub_relpath, sub_meta)
