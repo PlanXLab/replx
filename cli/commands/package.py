@@ -373,7 +373,7 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
 
     client = _create_agent_client()
     status = client.send_command('status')
-    if not status.get('connected'):
+    if not status or not status.get('connected'):
         OutputHelper.print_panel(
             "Device not connected.",
             title="Download Error",
@@ -1477,17 +1477,11 @@ Compile Python files to MicroPython bytecode (.mpy).
         else:
             out_mpy = os.path.splitext(py_file)[0] + '.mpy'
         
-        args = [py_file, '-o', out_mpy] + arch_args
-        
         try:
-            mpy_cross.run(*args)
-            
-            if os.path.exists(out_mpy) and os.path.getsize(out_mpy) > 0:
-                mpy_size = os.path.getsize(out_mpy)
-                total_mpy_size += mpy_size
-                compiled.append((py_file, out_mpy, src_size, mpy_size))
-            else:
-                failed.append((py_file, "Output file not created"))
+            compiled_out = CompilerHelper.compile_file(py_file, out_mpy, target_arch, version)
+            mpy_size = os.path.getsize(compiled_out)
+            total_mpy_size += mpy_size
+            compiled.append((py_file, compiled_out, src_size, mpy_size))
         except Exception as e:
             failed.append((py_file, str(e)))
     
@@ -1497,8 +1491,8 @@ Compile Python files to MicroPython bytecode (.mpy).
             ratio = (1 - mpy_size / src_size) * 100 if src_size > 0 else 0
             OutputHelper.print_panel(
                 f"[green]✓[/green] {os.path.basename(py_file)} → {os.path.basename(out_mpy)}\n\n"
-                f"  Source: [cyan]{format_size(src_size)}[/cyan]\n"
-                f"  Output: [cyan]{format_size(mpy_size)}[/cyan] [dim]({ratio:.0f}% smaller)[/dim]\n"
+                f"  Source: [cyan]{OutputHelper.format_bytes(src_size)}[/cyan]\n"
+                f"  Output: [cyan]{OutputHelper.format_bytes(mpy_size)}[/cyan] [dim]({ratio:.0f}% smaller)[/dim]\n"
                 f"  Arch:   [yellow]{target_arch}[/yellow]",
                 title="Compiled",
                 border_style="green"
@@ -1506,11 +1500,11 @@ Compile Python files to MicroPython bytecode (.mpy).
         else:
             lines = []
             for py_file, out_mpy, src_size, mpy_size in compiled:
-                lines.append(f"[green]✓[/green] {os.path.basename(py_file)} → {os.path.basename(out_mpy)} ({format_size(mpy_size)})")
+                lines.append(f"[green]✓[/green] {os.path.basename(py_file)} → {os.path.basename(out_mpy)} ({OutputHelper.format_bytes(mpy_size)})")
             
             ratio = (1 - total_mpy_size / total_src_size) * 100 if total_src_size > 0 else 0
             lines.append("")
-            lines.append(f"Total: [cyan]{format_size(total_src_size)}[/cyan] → [cyan]{format_size(total_mpy_size)}[/cyan] [dim]({ratio:.0f}% smaller)[/dim]")
+            lines.append(f"Total: [cyan]{OutputHelper.format_bytes(total_src_size)}[/cyan] → [cyan]{OutputHelper.format_bytes(total_mpy_size)}[/cyan] [dim]({ratio:.0f}% smaller)[/dim]")
             lines.append(f"Arch:  [yellow]{target_arch}[/yellow]")
             
             OutputHelper.print_panel(

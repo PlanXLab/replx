@@ -452,8 +452,15 @@ class AgentServer(
 
     def _check_and_record_seq(self, client_addr: tuple, seq: int) -> bool:
         with self._last_seq_lock:
-            if client_addr in self.last_seq and seq <= self.last_seq[client_addr]:
-                return False
+            if client_addr in self.last_seq:
+                last = self.last_seq[client_addr]
+                # Modular distance handles uint32 wrap-around (0xFFFFFFFF → 0).
+                # diff in [1, 2^31-1]  → seq is ahead  → accept (new packet)
+                # diff == 0            → exact duplicate → reject
+                # diff in [2^31, 2^32-1] → seq is behind → reject (old/replay)
+                diff = (seq - last) & 0xFFFFFFFF
+                if diff == 0 or diff > 0x7FFFFFFF:
+                    return False
             self.last_seq[client_addr] = seq
             if len(self.last_seq) > self._MAX_LAST_SEQ:
                 oldest = next(iter(self.last_seq))

@@ -33,7 +33,7 @@ def _preprocess_connection_shortcut():
     
     known_commands = commands_with_connection | commands_without_connection | {'connect'}
     
-    opts_with_value = {'--port', '-p', '--agent-port'}
+    opts_with_value = {'--port', '-p'}
     
     first_arg_idx = None
     skip_next = False
@@ -96,17 +96,6 @@ def _preprocess_cli_aliases():
 
 _preprocess_connection_shortcut()
 _preprocess_cli_aliases()
-
-
-def _tiny_command():
-    if len(sys.argv) == 2 and sys.argv[1] == 'version':
-        from .helpers.output import OutputHelper
-        OutputHelper.print_panel(
-            f"[bright_blue]replx[/bright_blue] version [bright_green]{__version__}[/bright_green]",
-            title="Version",
-            border_style="green"
-        )
-        sys.exit(0)
 
 
 def _get_console():
@@ -307,7 +296,7 @@ def _print_main_help():
     lines.append("  replx [yellow][OPTIONS][/yellow] [green]COMMAND[/green] [[dim]ARGS[/dim]]...")
     lines.append("")
     lines.append("[bold cyan]Global Options:[/bold cyan]")
-    lines.append("  [yellow]-p, --port[/yellow] [cyan]PORT[/cyan]       Serial port [dim](COM3, /dev/ttyUSB0)[/dim]")
+    lines.append("  [yellow]-p, --port[/yellow] [cyan]PORT[/cyan]             Serial port [dim](COM3, /dev/ttyUSB0)[/dim]")
     lines.append("  [dim] 󱞩 [cyan]PORT[/cyan] can be used alone without the -p flag[/dim]")
     lines.append("  [dim] 󱞩 setup requires an explicit port[/dim]")
 
@@ -378,6 +367,19 @@ def _print_main_help():
     )
 
 
+def _get_known_commands() -> set[str]:
+    known = {'connect', 'help', 'version'}
+    for command_info in getattr(app, 'registered_commands', []):
+        name = getattr(command_info, 'name', None)
+        if name:
+            known.add(name)
+        callback = getattr(command_info, 'callback', None)
+        callback_name = getattr(callback, '__name__', None)
+        if callback_name:
+            known.add(callback_name)
+    return known
+
+
 @app.callback(invoke_without_command=True)
 def cli(
     ctx: typer.Context,
@@ -385,12 +387,6 @@ def cli(
         None,
         "--port", "-p",
         help="Serial port to use (e.g., COM3)",
-        is_eager=True
-    ),
-    global_agent_port: Optional[int] = typer.Option(
-        None,
-        "--agent-port",
-        help="Agent UDP port (auto-assigned if not specified)",
         is_eager=True
     ),
     show_help: bool = typer.Option(
@@ -401,11 +397,10 @@ def cli(
         help="Show this message and exit."
     )
 ):
-    _set_global_options(global_port, global_agent_port)
+    _set_global_options(global_port)
     
     ctx.ensure_object(dict)
     ctx.obj['global_port'] = global_port
-    ctx.obj['global_agent_port'] = global_agent_port
     
     if show_help:
         _print_main_help()
@@ -416,7 +411,7 @@ def cli(
         raise typer.Exit()
 
 
-from .commands import file, device, exec, package, utility, firmware, i2c, gpio, adc, pwm, uart, spi
+from .commands import file, device, exec, package, utility, firmware, i2c, gpio, adc, pwm, uart, spi, wifi
 
 def main():
     if len(sys.argv) == 1:
@@ -435,7 +430,7 @@ def main():
         )
         sys.exit(0)
     
-    if sys.argv[1] in ('-c', '--command'):
+    if sys.argv[1] == '--command':
         if len(sys.argv) < 3:
             OutputHelper.print_panel(
                 "Missing required argument: [yellow]COMMAND[/yellow]\n\n"
@@ -499,13 +494,9 @@ def main():
 
     args = sys.argv[1:]
 
-    known = {
-        "install","put","get","cat","rm","mv","cp","touch","run","format","search",
-        "repl","df","shell","mkdir","ls","reset","env","scan","port","update","target","stat","mem",
-        "pkg","setup","init","firmware"
-    }
+    known = _get_known_commands()
 
-    opts_with_value = {'--port', '-p', '--agent-port'}
+    opts_with_value = {'--port', '-p'}
     
     first_nonopt_idx = None
     skip_next = False

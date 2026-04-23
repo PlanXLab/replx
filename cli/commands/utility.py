@@ -12,6 +12,7 @@ from rich.live import Live
 from rich.spinner import Spinner
 
 from replx import __version__
+from replx.terminal import IS_WINDOWS
 from replx.utils import device_name_to_path
 from ..agent.client import AgentClient, get_cached_session_id
 from ..helpers import (
@@ -19,8 +20,9 @@ from ..helpers import (
     get_panel_box, CONSOLE_WIDTH, set_global_context
 )
 from ..config import (
-    STATE, DEFAULT_AGENT_PORT,
+    STATE, DEFAULT_AGENT_PORT, AgentPortManager,
     _resolve_connection, _get_global_options,
+    _find_env_file, _find_running_agent_ports,
 )
 from ..connection import (
     _ensure_connected, _create_agent_client,
@@ -57,10 +59,6 @@ def _sorted_unique_ports(ports: list[str | None]) -> list[str]:
     return out
 
 
-def _is_windows() -> bool:
-    return sys.platform.startswith("win")
-
-
 def _get_connection_info_for_port(connections: dict, port: Optional[str]) -> dict:
     if not port or not connections:
         return {}
@@ -68,7 +66,7 @@ def _get_connection_info_for_port(connections: dict, port: Optional[str]) -> dic
     if port in connections:
         return connections.get(port, {}) or {}
 
-    if _is_windows():
+    if IS_WINDOWS:
         upper = port.upper()
         if upper in connections:
             return connections.get(upper, {}) or {}
@@ -112,35 +110,92 @@ Show replx version information.
 
 
 def _get_session_list_data():
-    try:
-        with AgentClient(port=_get_current_agent_port()) as client:
-            session_info = client.send_command('session_info', timeout=1.5)
-    except Exception:
+    env_path = _find_env_file()
+    running_agent_ports = _find_running_agent_ports(env_path)
+    if not running_agent_ports:
         return None, None, "no_server"
-    
+
     current_ppid = get_cached_session_id()
-    
-    sessions = []
-    for session in session_info.get('sessions', []):
-        sessions.append({
-            'ppid': session.get('ppid'),
-            'foreground': session.get('foreground'),
-            'backgrounds': session.get('backgrounds', []),
-            'is_current': session.get('ppid') == current_ppid,
-            'default_port': session.get('default_port')
-        })
-    
+    session_map = {}
     connections = {}
-    for conn in session_info.get('connections', []):
+    query_errors = []
+
+    def _merge_session(agent_session: dict) -> None:
+        ppid = agent_session.get('ppid')
+        if ppid is None:
+            return
+
+        entry = session_map.setdefault(ppid, {
+            'ppid': ppid,
+            'foreground': None,
+            'backgrounds': [],
+            'default_port': None,
+        })
+
+        fg_port = agent_session.get('foreground')
+        if fg_port:
+            if entry['foreground'] is None:
+                entry['foreground'] = fg_port
+            elif entry['foreground'] != fg_port and fg_port not in entry['backgrounds']:
+                entry['backgrounds'].append(fg_port)
+
+        for bg_port in agent_session.get('backgrounds', []):
+            if not bg_port:
+                continue
+            if bg_port == entry['foreground']:
+                continue
+            if bg_port not in entry['backgrounds']:
+                entry['backgrounds'].append(bg_port)
+
+        default_port = agent_session.get('default_port')
+        if default_port and not entry['default_port']:
+            entry['default_port'] = default_port
+
+    def _merge_connection(agent_port: int, conn: dict) -> None:
         port = conn.get('port')
-        if port:
-            connections[port] = {
-                'version': conn.get('version', '?'),
-                'core': conn.get('core', '?'),
-                'device': conn.get('device', '?'),
-                'manufacturer': conn.get('manufacturer', ''),
-                'busy': conn.get('busy', False)
-            }
+        if not port:
+            return
+
+        existing = connections.get(port)
+        merged = {
+            'version': conn.get('version', '?'),
+            'core': conn.get('core', '?'),
+            'device': conn.get('device', '?'),
+            'manufacturer': conn.get('manufacturer', ''),
+            'busy': conn.get('busy', False),
+            'agent_port': agent_port,
+        }
+
+        if existing and existing.get('busy') and not merged.get('busy'):
+            merged['busy'] = True
+
+        connections[port] = merged
+
+    try:
+        for agent_port in running_agent_ports:
+            try:
+                with AgentClient(port=agent_port) as client:
+                    session_info = client.send_command('session_info', timeout=1.5)
+            except Exception as e:
+                query_errors.append(f"{agent_port}: {e}")
+                continue
+
+            for session in session_info.get('sessions', []):
+                _merge_session(session)
+
+            for conn in session_info.get('connections', []):
+                _merge_connection(agent_port, conn)
+    except Exception as e:
+        return None, current_ppid, f"query_failed:{e}"
+
+    if not session_map and query_errors:
+        return None, current_ppid, f"query_failed:{'; '.join(query_errors)}"
+
+    sessions = []
+    for session in session_map.values():
+        session['backgrounds'] = _sorted_unique_ports(session.get('backgrounds', []))
+        session['is_current'] = session.get('ppid') == current_ppid
+        sessions.append(session)
     
     if not sessions:
         return None, current_ppid, "no_sessions"
@@ -170,6 +225,36 @@ def _get_session_list_data():
         'connections': connections,
         'current_session_empty': current_session_empty
     }, current_ppid, None
+
+
+def _handle_session_list_error(error: Optional[str], *, no_server_title: str, no_server_message: str,
+                               no_sessions_title: str, no_sessions_message: str) -> bool:
+    if error == "no_server":
+        OutputHelper.print_panel(
+            no_server_message,
+            title=no_server_title,
+            border_style="dim"
+        )
+        return True
+
+    if error == "no_sessions":
+        OutputHelper.print_panel(
+            no_sessions_message,
+            title=no_sessions_title,
+            border_style="dim"
+        )
+        return True
+
+    if error and error.startswith("query_failed:"):
+        detail = error.split(":", 1)[1].strip() or "Unknown error"
+        OutputHelper.print_panel(
+            f"Failed to query agent sessions.\n\n{detail}",
+            title="Session Error",
+            border_style="red"
+        )
+        return True
+
+    return False
 
 
 def _num_to_bracket(n: int) -> str:
@@ -326,7 +411,7 @@ def _print_session_list_status(sessions_data, current_ppid):
         if not p:
             return ""
         s = str(p).strip()
-        return s.lower() if _is_windows() else s
+        return s.lower() if IS_WINDOWS else s
 
     all_defaults_keyed = {_port_key(p) for p in all_defaults}
     
@@ -473,27 +558,24 @@ Displays a table of all terminal sessions with their connected boards.
         raise typer.Exit()
     
     sessions_data, current_ppid, error = _get_session_list_data()
-    
-    if error == "no_server":
-        OutputHelper.print_panel(
+
+    if _handle_session_list_error(
+        error,
+        no_server_title="No Connections",
+        no_server_message=(
             "Agent is not running. No active connections.\n\n"
             "Start by running a command like:\n"
             "  [bright_green]replx ls[/bright_green]\n"
-            "  [bright_green]replx exec \"print('hello')\"[/bright_green]",
-            title="No Connections",
-            border_style="dim"
-        )
-        raise typer.Exit()
-    
-    if error == "no_sessions":
-        OutputHelper.print_panel(
+            "  [bright_green]replx exec \"print('hello')\"[/bright_green]"
+        ),
+        no_sessions_title="No Connections",
+        no_sessions_message=(
             "No active connections.\n\n"
             "Connect to a board with:\n"
             "  [bright_green]replx ls[/bright_green]\n"
-            "  [bright_green]replx --port COM19 setup[/bright_green]",
-            title="No Connections",
-            border_style="dim"
-        )
+            "  [bright_green]replx --port COM19 setup[/bright_green]"
+        ),
+    ):
         raise typer.Exit()
     
     _print_session_list_status(sessions_data, current_ppid)
@@ -541,20 +623,24 @@ When you have multiple boards connected, use this to switch between them.
     
     if port:
         switch_target = port
+        target_agent_port = _get_current_agent_port()
 
-        if sys.platform.startswith("win"):
-            sessions_data, _current_ppid, _error = _get_session_list_data()
-            if sessions_data and not _error:
-                needle = str(switch_target).strip().lower()
-                for key in sessions_data.get('connections', {}).keys():
-                    if isinstance(key, str) and key.strip().lower() == needle:
-                        switch_target = key
-                        break
+        sessions_data, _current_ppid, _error = _get_session_list_data()
+        if sessions_data and not _error:
+            needle = str(switch_target).strip().lower() if IS_WINDOWS else str(switch_target).strip()
+            for key, conn_info in sessions_data.get('connections', {}).items():
+                if not isinstance(key, str):
+                    continue
+                key_cmp = key.strip().lower() if IS_WINDOWS else key.strip()
+                if key_cmp == needle:
+                    switch_target = key
+                    target_agent_port = conn_info.get('agent_port', target_agent_port)
+                    break
         try:
-            with AgentClient(port=_get_current_agent_port()) as client:
+            with AgentClient(port=target_agent_port) as client:
                 result = client.send_command('session_switch_fg', port=switch_target, timeout=3.0)
             
-            if result.get('success'):
+            if result and result.get('success'):
                 OutputHelper.print_panel(
                     f"Switched foreground to [bright_green]{OutputHelper.format_port(switch_target)}[/bright_green]",
                     title="Foreground Switched",
@@ -562,7 +648,7 @@ When you have multiple boards connected, use this to switch between them.
                 )
             else:
                 OutputHelper.print_panel(
-                    f"Failed to switch foreground: {result.get('error', 'Unknown error')}",
+                    f"Failed to switch foreground: {(result or {}).get('error', 'No response from agent')}",
                     title="Error",
                     title_align="left",
                     border_style="red"
@@ -577,31 +663,25 @@ When you have multiple boards connected, use this to switch between them.
         return
     
     sessions_data, current_ppid, error = _get_session_list_data()
-    
-    if error == "no_server":
-        OutputHelper.print_panel(
-            "Agent is not running. No active connections.",
-            title="No Connections",
-            border_style="dim"
-        )
-        raise typer.Exit()
-    
-    if error == "no_sessions":
-        OutputHelper.print_panel(
-            "No active connections.",
-            title="No Connections",
-            border_style="dim"
-        )
+
+    if _handle_session_list_error(
+        error,
+        no_server_title="No Connections",
+        no_server_message="Agent is not running. No active connections.",
+        no_sessions_title="No Connections",
+        no_sessions_message="No active connections.",
+    ):
         raise typer.Exit()
     
     selected_port, action = _print_session_list_interactive(sessions_data, current_ppid)
     
     if selected_port:
+        target_agent_port = sessions_data.get('connections', {}).get(selected_port, {}).get('agent_port', _get_current_agent_port())
         try:
-            with AgentClient(port=_get_current_agent_port()) as client:
+            with AgentClient(port=target_agent_port) as client:
                 result = client.send_command('session_switch_fg', port=selected_port, timeout=3.0)
             
-            if result.get('success'):
+            if result and result.get('success'):
                 OutputHelper.print_panel(
                     f"Switched foreground to [bright_green]{OutputHelper.format_port(selected_port)}[/bright_green]",
                     title="Foreground Switched",
@@ -609,7 +689,7 @@ When you have multiple boards connected, use this to switch between them.
                 )
             else:
                 OutputHelper.print_panel(
-                    f"Failed to switch foreground: {result.get('error', 'Unknown error')}",
+                    f"Failed to switch foreground: {(result or {}).get('error', 'No response from agent')}",
                     title="Error",
                     title_align="left",
                     border_style="red"
@@ -658,21 +738,14 @@ Quickly check your active foreground connection.
         raise typer.Exit()
     
     sessions_data, current_ppid, error = _get_session_list_data()
-    
-    if error == "no_server":
-        OutputHelper.print_panel(
-            "Not connected.",
-            title="No Connection",
-            border_style="dim"
-        )
-        raise typer.Exit()
-    
-    if error == "no_sessions":
-        OutputHelper.print_panel(
-            "Not connected.",
-            title="No Connection",
-            border_style="dim"
-        )
+
+    if _handle_session_list_error(
+        error,
+        no_server_title="No Connection",
+        no_server_message="Not connected.",
+        no_sessions_title="No Connection",
+        no_sessions_message="Not connected.",
+    ):
         raise typer.Exit()
     
     current_session = None
@@ -742,11 +815,22 @@ The connection is closed and removed from ALL sessions that reference it.
     
     global_opts = _get_global_options()
     port = global_opts.get('port')
+    target_agent_port = _get_current_agent_port()
+    sessions_data = None
     
     if not port:
         sessions_data, current_ppid, error = _get_session_list_data()
-        
-        if error or not sessions_data:
+
+        if _handle_session_list_error(
+            error,
+            no_server_title="No Connection",
+            no_server_message="Not connected to any device.",
+            no_sessions_title="No Connection",
+            no_sessions_message="Not connected to any device.",
+        ):
+            raise typer.Exit()
+
+        if not sessions_data:
             OutputHelper.print_panel(
                 "Not connected to any device.",
                 title="No Connection",
@@ -758,6 +842,8 @@ The connection is closed and removed from ALL sessions that reference it.
             if sess.get('is_current') and sess.get('foreground'):
                 port = sess['foreground']
                 break
+    elif not sessions_data:
+        sessions_data, _current_ppid, _error = _get_session_list_data()
     
     if not port:
         OutputHelper.print_panel(
@@ -766,9 +852,12 @@ The connection is closed and removed from ALL sessions that reference it.
             border_style="dim"
         )
         raise typer.Exit()
+
+    if sessions_data:
+        target_agent_port = sessions_data.get('connections', {}).get(port, {}).get('agent_port', target_agent_port)
     
     try:
-        with AgentClient(port=_get_current_agent_port()) as client:
+        with AgentClient(port=target_agent_port) as client:
             result = client.send_command('session_disconnect', port=port, timeout=3.0)
         
         if result.get('freed_port'):
@@ -793,67 +882,58 @@ The connection is closed and removed from ALL sessions that reference it.
         )
 
 
-def _find_and_kill_agent_by_port(port: int) -> bool:
-    try:
-        import psutil
-        for conn in psutil.net_connections(kind='udp'):
-            if conn.laddr and conn.laddr.port == port and conn.pid:
-                try:
-                    psutil.Process(conn.pid).kill()
-                    return True
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-    except Exception:
-        pass
-    return False
-
-
 def _do_shutdown():
-    agent_port = _get_current_agent_port()
+    env_path = _find_env_file()
+    agent_ports = _find_running_agent_ports(env_path)
+    current_agent_port = _get_current_agent_port()
+
+    if current_agent_port not in agent_ports and AgentClient.is_agent_running(port=current_agent_port):
+        agent_ports.insert(0, current_agent_port)
 
     try:
-        was_running = AgentClient.is_agent_running(port=agent_port)
-        stopped = AgentClient.stop_agent(port=agent_port)
+        stopped_ports = []
+        killed_ports = []
+        failed_ports = []
 
-        if was_running and stopped:
+        for agent_port in agent_ports:
+            was_running = AgentClient.is_agent_running(port=agent_port)
+            stopped = AgentClient.stop_agent(port=agent_port) if was_running else False
+
+            if stopped:
+                stopped_ports.append(agent_port)
+                continue
+
+            killed = AgentPortManager._kill_agent_process_by_port(agent_port)
+            if killed:
+                killed_ports.append(agent_port)
+            elif was_running:
+                failed_ports.append(agent_port)
+
+        if stopped_ports or killed_ports:
+            total = len(stopped_ports) + len(killed_ports)
+            detail = f"Stopped {total} replx agent(s)."
+            if failed_ports:
+                detail += f"\n[dim]Failed ports: {', '.join(str(p) for p in failed_ports)}[/dim]"
             OutputHelper.print_panel(
-                "Stopped all connections and agent.\n"
+                f"Stopped all connections and agents.\n{detail}\n"
                 "[dim]Run any replx command to reconnect.[/dim]",
                 title="Shutdown Complete",
                 border_style="blue"
             )
-        elif not was_running:
-            killed = _find_and_kill_agent_by_port(agent_port)
-            if killed:
-                OutputHelper.print_panel(
-                    "Stopped all connections and agent.\n"
-                    "[dim]Run any replx command to reconnect.[/dim]",
-                    title="Shutdown Complete",
-                    border_style="blue"
-                )
-            else:
-                OutputHelper.print_panel(
-                    "Agent is already stopped.\n"
-                    "[dim]Run any replx command to start and reconnect.[/dim]",
-                    title="Already Shutdown",
-                    border_style="dim"
-                )
+        elif not agent_ports:
+            OutputHelper.print_panel(
+                "Agent is already stopped.\n"
+                "[dim]Run any replx command to start and reconnect.[/dim]",
+                title="Already Shutdown",
+                border_style="dim"
+            )
         else:
-            killed = _find_and_kill_agent_by_port(agent_port)
-            if killed:
-                OutputHelper.print_panel(
-                    "Stopped all connections and agent.\n"
-                    "[dim]Run any replx command to reconnect.[/dim]",
-                    title="Shutdown Complete",
-                    border_style="blue"
-                )
-            else:
-                OutputHelper.print_panel(
-                    "Failed to stop agent cleanly.\n"
-                    "[dim]Some connections may still be active.[/dim]",
-                    title="Shutdown Failed",
-                    border_style="red"
-                )
+            OutputHelper.print_panel(
+                "Failed to stop agent cleanly.\n"
+                f"[dim]Ports still active: {', '.join(str(p) for p in failed_ports)}[/dim]",
+                title="Shutdown Failed",
+                border_style="red"
+            )
     except Exception as e:
         OutputHelper.print_panel(
             f"Failed to shutdown agent: {str(e)}",
@@ -979,7 +1059,7 @@ Format (erase) the filesystem on the connected device.
             try:
                 client = _create_agent_client()
                 result = client.send_command('format')
-                ret = result.get('formatted', True)
+                ret = result.get('formatted', True) if result else None
             except Exception as e:
                 error = e
             finally:
@@ -1114,7 +1194,7 @@ Completely reset device: format filesystem and install all libraries.
                   console=console, refresh_per_second=10) as live:
             client = _create_agent_client()
             result = client.send_command('format')
-            format_result = result.get('formatted', True)
+            format_result = result.get('formatted', True) if result else None
             
             if not format_result:
                 live.stop()

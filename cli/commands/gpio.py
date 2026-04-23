@@ -16,6 +16,7 @@ from replx.utils.constants import CTRL_C
 from ..helpers import OutputHelper, get_panel_box, CONSOLE_WIDTH
 from ..connection import _ensure_connected, _create_agent_client
 from ..app import app
+from ._common import exec_code as _exec, parse_json_strict as _parse_json_strict
 
 
 _READ_ACTIONS = {"read", "wait_h", "wait_l", "pulse_h", "pulse_l"}
@@ -99,20 +100,6 @@ def _eval_expr(expr: str, data: dict) -> object:
         )
     except Exception as e:
         raise ValueError(f"Failed to evaluate --expr: {e}")
-
-
-def _exec(client, code: str, timeout: float = 5.0) -> str:
-    result = client.send_command('exec', code=code, timeout=timeout, max_retries=1)
-    return (result.get('output') or '').strip()
-
-
-def _parse_json_strict(raw: str):
-    if not raw:
-        raise RuntimeError("No output from device")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Device error:\n{raw}")
 
 
 def _run_interactive_script(client, code: str, *, live_output: bool = False, ctrl_c_grace_s: float = 3.0) -> str:

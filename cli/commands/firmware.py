@@ -35,6 +35,10 @@ FIRMWARE_REPO_NAME = "ticle_firmware"
 FIRMWARE_REPO_BRANCH = "main"
 
 
+class FirmwareLookupError(RuntimeError):
+    pass
+
+
 def _get_firmware_local_dir(device: str) -> Path:
     return StoreManager.HOME_STORE / "firmware" / device
 
@@ -87,9 +91,14 @@ def _get_remote_firmware_info(device: str) -> dict:
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
-        raise
-    except Exception:
-        return None
+        raise FirmwareLookupError(f"GitHub API returned HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        reason = getattr(e, 'reason', e)
+        raise FirmwareLookupError(f"Could not reach firmware repository: {reason}") from e
+    except json.JSONDecodeError as e:
+        raise FirmwareLookupError("Firmware repository returned an invalid JSON response") from e
+    except Exception as e:
+        raise FirmwareLookupError(f"Failed to check firmware repository: {e}") from e
 
 
 def _get_local_firmware_versions(device: str) -> list[tuple[str, Path]]:
@@ -332,8 +341,16 @@ def _firmware_download():
     console = Console()
     spinner = Spinner("dots", text=Text(" Checking for firmware updates...", style="bright_cyan"))
     
-    with Live(spinner, console=console, refresh_per_second=10, transient=True):
-        remote_info = _get_remote_firmware_info(device)
+    try:
+        with Live(spinner, console=console, refresh_per_second=10, transient=True):
+            remote_info = _get_remote_firmware_info(device)
+    except FirmwareLookupError as e:
+        OutputHelper.print_panel(
+            f"Failed to check firmware repository.\n\n{e}",
+            title="Firmware Error",
+            border_style="red"
+        )
+        raise typer.Exit(1)
     
     if not remote_info:
         OutputHelper.print_panel(
@@ -418,8 +435,16 @@ def _firmware_update(force: bool = False):
     current_version = status.get('version', 'unknown')
     
     spinner = Spinner("dots", text=Text(" Checking for firmware updates...", style="bright_cyan"))
-    with Live(spinner, console=OutputHelper._console, refresh_per_second=10, transient=True):
-        remote_info = _get_remote_firmware_info(device)
+    try:
+        with Live(spinner, console=OutputHelper._console, refresh_per_second=10, transient=True):
+            remote_info = _get_remote_firmware_info(device)
+    except FirmwareLookupError as e:
+        OutputHelper.print_panel(
+            f"Failed to check firmware repository.\n\n{e}",
+            title="Firmware Error",
+            border_style="red"
+        )
+        raise typer.Exit(1)
     
     if not remote_info:
         OutputHelper.print_panel(

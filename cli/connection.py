@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 from typing import Optional
 
 import typer
@@ -8,10 +9,10 @@ from .agent.client import AgentClient, get_cached_session_id
 from .helpers import OutputHelper, set_global_context
 from .config import (
     STATE,
-    DEFAULT_AGENT_PORT,
     _find_env_file, _find_or_create_vscode_dir,
-    _read_env_ini,
+    _find_available_agent_port,
     _update_connection_config, _get_default_connection,
+    _find_agent_for_connection,
     _resolve_connection,
     _get_global_options,
 )
@@ -41,12 +42,15 @@ def _is_transport_connection_error(e: Exception) -> bool:
     ))
 
 
-def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = False):
+def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = False, agent_port: int = None):
     conn_info = OutputHelper.format_port(port) if port else "unknown"
     
     if stop_agent:
         try:
-            AgentClient.stop_agent()
+            if agent_port is not None:
+                AgentClient.stop_agent(port=agent_port)
+            else:
+                AgentClient.stop_agent()
         except Exception:
             pass
     
@@ -81,22 +85,25 @@ def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = 
 def _ensure_connected(ctx: typer.Context = None) -> dict:
     global_opts = _get_global_options()
     explicit_port = global_opts.get('port')
-    global_agent_port = global_opts.get('agent_port')
-    
+
     env_path = _find_env_file()
     default_conn = _get_default_connection(env_path) if env_path else None
-    
-    if global_agent_port:
-        agent_port = global_agent_port
-    elif env_path and default_conn:
-        env_data = _read_env_ini(env_path)
-        connections = env_data.get('connections', {})
-        if default_conn in connections:
-            agent_port = connections[default_conn].get('agent_port', DEFAULT_AGENT_PORT)
-        else:
-            agent_port = DEFAULT_AGENT_PORT
-    else:
-        agent_port = DEFAULT_AGENT_PORT
+
+    agent_port = _find_available_agent_port(env_path)
+    # Populate the process-level cache so _create_agent_client() skips a redundant
+    # _ensure_singleton_running_agent() call later in the same command invocation.
+    global _cached_agent_port
+    with _agent_port_cache_lock:
+        if _cached_agent_port is None:
+            _cached_agent_port = agent_port
+
+    target_port = explicit_port or default_conn
+    if target_port:
+        running_agent_port = _find_agent_for_connection(target_port, env_path, preferred_port=agent_port)
+        if running_agent_port is not None:
+            agent_port = running_agent_port
+            with _agent_port_cache_lock:
+                _cached_agent_port = agent_port
     
     if not AgentClient.is_agent_running(port=agent_port):
         if not explicit_port:
@@ -171,7 +178,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
             )
             
         except Exception as e:
-            _handle_connection_error(e, port=port_arg, stop_agent=True)
+            _handle_connection_error(e, port=port_arg, stop_agent=True, agent_port=agent_port)
             raise typer.Exit(1)
         
         if conn['source'] == 'global':
@@ -422,30 +429,19 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
         raise typer.Exit(1)
 
 
+_cached_agent_port: Optional[int] = None
+_agent_port_cache_lock = threading.Lock()
+
+
 def _get_current_agent_port() -> int:
-    global_opts = _get_global_options()
-    if global_opts.get('agent_port'):
-        return global_opts['agent_port']
-
-    explicit_port = global_opts.get('port')
-    env_path = _find_env_file()
-    default_conn = _get_default_connection(env_path) if env_path else None
-
-    if explicit_port:
-        conn = _resolve_connection(explicit_port)
-        if conn:
-            return conn.get('agent_port', DEFAULT_AGENT_PORT)
-
-    if env_path and default_conn:
-        try:
-            env_data = _read_env_ini(env_path)
-            connections = env_data.get('connections', {})
-            if default_conn in connections:
-                return connections[default_conn].get('agent_port', DEFAULT_AGENT_PORT)
-        except Exception:
-            pass
-
-    return DEFAULT_AGENT_PORT
+    global _cached_agent_port
+    if _cached_agent_port is not None:
+        return _cached_agent_port
+    with _agent_port_cache_lock:
+        if _cached_agent_port is None:
+            env_path = _find_env_file()
+            _cached_agent_port = _find_available_agent_port(env_path)
+    return _cached_agent_port
 
 
 def _get_device_port() -> Optional[str]:

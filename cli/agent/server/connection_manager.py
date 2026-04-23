@@ -217,9 +217,10 @@ class ConnectionManager:
     def __init__(self):
         self._connections: Dict[str, BoardConnection] = {}
         self._connections_lock = threading.RLock()
+        # Per-port events used to serialize concurrent create_serial_connection
+        # calls for the same port (prevents double serial-open race).
+        self._port_creating: Dict[str, threading.Event] = {}
         self._default_port: Optional[str] = None
-        self._board_id_cache: Dict[str, Dict[str, str]] = {}
-        self._cache_lock = threading.Lock()
 
     @property
     def default_port(self) -> Optional[str]:
@@ -299,12 +300,32 @@ class ConnectionManager:
         original_port = str(port).strip() if port is not None else ""
         port_key = self._canon_port(original_port)
 
+        # --- Phase 1: fast check + race serialisation ---
         with self._connections_lock:
             if port_key in self._connections:
                 conn = self._connections[port_key]
                 if conn.is_connected():
                     return conn, None
+            # If another thread is already opening this port, get its event so
+            # we can wait for it instead of opening the same serial port twice.
+            if port_key in self._port_creating:
+                wait_event = self._port_creating[port_key]
+                our_event = None
+            else:
+                our_event = threading.Event()
+                self._port_creating[port_key] = our_event
+                wait_event = None
 
+        if wait_event is not None:
+            # Another thread is opening this port; wait then return its result.
+            wait_event.wait(timeout=30)
+            with self._connections_lock:
+                conn = self._connections.get(port_key)
+                if conn and conn.is_connected():
+                    return conn, None
+            return None, "Connection creation timed out (concurrent attempt)"
+
+        # --- Phase 2: we are the creator ---
         try:
             from replx.transport import create_transport
 
@@ -355,96 +376,16 @@ class ConnectionManager:
 
             with self._connections_lock:
                 self._connections[port_key] = conn
+                self._port_creating.pop(port_key, None)
 
+            our_event.set()  # wake any threads that raced with us
             return conn, None
 
         except Exception as e:
+            with self._connections_lock:
+                self._port_creating.pop(port_key, None)
+            our_event.set()  # unblock waiting threads so they get the error
             return None, str(e)
-
-    def ensure_board_id(self, port: str) -> Optional[str]:
-        conn = self.get_connection(port)
-        if not conn or not conn.repl_protocol:
-            return None
-        
-        if conn.board_id is not None:
-            return conn.board_id
-        
-        try:
-            result = conn.repl_protocol.exec("import machine; print(machine.unique_id().hex())")
-            if result:
-                if isinstance(result, bytes):
-                    result = result.decode('utf-8', errors='ignore')
-                result = result.strip()
-                if result:
-                    conn.board_id = result
-                    self._update_board_id_cache(port, conn.board_id)
-                    return conn.board_id
-        except Exception:
-            pass
-        
-        return None
-    
-    def _update_board_id_cache(self, port: str, board_id: str) -> None:
-        with self._cache_lock:
-            if board_id not in self._board_id_cache:
-                self._board_id_cache[board_id] = {}
-            
-            self._board_id_cache[board_id]["serial_port"] = self._canon_port(port)
-    
-    def find_conflicting_by_board_id(self, port: str) -> Optional[str]:
-        conn = self.get_connection(port)
-        if not conn or not conn.board_id:
-            return None
-        
-        with self._connections_lock:
-            for key, other_conn in self._connections.items():
-                if key == port:
-                    continue
-                
-                if not other_conn.is_connected():
-                    continue
-                
-                if other_conn.board_id is None:
-                    try:
-                        result = other_conn.repl_protocol.exec("import machine; print(machine.unique_id().hex())")
-                        if result:
-                            if isinstance(result, bytes):
-                                result = result.decode('utf-8', errors='ignore')
-                            result = result.strip()
-                            if result:
-                                other_conn.board_id = result
-                    except Exception:
-                        continue
-                
-                if other_conn.board_id and other_conn.board_id == conn.board_id:
-                    return key
-        
-        return None
-    
-    def resolve_board_conflict(self, port: str) -> Optional[str]:
-        board_id = self.ensure_board_id(port)
-        if not board_id:
-            return None
-        
-        conflicting_port = self.find_conflicting_by_board_id(port)
-        if conflicting_port:
-            self.disconnect(conflicting_port)
-            
-            conn = self.get_connection(port)
-            if conn and conn.repl_protocol:
-                try:
-                    transport = conn.repl_protocol.transport
-                    transport.write(CTRL_C)
-                    time.sleep(0.05)
-                    transport.write(CTRL_B)
-                    time.sleep(0.1)
-                    transport.reset_input_buffer()
-                except Exception:
-                    pass
-            
-            return conflicting_port
-        
-        return None
 
     def disconnect(self, port: str) -> bool:
         key = None

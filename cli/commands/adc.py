@@ -11,6 +11,7 @@ from ..helpers import OutputHelper
 from replx.utils.constants import CTRL_C
 from ..connection import _ensure_connected, _create_agent_client
 from ..app import app
+from ._common import exec_code as _exec, parse_json_strict as _parse_json_strict, parse_gp_pin
 from ...terminal import enable_vt_mode
 
 _MAX_CHANNELS = 3
@@ -19,13 +20,7 @@ _SAMPLE_TABLE = [0, 1, 2, 5, 10, 20, 50, 100]
 
 
 def _parse_gp(token: str) -> int:
-    s = (token or "").strip()
-    if len(s) < 3 or s[:2].lower() != "gp" or not s[2:].isdigit():
-        raise ValueError(f"Invalid ADC pin: {token!r}. Use GP<num> format, e.g. GP26")
-    pin_no = int(s[2:])
-    if pin_no < 0:
-        raise ValueError(f"Invalid ADC pin: {token!r}")
-    return pin_no
+    return parse_gp_pin(token, label='ADC pin')
 
 
 def _parse_gp_pins(tokens: list[str], *, allow_empty: bool = False, default_pins: Optional[list[int]] = None) -> list[int]:
@@ -40,20 +35,6 @@ def _parse_gp_pins(tokens: list[str], *, allow_empty: bool = False, default_pins
     if len(set(pins)) != len(pins):
         raise ValueError("Duplicate ADC pins are not allowed")
     return pins
-
-
-def _exec(client, code: str, timeout: float = 5.0) -> str:
-    result = client.send_command('exec', code=code, timeout=timeout, max_retries=1)
-    return (result.get('output') or '').strip()
-
-
-def _parse_json_strict(raw: str):
-    if not raw:
-        raise RuntimeError("No output from device")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Device error:\n{raw}")
 
 
 def _raw_to_volts(raw: int, vref: float) -> float:

@@ -3,7 +3,6 @@ import datetime
 import json
 import os
 import signal
-import sys
 from typing import Optional
 
 import typer
@@ -12,6 +11,7 @@ from replx.utils.constants import CTRL_C
 from ..helpers import OutputHelper
 from ..connection import _ensure_connected, _create_agent_client, _get_device_port
 from ..app import app
+from ._common import exec_code as _exec, get_core as _get_core, parse_json_strict as _parse_json_strict, render_hex_dump as _render_hex_dump, parse_gp_pin as _parse_gp_pin
 
 
 _RP_UART_TX_CH: dict[int, int] = {
@@ -33,39 +33,6 @@ def _cursor_up(n: int = 1) -> str:
 
 def _clear_line() -> str:
     return _ESC + '[G' + _ESC + '[2K'
-
-
-def _norm_port(port: str) -> str:
-    if port and sys.platform.startswith('win'):
-        return port.upper()
-    return port
-
-
-def _get_core(client, port: Optional[str]) -> str:
-    try:
-        info = client.send_command('session_info', timeout=1.5)
-        connections = info.get('connections', [])
-        if not connections:
-            return ''
-        if port is None:
-            return connections[0].get('core', '')
-        norm = _norm_port(port)
-        for c in connections:
-            if _norm_port(c.get('port', '')) == norm:
-                return c.get('core', '')
-    except Exception:
-        pass
-    return ''
-
-
-def _parse_gp_pin(token: str, label: str = 'pin') -> int:
-    s = (token or '').strip()
-    if len(s) < 3 or s[:2].lower() != 'gp' or not s[2:].isdigit():
-        raise ValueError(f"Invalid {label}: {token!r}. Use GP<num> format, e.g. GP0")
-    pin_no = int(s[2:])
-    if pin_no < 0:
-        raise ValueError(f"Invalid {label}: {token!r}")
-    return pin_no
 
 
 def _resolve_uart_ch(core: str, tx_no: int) -> int:
@@ -311,67 +278,6 @@ def _make_monitor_code(cfg: dict, idle_ms: int, text_mode: bool) -> str:
             f"    else:\n"
             f"        time.sleep_ms(1)\n"
         )
-
-
-def _ascii_char(b: int) -> str:
-    if 0x20 <= b <= 0x7E:
-        return chr(b)
-    return '.'
-
-
-def _render_hex_row(data: bytes, offset: int, width: int) -> str:
-    half = width // 2
-    if len(data) > half:
-        left = ' '.join(f"{b:02X}" for b in data[:half])
-        right = ' '.join(f"{b:02X}" for b in data[half:])
-        hex_str = left + '  ' + right
-    else:
-        hex_str = ' '.join(f"{b:02X}" for b in data)
-
-    full_width = (half * 3 - 1) + 2 + (half * 3 - 1)
-    hex_padded = hex_str.ljust(full_width)
-
-    ascii_str = ''.join(_ascii_char(b) for b in data).ljust(width)
-    return (
-        f"[dim]{offset:06X}[/dim]  "
-        f"[bright_cyan]{hex_padded}[/bright_cyan]  "
-        f"[dim]{ascii_str}[/dim]"
-    )
-
-
-def _render_hex_dump(data: bytes, width: int = 16) -> str:
-    if not data:
-        return "[dim](no data)[/dim]"
-    lines = []
-    half = width // 2
-    header_hex = (
-        ' '.join(f"{i:02X}" for i in range(half))
-        + '  '
-        + ' '.join(f"{i:02X}" for i in range(half, width))
-    )
-    full_width = (half * 3 - 1) + 2 + (half * 3 - 1)
-    lines.append(
-        f"[dim]Offset  {header_hex}  ASCII[/dim]"
-    )
-    lines.append("[dim]" + "─" * (8 + full_width + 2 + width) + "[/dim]")
-    for off in range(0, len(data), width):
-        chunk = data[off:off + width]
-        lines.append(_render_hex_row(chunk, off, width))
-    return '\n'.join(lines)
-
-
-def _exec(client, code: str, timeout: float = 5.0) -> str:
-    result = client.send_command('exec', code=code, timeout=timeout, max_retries=1)
-    return (result.get('output') or '').strip()
-
-
-def _parse_json_strict(raw: str):
-    if not raw:
-        raise RuntimeError("No output from device")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Device error:\n{raw}")
 
 
 def _render_row_term(data: bytes, offset_val: int, width: int) -> str:
@@ -881,7 +787,8 @@ def _print_uart_help() -> None:
 UART open/write/read/xfer/monitor/close command.
 
 [bold cyan]Usage:[/bold cyan]
-  replx PORT uart open    --tx [yellow]GP<num>[/yellow] [[green]--rx GP<num>[/green]] [[green]--baud N[/green]] [[green]--bits 7|8[/green]] [[green]--parity none|odd|even[/green]] [[green]--stop 1|2[/green]]
+  replx PORT uart open    --tx [yellow]GP<num>[/yellow] [[green]--rx GP<num>[/green]] [[green]--baud N[/green]] 
+                                       [[green]--bits 7|8[/green]] [[green]--parity none|odd|even[/green]] [[green]--stop 1|2[/green]]
   replx PORT uart bus
   replx PORT uart write   [yellow]TEXT...[/yellow]
   replx PORT uart write   [green]--hex[/green] [yellow]HEX...[/yellow]
@@ -950,7 +857,7 @@ UART open/write/read/xfer/monitor/close command.
   replx COM3 uart read --timeout 0               [dim]# infinite wait (Ctrl+C to abort)[/dim]
   replx COM3 uart read --any                     [dim]# drain RX buffer immediately[/dim]
   replx COM3 uart xfer "AT+RST\\r\\n"              [dim]# wait for any response (default 2s)[/dim]
-  replx COM3 uart xfer "AT+RST\\r\\n" --rx-bytes 8    [dim]# wait for exactly 8 bytes[/dim]
+  replx COM3 uart xfer "AT+RST\\r\\n" --rx-bytes 8 [dim]# wait for exactly 8 bytes[/dim]
   replx COM3 uart xfer "AT" --timeout 3000       [dim]# wait up to 3s for any response[/dim]
   replx COM3 uart xfer --hex 01 03 00 00 00 0A --rx-bytes 25
   replx COM3 uart monitor

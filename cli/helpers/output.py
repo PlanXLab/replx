@@ -26,6 +26,7 @@ class OutputHelper:
 
     @staticmethod
     def normalize_remote_path(path: str) -> str:
+        path = path.replace('\\', '/')
         if not path.startswith('/'):
             path = '/' + path
         return path
@@ -154,15 +155,13 @@ class OutputHelper:
         error_msg = str(error)
         
         if 'is busy' in error_msg:
-            import re
-            
             repl_match = re.search(r'Connection (\S+) is busy.*REPL session is active', error_msg)
             if repl_match:
                 port = repl_match.group(1)
                 message = (
                     f"[bright_cyan]{port}[/bright_cyan] has an active REPL session in another terminal.\n\n"
                     "[dim]Exit REPL first with [bold]exit()[/bold] or [bold]Ctrl+D[/bold] in the other terminal.[/dim]\n\n"
-                    "Run [bright_cyan]replx session[/bright_cyan] to check connection status."
+                    "Run [bright_cyan]replx status[/bright_cyan] to check connection status."
                 )
                 OutputHelper.print_panel(
                     message,
@@ -177,7 +176,7 @@ class OutputHelper:
                 message = (
                     f"[bright_cyan]{port}[/bright_cyan] is running a background script.\n\n"
                     "[dim]Stop it first with [bold]replx reset[/bold] or [bold]replx run --stop[/bold].[/dim]\n\n"
-                    "Run [bright_cyan]replx session[/bright_cyan] to check connection status."
+                    "Run [bright_cyan]replx status[/bright_cyan] to check connection status."
                 )
                 OutputHelper.print_panel(
                     message,
@@ -194,12 +193,12 @@ class OutputHelper:
                     f"[bright_cyan]{port}[/bright_cyan] is currently executing "
                     f"[yellow]{command}[/yellow].\n\n"
                     "[dim]Wait for it to complete, or press [bold]Ctrl+C[/bold] in the other terminal to stop it.[/dim]\n\n"
-                    "Run [bright_cyan]replx session[/bright_cyan] to check connection status."
+                    "Run [bright_cyan]replx status[/bright_cyan] to check connection status."
                 )
             else:
                 message = (
                     f"{error_msg}\n\n"
-                    "Run [bright_cyan]replx session[/bright_cyan] to check connection status."
+                    "Run [bright_cyan]replx status[/bright_cyan] to check connection status."
                 )
             OutputHelper.print_panel(
                 message,

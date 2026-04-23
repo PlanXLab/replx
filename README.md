@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-`replx` is a CLI tool for MicroPython development that uses an agent-based architecture to connect and manage multiple CLI sessions and multiple boards simultaneously, improving connection efficiency and enabling parallel workflows.
+`replx` is a CLI tool for MicroPython development that uses a single local agent-based architecture to connect and manage multiple CLI sessions and multiple boards, improving connection efficiency and enabling parallel workflows.
 
 ---
 
@@ -19,12 +19,19 @@ flowchart LR
   AGENT <-->|Serial| DEV2[Board B]
   AGENT <-->|Serial| DEVN[Board N]
 
-  BG[Background Process]:::note -.-> AGENT
+  BG[Single Local Background Process]:::note -.-> AGENT
 
   classDef note fill:#f8f9fa,stroke:#c9ccd1,color:#444;
 ```
 
 Each CLI command communicates with a background Agent Server over UDP/IPC. The Agent Server handles all serial communication with the boards. This design allows multiple terminal sessions to share connection state while consistently handling FG/BG switching, status queries, and command execution.
+
+### Agent Process and Port
+
+- `replx` uses one local Agent Server per PC.
+- The agent listens on a UDP port selected from `49152-65535`.
+- The selected port is stored in `~/.replx/.agent_port` and reused by later CLI commands.
+- If the stored port is occupied by another program and no replx agent is running there, replx selects a new free port and updates `~/.replx/.agent_port`.
 
 ### Session / FG / BG / Default
 

@@ -1,6 +1,6 @@
 import os
 import hashlib
-import time
+import subprocess
 
 import typer
 
@@ -11,6 +11,55 @@ from replx.utils.exceptions import CompilationError, ValidationError
 
 class CompilerHelper:
     _compile_cache = {}
+
+    @staticmethod
+    def _run_mpy_cross(args: list[str], source_path: str) -> None:
+        try:
+            import mpy_cross
+        except ImportError as e:
+            raise CompilationError("mpy-cross is not installed") from e
+
+        try:
+            proc = mpy_cross.run(
+                *args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except Exception as e:
+            raise CompilationError(f"MPY compilation failed for {source_path}: {e}") from e
+
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+        if hasattr(proc, "communicate"):
+            stdout, stderr = proc.communicate()
+            returncode = proc.returncode or 0
+
+        if returncode != 0:
+            details = (stderr or stdout or f"mpy-cross exited with code {returncode}").strip()
+            raise CompilationError(f"MPY compilation failed for {source_path}: {details}")
+
+    @staticmethod
+    def compile_file(abs_py: str, out_mpy: str, core: str, version: str) -> str:
+        if not os.path.exists(abs_py):
+            raise ValidationError(f"Source file not found: {abs_py}")
+
+        out_dir = os.path.dirname(out_mpy)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+
+        args = [abs_py, '-o', out_mpy]
+        args.extend(CompilerHelper._march_for_core(core, version or "1.24.0"))
+        CompilerHelper._run_mpy_cross(args, abs_py)
+
+        if os.path.exists(out_mpy) and os.path.getsize(out_mpy) > 0:
+            return out_mpy
+
+        raise CompilationError(f"Compilation failed: {out_mpy} not found or empty")
     
     @staticmethod
     def mpy_arch_tag() -> str:
@@ -96,26 +145,7 @@ class CompilerHelper:
             cached_hash, cached_out = CompilerHelper._compile_cache[cache_key]
             if cached_hash == current_hash and os.path.exists(cached_out) and os.path.getsize(cached_out) > 0:
                 return cached_out
-        
-        args = ['_filepath_', '-o', '_outpath_']
-        args.extend(CompilerHelper._march_for_core(_core, _version))
-        
-        out_dir = os.path.dirname(out_mpy)
-        os.makedirs(out_dir, exist_ok=True)
-        
-        args[0] = abs_py
-        args[2] = out_mpy
-        
-        try:
-            import mpy_cross
-            mpy_cross.run(*args)
-        except Exception as e:
-            raise CompilationError(f"MPY compilation failed for {abs_py}: {e}")
-        
-        for _ in range(10):  # Try for 1 second
-            if os.path.exists(out_mpy) and os.path.getsize(out_mpy) > 0:
-                CompilerHelper._compile_cache[cache_key] = (current_hash, out_mpy)
-                return out_mpy
-            time.sleep(0.1)
-        
-        raise CompilationError(f"Compilation failed: {out_mpy} not found or empty")
+
+        CompilerHelper.compile_file(abs_py, out_mpy, _core, _version or "1.24.0")
+        CompilerHelper._compile_cache[cache_key] = (current_hash, out_mpy)
+        return out_mpy

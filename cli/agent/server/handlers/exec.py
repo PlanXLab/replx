@@ -232,6 +232,7 @@ class ExecCommandsMixin:
                     conn.interactive.thread = None
                 else:
                     send_error("Interactive session already active on this connection")
+                    conn.release()
                     return
         
         repl = conn.repl_protocol
@@ -242,6 +243,7 @@ class ExecCommandsMixin:
         if script_path:
             if not os.path.exists(script_path):
                 send_error(f"Script not found: {script_path}")
+                conn.release()
                 return
             with open(script_path, 'rb') as f:
                 script_data = f.read()
@@ -249,6 +251,7 @@ class ExecCommandsMixin:
             script_data = script_content.encode('utf-8') if isinstance(script_content, str) else script_content
         else:
             send_error("Either script_path or script_content required")
+            conn.release()
             return
         
         conn.interactive.start(ctx.ppid, seq, client_addr, echo)
@@ -403,6 +406,19 @@ class ExecCommandsMixin:
     
     def _cmd_run_stop(self, ctx: CommandContext) -> dict:
         conn = ctx.connection
+
+        # RUN_STOP is in NON_REPL_COMMANDS so ctx.connection is always None.
+        # Resolve the connection directly via explicit_port or active interactive session.
+        if conn is None:
+            if ctx.explicit_port:
+                conn = _find_connection_by_port(self.connection_manager, ctx.explicit_port)
+            if conn is None:
+                # Find any connection that has an active interactive session owned by this ppid
+                for c in self.connection_manager.get_all_connections().values():
+                    if c.interactive.active and c.interactive.is_owner(ctx.ppid):
+                        conn = c
+                        break
+
         if not conn:
             return {"stopped": False, "reason": "Not connected"}
         

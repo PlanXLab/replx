@@ -217,6 +217,9 @@ class SessionManager:
             else:
                 os.kill(pid, 0)
                 return True
+        except PermissionError:
+            # Process exists but we lack permission to signal it — treat as alive.
+            return True
         except OSError:
             return False
 

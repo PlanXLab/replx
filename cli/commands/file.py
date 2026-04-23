@@ -90,9 +90,7 @@ Download files or directories from the device to your computer.
     remotes = args[:-1]
     
     def normalize_remote(path: str) -> str:
-        if not path.startswith('/'):
-            path = '/' + path
-        return path
+        return OutputHelper.normalize_remote_path(path)
     
     client = _create_agent_client()
     
@@ -107,12 +105,23 @@ Download files or directories from the device to your computer.
             
             try:
                 result = client.send_command('ls', path=dir_path, detailed=True)
+                if result is None:
+                    raise RuntimeError("No response from device")
                 items = [(item['name'], item['size'], item['is_dir']) for item in result.get('items', [])]
                 
                 for name, size, is_dir in items:
                     if fnmatch.fnmatch(name, basename_pattern):
                         full_path = posixpath.join(dir_path, name)
                         files_to_download.append((full_path, name, is_dir))
+            except RuntimeError as e:
+                if OutputHelper.handle_error(e, f"Download: {remote_pattern}"):
+                    raise typer.Exit(1)
+                OutputHelper.print_panel(
+                    f"Download failed: [red]{e}[/red]",
+                    title="Download Failed",
+                    border_style="red"
+                )
+                continue
             except Exception:
                 OutputHelper.print_panel(
                     f"[red]{remote_pattern}[/red] - pattern did not match any files.",
@@ -123,9 +132,21 @@ Download files or directories from the device to your computer.
         else:
             try:
                 result = client.send_command('is_dir', path=remote)
+                if result is None:
+                    raise RuntimeError("No response from device")
                 is_dir = result.get('is_dir', False)
                 basename = posixpath.basename(remote.rstrip('/'))
                 files_to_download.append((remote, basename, is_dir))
+            except RuntimeError as e:
+                display_remote = remote.replace(device_root_fs, "", 1)
+                if OutputHelper.handle_error(e, f"Download: {display_remote}"):
+                    raise typer.Exit(1)
+                OutputHelper.print_panel(
+                    f"Download failed: [red]{e}[/red]",
+                    title="Download Failed",
+                    border_style="red"
+                )
+                continue
             except Exception:
                 display_remote = remote.replace(device_root_fs, "", 1)
                 OutputHelper.print_panel(
@@ -319,9 +340,8 @@ Text files show as-is; binary files show in hex format.
         raise typer.Exit(1)
     
     _ensure_connected()
-    
-    if not remote.startswith('/'):
-        remote = '/' + remote
+
+    remote = OutputHelper.normalize_remote_path(remote)
     
     display_remote = remote.replace('/', '', 1) if remote.startswith('/') else remote
     
@@ -329,6 +349,8 @@ Text files show as-is; binary files show in hex format.
     
     try:
         result = client.send_command('cat', path=remote)
+        if result is None:
+            raise RuntimeError("No response from device")
         content = result.get('content', '')
         is_binary = result.get('is_binary', False)
     except Exception as e:
@@ -682,6 +704,8 @@ Delete files or directories from the connected device.
                 basename_pattern = posixpath.basename(remote)
                 try:
                     result = client.send_command('ls', path=dir_path, detailed=True)
+                    if result is None:
+                        raise RuntimeError("No response from device")
                     items = result.get('items', [])
                     for item in items:
                         if fnmatch.fnmatch(item['name'], basename_pattern):
@@ -767,6 +791,8 @@ Delete files or directories from the connected device.
             
             try:
                 result = client.send_command('ls', path=dir_path, detailed=True)
+                if result is None:
+                    raise RuntimeError("No response from device")
                 items = [(item['name'], item['size'], item['is_dir']) for item in result.get('items', [])]
                 matched = False
                 
@@ -801,6 +827,8 @@ Delete files or directories from the connected device.
         else:
             try:
                 is_dir_result = client.send_command('is_dir', path=remote)
+                if is_dir_result is None:
+                    raise RuntimeError("No response from device")
                 is_dir = is_dir_result.get('is_dir', False)
                 
                 if is_dir:
@@ -1695,11 +1723,11 @@ Upload files or directories from your computer to the device.
   • Remote directories are created if needed
 
 [bold cyan]Tip:[/bold cyan]
-  For installing libraries with compilation, use [yellow]replx pkg update[/yellow] instead.
+    To compile a local file to .mpy first, use [yellow]replx mpy[/yellow] and then upload it.
 
 [bold cyan]Related:[/bold cyan]
   replx get remote local    [dim]# Download files instead[/dim]
-  replx pkg update ./file.py   [dim]# Install with .mpy compilation[/dim]"""
+    replx mpy local.py        [dim]# Compile local Python to .mpy[/dim]"""
         OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
@@ -1729,16 +1757,17 @@ Upload files or directories from your computer to the device.
     
     remote = args[-1]
     locals = args[:-1]
-    
-    if not remote.startswith('/'):
-        remote = '/' + remote
+
+    remote = OutputHelper.normalize_remote_path(remote)
     
     files_to_upload = []
+    had_input_errors = False
     
     for local_pattern in locals:
         if '*' in local_pattern or '?' in local_pattern:
             matched_files = glob.glob(local_pattern)
             if not matched_files:
+                had_input_errors = True
                 OutputHelper.print_panel(
                     f"[red]{local_pattern}[/red] - pattern did not match any files.",
                     title="Upload Failed",
@@ -1750,6 +1779,7 @@ Upload files or directories from your computer to the device.
                     files_to_upload.append(matched)
         else:
             if not os.path.exists(local_pattern):
+                had_input_errors = True
                 OutputHelper.print_panel(
                     f"[red]{local_pattern}[/red] does not exist.",
                     title="Upload Failed",
@@ -1759,6 +1789,8 @@ Upload files or directories from your computer to the device.
             files_to_upload.append(local_pattern)
     
     if not files_to_upload:
+        if had_input_errors:
+            raise typer.Exit(1)
         OutputHelper.print_panel(
             "No files to upload.",
             title="Upload",
@@ -1767,10 +1799,27 @@ Upload files or directories from your computer to the device.
         raise typer.Exit(1)
     
     client = _create_agent_client()
+
+    def ensure_remote_dir_tree(dir_path: str) -> None:
+        normalized = OutputHelper.normalize_remote_path(dir_path).rstrip('/')
+        if not normalized:
+            return
+
+        parts = [p for p in normalized.split('/') if p]
+        current = ''
+        for part in parts:
+            current += '/' + part
+            try:
+                client.send_command('mkdir', path=current)
+            except Exception as e:
+                error_msg = str(e)
+                if 'EEXIST' in error_msg or 'exists' in error_msg.lower():
+                    continue
+                raise
     
     try:
         result = client.send_command('is_dir', path=remote)
-        is_remote_dir = result.get('is_dir', False)
+        is_remote_dir = ((result.get('is_dir', False) if result else False) or remote.endswith('/'))
     except Exception:
         is_remote_dir = remote.endswith('/')
     
@@ -1786,6 +1835,10 @@ Upload files or directories from your computer to the device.
             remote_path = posixpath.join(remote, base_name)
         else:
             remote_path = remote
+
+        target_dir = remote if is_remote_dir else posixpath.dirname(remote_path)
+        if target_dir and target_dir != '/':
+            ensure_remote_dir_tree(target_dir)
         
         display_remote = remote_path.replace(device_root_fs, "", 1)
         item_type = "Directory" if is_dir else "File"
@@ -1876,6 +1929,9 @@ Upload files or directories from your computer to the device.
                 border_style="red"
             )
             raise typer.Exit(1)
+
+        if remote and remote != '/':
+            ensure_remote_dir_tree(remote)
         
         def count_bytes(path):
             if os.path.isfile(path):

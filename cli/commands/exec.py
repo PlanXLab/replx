@@ -142,12 +142,15 @@ def _file_md5(path: str) -> str | None:
         return None
 
 
-def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> bool:
+def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> tuple[bool, str | None]:
     vscode_cmd = _resolve_vscode_command()
 
     if vscode_cmd:
         start_ts = time.monotonic()
-        proc = subprocess.Popen(vscode_cmd + ["--reuse-window", "--wait", local_path])
+        try:
+            proc = subprocess.Popen(vscode_cmd + ["--reuse-window", "--wait", local_path])
+        except Exception as e:
+            return False, str(e)
 
         last_seen_hash = original_hash
         changed_stable_since = None
@@ -172,13 +175,13 @@ def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> 
             rc = proc.poll()
             if rc is not None:
                 if rc != 0:
-                    return False
-                return True
+                    return False, f"Editor exited with code {rc}"
+                return True, None
 
             if elapsed >= timeout_sec:
                 print("Waiting for editor close is taking longer than expected.")
                 input("After closing the editor tab/window, press Enter to continue...")
-                return True
+                return True, None
 
             time.sleep(0.1)
 
@@ -191,9 +194,9 @@ def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> 
             subprocess.run(["xdg-open", local_path], check=False)
         print("Editor command not found in PATH. Opened file with default editor.")
         input("After saving and closing the file, press Enter to continue...")
-        return True
-    except Exception:
-        return False
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 
 @app.command(name="exec", rich_help_panel="Execution")
@@ -1334,6 +1337,13 @@ Start a live MicroPython session where you can type code line by line.
     try:
         with _create_agent_client() as client:
             result = client.send_command('repl_enter')
+            if result is None:
+                OutputHelper.print_panel(
+                    "Failed to enter Friendly REPL.\nNo response from agent.",
+                    title="REPL Error",
+                    border_style="red"
+                )
+                raise typer.Exit(1)
             if result.get('error'):
                 error_msg = result.get('error', 'Unknown error')
                 OutputHelper.print_panel(
@@ -2131,8 +2141,10 @@ Manage WiFi connection.
                         original_hash = hashlib.md5(f.read()).hexdigest()
                     
                     print("Opening in VSCode... (close the file tab to continue)")
-                    if not _open_editor_and_wait(local_path, original_hash):
-                        print("Error: Could not open editor. Install VSCode or configure the 'code' command.")
+                    opened, editor_error = _open_editor_and_wait(local_path, original_hash)
+                    if not opened:
+                        detail = editor_error or "Unknown error"
+                        print(f"Error: Could not open editor: {detail}")
                         return
                     
                     with open(local_path, 'rb') as f:
@@ -2399,7 +2411,7 @@ def _reset_hard(device: str, status: dict):
         else:
             OutputHelper.print_panel(
                 f"Device [bright_yellow]{device}[/bright_yellow] was reset but auto-reconnect failed.\n\n"
-                "Please reconnect manually with [bright_blue]replx --port {port} setup[/bright_blue]",
+                f"Please reconnect manually with [bright_blue]replx --port {port} setup[/bright_blue]",
                 title="Hard Reset",
                 border_style="yellow"
             )

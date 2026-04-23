@@ -11,6 +11,7 @@ from ..helpers import OutputHelper, CONSOLE_WIDTH
 from ..connection import _ensure_connected, _create_agent_client, _get_device_port
 from ..app import app
 from replx.utils.constants import CTRL_C
+from ._common import exec_code as _exec, get_core as _get_core, parse_json_strict as _parse_json_strict, parse_gp_pin as _parse_gp_pin
 from ...terminal import enable_vt_mode
 
 _ADDR_COLORS = [
@@ -38,42 +39,6 @@ def _parse_hex(s: str) -> int:
 
 def _parse_data(tokens: list) -> list:
     return [_parse_hex(t) for t in tokens]
-
-
-def _parse_gp_pin(token: str, label: str = 'pin') -> int:
-    s = (token or '').strip()
-    if len(s) < 3 or s[:2].lower() != 'gp' or not s[2:].isdigit():
-        raise ValueError(
-            f"Invalid {label}: {token!r}. Use GP<num> format, e.g. GP20"
-        )
-    pin_no = int(s[2:])
-    if pin_no < 0:
-        raise ValueError(f"Invalid {label}: {token!r}")
-    return pin_no
-
-
-def _norm_port(port: str) -> str:
-    if port and sys.platform.startswith('win'):
-        return port.upper()
-    return port
-
-
-def _get_core(client, port: Optional[str]) -> str:
-    try:
-        info = client.send_command('session_info', timeout=1.5)
-        connections = info.get('connections', [])
-        if not connections:
-            return ''
-        if port is None:
-            return connections[0].get('core', '')
-        norm = _norm_port(port)
-        for c in connections:
-            cp = _norm_port(c.get('port', ''))
-            if cp == norm:
-                return c.get('core', '')
-    except Exception:
-        pass
-    return ''
 
 
 def _validate_core(core: str):
@@ -161,20 +126,6 @@ def _make_target_close_code() -> str:
         "del _i2c_target, _i2c_target_mem\n"
         "print(json.dumps({'closed': True}))"
     )
-
-
-def _exec(client, code: str, timeout: float = 5.0) -> str:
-    result = client.send_command('exec', code=code, timeout=timeout, max_retries=1)
-    return (result.get('output') or '').strip()
-
-
-def _parse_json_strict(raw: str):
-    if not raw:
-        raise RuntimeError("No output from device")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Device error:\n{raw}")
 
 
 def _calc_timeout(repeat: int, interval_ms: int, op_ms: int = 300) -> float:

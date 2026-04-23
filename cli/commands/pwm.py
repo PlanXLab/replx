@@ -9,6 +9,7 @@ import typer
 from ..helpers import OutputHelper
 from ..connection import _ensure_connected, _create_agent_client
 from ..app import app
+from ._common import exec_code as _exec, parse_json_strict as _parse_json_strict
 from ...terminal import enable_vt_mode
 
 _DUTY_MODES = {"percent", "u16", "pulse_us"}
@@ -168,20 +169,6 @@ def _format_seq_ops(ops: list[tuple[str, float | int]]) -> str:
         elif kind == 'm':
             parts.append(f"m{int(value)}")
     return '-'.join(parts) if parts else '-'
-
-
-def _exec(client, code: str, timeout: float = 5.0) -> str:
-    result = client.send_command('exec', code=code, timeout=timeout, max_retries=1)
-    return (result.get('output') or '').strip()
-
-
-def _parse_json_strict(raw: str):
-    if not raw:
-        raise RuntimeError("No output from device")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Device error:\n{raw}")
 
 
 def _check_has_pio(client) -> bool:
@@ -799,7 +786,8 @@ PWM write/sequence/stop command for a single pin.
   • [yellow]seq --repeat 0[/yellow]: infinite repeat, Ctrl+C to stop. PWM stays at last duty until [yellow]pwm stop[/yellow].
   • [yellow]pulse_us[/yellow] values must not exceed the PWM period for the selected frequency.
   • [yellow]monitor[/yellow] frequency range: 20 – 20000 Hz. Out-of-range signals are silently ignored.
-  • [yellow]monitor[/yellow] on RP2350/RP2040: PIO state machine 0 사용. 동일 SM을 쓰는 다른 PIO 프로그램과 공존 불가.
+  • [yellow]monitor[/yellow] on RP2350/RP2040: Use PIO state machine 0. 
+                              [dim]Cannot coexist with other PIO programs using the same SM.[/dim]
   • [yellow]monitor[/yellow] on other boards: [cyan]time_pulse_us()[/cyan] 사용."""
     OutputHelper.print_panel(help_text, title="pwm", border_style="dim")
 

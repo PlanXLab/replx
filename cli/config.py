@@ -1,9 +1,13 @@
 import os
+import socket
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
-from replx.utils.constants import DEFAULT_AGENT_PORT, MAX_AGENT_PORT
+from replx.utils.constants import AGENT_HOST, DEFAULT_AGENT_PORT, MIN_AGENT_PORT, MAX_AGENT_PORT
+
+_write_port_lock = threading.Lock()
 
 
 @dataclass
@@ -27,7 +31,6 @@ class GlobalOptions:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._port = None
-            cls._instance._agent_port = None
         return cls._instance
     
     @property
@@ -38,27 +41,16 @@ class GlobalOptions:
     def port(self, value: Optional[str]):
         self._port = value
     
-    @property
-    def agent_port(self) -> Optional[int]:
-        return self._agent_port
-    
-    @agent_port.setter
-    def agent_port(self, value: Optional[int]):
-        self._agent_port = value
-    
-    def set(self, port: str = None, agent_port: int = None):
+    def set(self, port: str = None):
         self._port = port
-        self._agent_port = agent_port
     
     def get(self) -> Dict[str, Any]:
         return {
             'port': self._port,
-            'agent_port': self._agent_port
         }
     
     def clear(self):
         self._port = None
-        self._agent_port = None
 
 
 GLOBAL_OPTIONS = GlobalOptions()
@@ -283,8 +275,6 @@ class ConfigManager:
             conn['manufacturer'] = manufacturer
         if serial_port is not None:
             conn['serial_port'] = serial_port
-        if agent_port is not None:
-            conn['agent_port'] = agent_port
         
         if set_default:
             env_data['default'] = conn_key
@@ -298,46 +288,245 @@ class ConfigManager:
 
 
 class AgentPortManager:
+
+    @staticmethod
+    def _kill_agent_process_by_port(port: int) -> bool:
+        try:
+            import psutil
+        except Exception:
+            return False
+
+        try:
+            for conn in psutil.net_connections(kind='udp'):
+                if conn.laddr and conn.laddr.port == port and conn.pid:
+                    try:
+                        psutil.Process(conn.pid).kill()
+                        return True
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+        except Exception:
+            return False
+
+        return False
+
+    @staticmethod
+    def _pick_primary_port(running_ports: list[int], preferred_port: Optional[int] = None) -> Optional[int]:
+        if not running_ports:
+            return None
+
+        registered_port = AgentPortManager._read_registered_port()
+        for candidate in (preferred_port, registered_port, DEFAULT_AGENT_PORT):
+            if isinstance(candidate, int) and candidate in running_ports:
+                return candidate
+
+        return min(running_ports)
+
+    @staticmethod
+    def _ensure_singleton_running_agent(preferred_port: Optional[int] = None) -> Optional[int]:
+        from .agent.client import AgentClient
+
+        running_ports = []
+        for port in AgentPortManager._get_candidate_agent_ports(preferred_port=preferred_port):
+            if AgentClient.is_agent_running(port=port):
+                running_ports.append(port)
+
+        if not running_ports:
+            return None
+
+        primary_port = AgentPortManager._pick_primary_port(running_ports, preferred_port=preferred_port)
+        if primary_port is None:
+            return None
+
+        for port in running_ports:
+            if port == primary_port:
+                continue
+            try:
+                AgentClient.stop_agent(port=port)
+            except Exception:
+                pass
+            if AgentClient.is_agent_running(port=port):
+                AgentPortManager._kill_agent_process_by_port(port)
+
+        remaining_ports = []
+        for port in running_ports:
+            if AgentClient.is_agent_running(port=port):
+                remaining_ports.append(port)
+
+        extra_ports = [port for port in remaining_ports if port != primary_port]
+        if extra_ports:
+            print(
+                f'[replx] Warning: extra agent(s) on port(s) '
+                f'{", ".join(str(p) for p in sorted(extra_ports))} could not be stopped. '
+                f'Using port {primary_port}.',
+                file=sys.stderr,
+            )
+
+        AgentPortManager._write_registered_port(primary_port)
+        return primary_port
+
+    @staticmethod
+    def _agent_port_file() -> str:
+        return os.path.join(os.path.expanduser('~'), '.replx', '.agent_port')
+
+    @staticmethod
+    def _read_registered_port() -> Optional[int]:
+        path = AgentPortManager._agent_port_file()
+        if not os.path.exists(path):
+            return None
+
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                value = f.read().strip()
+            port = int(value)
+        except (OSError, ValueError, TypeError):
+            return None
+
+        if MIN_AGENT_PORT <= port <= MAX_AGENT_PORT:
+            return port
+        return None
+
+    @staticmethod
+    def _write_registered_port(port: int) -> None:
+        if not isinstance(port, int) or not (MIN_AGENT_PORT <= port <= MAX_AGENT_PORT):
+            return
+
+        path = AgentPortManager._agent_port_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = f'{path}.tmp'
+        with _write_port_lock:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                f.write(f'{port}\n')
+            os.replace(tmp_path, path)
+
+    @staticmethod
+    def _can_bind_port(port: Optional[int]) -> bool:
+        if not isinstance(port, int) or not (MIN_AGENT_PORT <= port <= MAX_AGENT_PORT):
+            return False
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.bind((AGENT_HOST, port))
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _normalize_connection_port(port: Optional[str]) -> str:
+        if not port:
+            return ""
+        p = str(port).strip()
+        if sys.platform.startswith("win"):
+            return p.upper()
+        return p
+
+    @staticmethod
+    def _discover_running_agent_ports() -> list[int]:
+        try:
+            import psutil
+        except Exception:
+            return []
+
+        ports = set()
+        for proc in psutil.process_iter(['cmdline']):
+            try:
+                cmdline = proc.info.get('cmdline') or []
+            except Exception:
+                continue
+
+            if not cmdline:
+                continue
+
+            cmd_lower = [str(part).lower() for part in cmdline]
+            module_index = None
+            for i in range(len(cmd_lower) - 1):
+                if cmd_lower[i] == '-m' and cmd_lower[i + 1] == 'replx.cli.agent.server':
+                    module_index = i + 1
+                    break
+
+            if module_index is None:
+                continue
+
+            port = DEFAULT_AGENT_PORT
+            if module_index + 1 < len(cmdline):
+                maybe_port = str(cmdline[module_index + 1]).strip()
+                if maybe_port.isdigit():
+                    port = int(maybe_port)
+
+            ports.add(port)
+
+        return sorted(ports)
+
+    @staticmethod
+    def _get_candidate_agent_ports(env_path: str = None, preferred_port: int = None) -> list[int]:
+        ports: list[int] = []
+
+        def _add(port: Optional[int]) -> None:
+            if isinstance(port, int) and port > 0 and port not in ports:
+                ports.append(port)
+
+        _add(preferred_port)
+        _add(AgentPortManager._read_registered_port())
+        _add(DEFAULT_AGENT_PORT)
+
+        for port in AgentPortManager._discover_running_agent_ports():
+            _add(port)
+
+        return ports
     
     @staticmethod
     def find_available_port(env_path: str = None) -> int:
-        from .agent.client import AgentClient
-        
-        env_data = ConfigManager.read(env_path) if env_path and os.path.exists(env_path) else {'connections': {}}
-        
-        registered_ports = {}
-        for conn_key, conn_data in env_data['connections'].items():
-            port = conn_data.get('agent_port')
-            if port:
-                registered_ports[port] = conn_key
-        
-        for port in range(DEFAULT_AGENT_PORT, MAX_AGENT_PORT):
-            if port in registered_ports:
-                if AgentClient.is_agent_running(port=port):
-                    continue
+        registered_port = AgentPortManager._read_registered_port()
+        running_port = AgentPortManager._ensure_singleton_running_agent(preferred_port=registered_port)
+        if running_port is not None:
+            return running_port
+
+        if registered_port is not None and AgentPortManager._can_bind_port(registered_port):
+            return registered_port
+
+        for port in range(MIN_AGENT_PORT, MAX_AGENT_PORT + 1):
+            if not AgentPortManager._can_bind_port(port):
+                continue
+            AgentPortManager._write_registered_port(port)
             return port
-        
-        return DEFAULT_AGENT_PORT
+
+        fallback_port = registered_port or DEFAULT_AGENT_PORT
+        AgentPortManager._write_registered_port(fallback_port)
+        return fallback_port
     
     @staticmethod
     def find_running_agent(env_path: str = None) -> Optional[int]:
+        return AgentPortManager._ensure_singleton_running_agent()
+
+    @staticmethod
+    def find_running_agents(env_path: str = None) -> list[int]:
+        running_port = AgentPortManager._ensure_singleton_running_agent()
+        if running_port is None:
+            return []
+        return [running_port]
+
+    @staticmethod
+    def find_agent_for_connection(port: str, env_path: str = None, preferred_port: int = None) -> Optional[int]:
         from .agent.client import AgentClient
-        
-        if not env_path or not os.path.exists(env_path):
+
+        target_port = AgentPortManager._normalize_connection_port(port)
+        if not target_port:
             return None
-        
-        env_data = ConfigManager.read(env_path)
-        
-        agent_ports = set()
-        for conn_key, conn_data in env_data.get('connections', {}).items():
-            port = conn_data.get('agent_port')
-            if port:
-                agent_ports.add(port)
-        
-        for port in sorted(agent_ports):
-            if AgentClient.is_agent_running(port=port):
-                return port
-        
+
+        agent_port = AgentPortManager._ensure_singleton_running_agent(preferred_port=preferred_port)
+        if agent_port is None:
+            return None
+
+        try:
+            with AgentClient(port=agent_port) as client:
+                session_info = client.send_command('session_info', timeout=1.0)
+        except Exception:
+            return None
+
+        for conn in session_info.get('connections', []):
+            conn_port = AgentPortManager._normalize_connection_port(conn.get('port'))
+            if conn_port == target_port and conn.get('connected'):
+                return agent_port
+
         return None
 
 
@@ -345,17 +534,14 @@ class ConnectionResolver:
     
     @staticmethod
     def resolve(global_port: str = None) -> Optional[dict]:
-        from .agent.client import AgentClient
-        
         env_path = ConfigManager.find_env_file()
         
         if global_port:
             return ConnectionResolver._resolve_serial(global_port, env_path)
-        
-        if AgentClient.is_agent_running():
-            result = ConnectionResolver._resolve_from_session()
-            if result:
-                return result
+
+        result = ConnectionResolver._resolve_from_session(env_path)
+        if result:
+            return result
         
         return ConnectionResolver._resolve_from_default(env_path)
     
@@ -364,45 +550,46 @@ class ConnectionResolver:
         conn_key = port
         result = {
             'connection': port,
-            'source': 'global'
+            'source': 'global',
+            'agent_port': AgentPortManager.find_available_port(env_path),
         }
         
         if env_path:
             config = ConfigManager.get_connection(env_path, conn_key)
             if config:
-                result['agent_port'] = config.get('agent_port')
                 result['core'] = config.get('core')
                 result['device'] = config.get('device')
-        
-        if not result.get('agent_port'):
-            result['agent_port'] = AgentPortManager.find_available_port(env_path)
         
         return result
     
     @staticmethod
-    def _resolve_from_session() -> Optional[dict]:
+    def _resolve_from_session(env_path: str = None) -> Optional[dict]:
         from .agent.client import AgentClient, get_cached_session_id
-        
+
+        ppid = get_cached_session_id()
+        agent_port = AgentPortManager.find_running_agent(env_path)
+        if agent_port is None:
+            return None
+
         try:
-            with AgentClient() as client:
+            with AgentClient(port=agent_port) as client:
                 session_info = client.send_command('session_info', timeout=1.0)
-                
-                ppid = get_cached_session_id()
-                for session in session_info.get('sessions', []):
-                    if session.get('ppid') == ppid and session.get('foreground'):
-                        fg_port = session['foreground']
-                        
-                        for conn in session_info.get('connections', []):
-                            if conn.get('port') == fg_port and conn.get('connected'):
-                                return {
-                                    'connection': fg_port,
-                                    'agent_port': DEFAULT_AGENT_PORT,
-                                    'core': conn.get('core'),
-                                    'device': conn.get('device'),
-                                    'source': 'session'
-                                }
+
+            for session in session_info.get('sessions', []):
+                if session.get('ppid') == ppid and session.get('foreground'):
+                    fg_port = session['foreground']
+
+                    for conn in session_info.get('connections', []):
+                        if conn.get('port') == fg_port and conn.get('connected'):
+                            return {
+                                'connection': fg_port,
+                                'agent_port': agent_port,
+                                'core': conn.get('core'),
+                                'device': conn.get('device'),
+                                'source': 'session'
+                            }
         except Exception:
-            pass
+            return None
         
         return None
     
@@ -421,7 +608,7 @@ class ConnectionResolver:
         
         return {
             'connection': default_conn,
-            'agent_port': config.get('agent_port') or AgentPortManager.find_available_port(env_path),
+            'agent_port': AgentPortManager.find_available_port(env_path),
             'core': config.get('core'),
             'device': config.get('device'),
             'source': 'default'
@@ -448,14 +635,26 @@ def _get_default_connection(env_path: str) -> Optional[str]:
 def _find_available_agent_port(env_path: str) -> int:
     return AgentPortManager.find_available_port(env_path)
 
+def _resolve_agent_port() -> int:
+    return AgentPortManager.find_available_port()
+
+def _get_registered_agent_port() -> Optional[int]:
+    return AgentPortManager._read_registered_port()
+
 def _find_running_agent_port(env_path: str) -> Optional[int]:
     return AgentPortManager.find_running_agent(env_path)
+
+def _find_running_agent_ports(env_path: str = None) -> list[int]:
+    return AgentPortManager.find_running_agents(env_path)
+
+def _find_agent_for_connection(port: str, env_path: str = None, preferred_port: int = None) -> Optional[int]:
+    return AgentPortManager.find_agent_for_connection(port, env_path, preferred_port)
 
 def _resolve_connection(global_port: str = None) -> Optional[dict]:
     return ConnectionResolver.resolve(global_port)
 
-def _set_global_options(port: str = None, agent_port: int = None):
-    GLOBAL_OPTIONS.set(port, agent_port)
+def _set_global_options(port: str = None):
+    GLOBAL_OPTIONS.set(port)
 
 def _get_global_options() -> dict:
     return GLOBAL_OPTIONS.get()

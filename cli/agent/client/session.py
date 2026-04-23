@@ -4,14 +4,21 @@ import psutil
 
 def _find_terminal_process() -> Optional[dict]:
     shell_names = {
+        # Windows
         'powershell.exe', 'pwsh.exe', 'cmd.exe', 'bash.exe', 'zsh.exe', 'sh.exe', 'fish.exe',
         'windowsterminal.exe',
+        # Linux / macOS (no .exe)
+        'bash', 'zsh', 'sh', 'fish', 'tcsh', 'csh', 'ksh', 'dash', 'pwsh',
     }
 
     ide_names = {
+        # Windows
         'code.exe',
         'conemu64.exe', 'conemu.exe',
         'pycharm.exe', 'pycharm64.exe', 'idea.exe', 'idea64.exe',
+        # Linux / macOS (no .exe)
+        'code', 'code-oss',
+        'pycharm', 'pycharm64', 'idea', 'idea64',
     }
 
     try:

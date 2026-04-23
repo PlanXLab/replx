@@ -1,5 +1,4 @@
 import json
-import sys
 from typing import Optional
 
 import typer
@@ -7,6 +6,14 @@ import typer
 from ..helpers import OutputHelper
 from ..connection import _ensure_connected, _create_agent_client, _get_device_port
 from ..app import app
+from ._common import (
+    exec_code as _exec,
+    get_core as _get_core,
+    get_device as _get_device,
+    parse_json_strict as _parse_json_strict,
+    render_hex_dump as _render_hex_dump,
+    parse_gp_pin as _parse_gp_pin,
+)
 from ...utils import device_name_to_path
 
 
@@ -14,56 +21,6 @@ _RP_SPI_SCK_CH: dict[int, int] = {
     2: 0, 6: 0, 18: 0, 22: 0,
     10: 1, 14: 1, 26: 1,
 }
-
-
-def _norm_port(port: str) -> str:
-    if port and sys.platform.startswith('win'):
-        return port.upper()
-    return port
-
-
-def _get_core(client, port: Optional[str]) -> str:
-    try:
-        info = client.send_command('session_info', timeout=1.5)
-        connections = info.get('connections', [])
-        if not connections:
-            return ''
-        if port is None:
-            return connections[0].get('core', '')
-        norm = _norm_port(port)
-        for c in connections:
-            if _norm_port(c.get('port', '')) == norm:
-                return c.get('core', '')
-    except Exception:
-        pass
-    return ''
-
-
-def _get_device(client, port: Optional[str]) -> str:
-    try:
-        info = client.send_command('session_info', timeout=1.5)
-        connections = info.get('connections', [])
-        if not connections:
-            return ''
-        if port is None:
-            return connections[0].get('device', '')
-        norm = _norm_port(port)
-        for c in connections:
-            if _norm_port(c.get('port', '')) == norm:
-                return c.get('device', '')
-    except Exception:
-        pass
-    return ''
-
-
-def _parse_gp_pin(token: str, label: str = 'pin') -> int:
-    s = (token or '').strip()
-    if len(s) < 3 or s[:2].lower() != 'gp' or not s[2:].isdigit():
-        raise ValueError(f"Invalid {label}: {token!r}. Use GP<num> format, e.g. GP2")
-    pin_no = int(s[2:])
-    if pin_no < 0:
-        raise ValueError(f"Invalid {label}: {token!r}")
-    return pin_no
 
 
 def _resolve_spi_ch(core: str, sck_no: int) -> int:
@@ -224,62 +181,6 @@ def _make_slave_close_code() -> str:
     )
 
 
-def _exec(client, code: str, timeout: float = 5.0) -> str:
-    result = client.send_command('exec', code=code, timeout=timeout, max_retries=1)
-    return (result.get('output') or '').strip()
-
-
-def _parse_json_strict(raw: str):
-    if not raw:
-        raise RuntimeError("No output from device")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Device error:\n{raw}")
-
-
-def _ascii_char(b: int) -> str:
-    return chr(b) if 0x20 <= b <= 0x7E else '.'
-
-
-def _render_hex_row(data: bytes, offset: int, width: int = 16) -> str:
-    half = width // 2
-    if len(data) > half:
-        left = ' '.join(f"{b:02X}" for b in data[:half])
-        right = ' '.join(f"{b:02X}" for b in data[half:])
-        hex_str = left + '  ' + right
-    else:
-        hex_str = ' '.join(f"{b:02X}" for b in data)
-    expected_len = (half * 3 - 1) + 2 + (half * 3 - 1)
-    hex_padded = hex_str.ljust(expected_len)
-    ascii_str = ''.join(_ascii_char(b) for b in data).ljust(width)
-    return (
-        f"[dim]{offset:06X}[/dim]  "
-        f"[bright_cyan]{hex_padded}[/bright_cyan]  "
-        f"[dim]{ascii_str}[/dim]"
-    )
-
-
-def _render_hex_dump(data: bytes, width: int = 16) -> str:
-    if not data:
-        return "[dim](no data)[/dim]"
-    half = width // 2
-    hdr = (
-        ' '.join(f"{i:02X}" for i in range(half))
-        + '  '
-        + ' '.join(f"{i:02X}" for i in range(half, width))
-    )
-    expected_len = (half * 3 - 1) + 2 + (half * 3 - 1)
-    sep_len = 8 + expected_len + 2 + width
-    lines = [
-        f"[dim]Offset  {hdr}  ASCII[/dim]",
-        "[dim]" + "─" * sep_len + "[/dim]",
-    ]
-    for off in range(0, len(data), width):
-        lines.append(_render_hex_row(data[off:off + width], off, width))
-    return '\n'.join(lines)
-
-
 def _display_bus(bus: dict) -> None:
     if bus.get('slave'):
         miso_str = f"GP{bus['miso']}" if bus.get('miso') is not None else "[dim]none[/dim]"
@@ -379,7 +280,7 @@ def _parse_text_data(tokens: list[str]) -> list[int]:
         if s.startswith('x'): return chr(int(s[1:], 16))
         return m.group(0)
 
-    expanded = _re.sub(r'\\(n|r|t|\\\\|x[0-9A-Fa-f]{2})', _repl, text)
+    expanded = _re.sub(r'\\(n|r|t|\\|x[0-9A-Fa-f]{2})', _repl, text)
     return list(expanded.encode('utf-8'))
 
 
@@ -716,13 +617,15 @@ SPI open/write/read/xfer/close command.
   [yellow]--bits 8|16[/yellow]         Word bits [dim](master only, default: 8)[/dim]
   [yellow]--lsb[/yellow]               LSB-first [dim](master only)[/dim]
   [yellow]--fill HH[/yellow]           Fill byte for master read [dim](default: 00)[/dim]
-  [yellow]--text[/yellow]              Text mode for write/xfer
+  [yellow]--text[/yellow]              Text mode for write/xfer [dim](supports \\n, \\r, \\t, \\\\, \\xHH)[/dim]
   [yellow]--timeout MS[/yellow]        Timeout ms for slave read/xfer [dim](default: 10000)[/dim]
 
 [bold cyan]Examples:[/bold cyan]
   replx COM1 spi open --sck GP2 --mosi GP3 --miso GP4 --baud 50000000
   replx COM1 spi write 01 02 03 --cs GP5
   replx COM1 spi xfer 01 02 03 --cs GP5
+  replx COM1 spi write --text "Hello\\n" --cs GP5
+  replx COM1 spi xfer --text "Ping\\r\\n" --cs GP5
   replx COM1 spi close
 
   replx COM2 spi open --slave --sck GP2 --mosi GP3 --cs GP5
