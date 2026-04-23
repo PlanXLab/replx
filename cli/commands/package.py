@@ -79,7 +79,7 @@ def pkg(
     owner: str = typer.Option("PlanXLab", help="GitHub repo owner (for search/download)"),
     repo: str = typer.Option("replx_libs", help="GitHub repo name (for search/download)"),
     ref: str = typer.Option("main", help="Git reference (for search/download)"),
-    target: Optional[str] = typer.Option(None, "--target", "-t", help="Board target path for update (e.g., lib/ticle)"),
+    device: Optional[str] = typer.Option(None, "--device", "-d", help="Board target path for update (e.g., lib/ticle)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
@@ -103,7 +103,7 @@ Package management for MicroPython devices.
     [green]https://...[/green]              Download from URL and install
 
 [bold cyan]Update Options:[/bold cyan]
-    [green]--target[/green] [dim]PATH[/dim]           Specify board target path (e.g., lib/ticle, /lib/ticle)
+    [green]--device[/green] [dim]PATH[/dim]           Specify board target path (e.g., lib/ticle, /lib/ticle)
                             [dim]Applies to core/device targets and URL target[/dim]
 
 [bold cyan]Examples:[/bold cyan]
@@ -114,8 +114,8 @@ Package management for MicroPython devices.
   replx pkg update device.all                        [dim]Install all device libs[/dim]
   replx pkg update core.termio.py                    [dim]→ /lib/termio.mpy[/dim]
   replx pkg update device.termio.py                  [dim]→ /lib/<device>/termio.mpy[/dim]
-  replx pkg update core.termio.py --target lib/ext   [dim]→ /lib/ext/termio.mpy[/dim]
-  replx pkg update https://... --target lib/ext      [dim]→ /lib/ext/[/dim]
+  replx pkg update core.termio.py --device lib/ext   [dim]→ /lib/ext/termio.mpy[/dim]
+  replx pkg update https://... --device lib/ext      [dim]→ /lib/ext/[/dim]
   replx pkg clean                                    [dim]Remove current core/device[/dim]
 
 [bold cyan]Workflow:[/bold cyan] search → download → update core.all
@@ -149,7 +149,7 @@ Package management for MicroPython devices.
     cmd = args[0].lower()
     cmd_args = args[1:] if len(args) > 1 else []
     
-    target_path = target.lstrip("/").rstrip("/") if target else None
+    target_path = device.lstrip("/").rstrip("/") if device else None
     
     if cmd == "search":
         _pkg_search(cmd_args, owner, repo, ref)
@@ -1201,7 +1201,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
             "  [bright_blue]device.<file>[/bright_blue]   Install one device file\n"
             "  [bright_blue]<URL>[/bright_blue]         Download and install from URL\n\n"
             "Options:\n"
-            "  [bright_blue]--target PATH[/bright_blue] Specify board target path\n\n"
+            "  [bright_blue]--device PATH[/bright_blue] Specify board target path\n\n"
             "Examples:\n"
             "  [bright_blue]replx pkg update core.all[/bright_blue]\n"
             "  [bright_blue]replx pkg update core.termio.py[/bright_blue]",
@@ -1349,6 +1349,7 @@ def _pkg_clean(args: list[str]):
 def mpy(
     files: list[str] = typer.Argument(None, help="Python files or directories to compile"),
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Output path (for single file)"),
+    device: Optional[str] = typer.Option(None, "--device", "-d", help="Board destination path for .mpy (e.g., lib)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
@@ -1360,10 +1361,13 @@ Compile Python files to MicroPython bytecode (.mpy).
 
 [bold cyan]Options:[/bold cyan]
   [yellow]-o, --output PATH[/yellow]     Output path (single file only)
+  [yellow]-d, --device PATH[/yellow]     Install compiled .mpy to board at this path (e.g., lib)
 
 [bold cyan]Examples:[/bold cyan]
   replx mpy main.py                  [dim]# Compile single file[/dim]
   replx mpy main.py -o out.mpy       [dim]# Specify output path[/dim]
+  replx mpy main.py -d lib           [dim]# Compile and install to /lib/ on device[/dim]
+  replx mpy *.py -d lib              [dim]# Compile all and install to /lib/ on device[/dim]
   replx mpy *.py                     [dim]# Compile all .py files[/dim]
   replx mpy src/                     [dim]# Compile folder[/dim]
 
@@ -1513,6 +1517,89 @@ Compile Python files to MicroPython bytecode (.mpy).
                 border_style="green"
             )
     
+    if device and compiled:
+        device_path = device.lstrip("/").rstrip("/")
+        client = _create_agent_client()
+        try:
+            client.send_command('mkdir', path="/" + device_path)
+        except Exception:
+            pass
+
+        upload_failed = []
+        upload_ok = []
+
+        for py_file, out_mpy, src_size, mpy_size in compiled:
+            basename = os.path.basename(out_mpy)
+            remote_path = f"/{device_path}/{basename}"
+
+            progress_state = {"current": 0}
+            progress_lock = threading.Lock()
+
+            def progress_callback(data, _state=progress_state, _lock=progress_lock):
+                with _lock:
+                    if isinstance(data, dict):
+                        _state["current"] = data.get("current", 0)
+
+            upload_result = [None]
+
+            def do_upload(lp=out_mpy, rp=remote_path):
+                try:
+                    upload_result[0] = client.send_command_streaming(
+                        'put_from_local_streaming',
+                        progress_callback=progress_callback,
+                        local_path=lp,
+                        remote_path=rp
+                    )
+                except Exception as e:
+                    upload_result[0] = {"error": str(e)}
+
+            upload_thread = threading.Thread(target=do_upload, daemon=True)
+
+            with Live(OutputHelper.create_progress_panel(0, mpy_size, title=f"Installing to {STATE.device}", message=f"{basename} ({OutputHelper.format_bytes(mpy_size)})", counter_text=f"0/{OutputHelper.format_bytes(mpy_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
+                upload_thread.start()
+                while upload_thread.is_alive():
+                    with progress_lock:
+                        current_bytes = progress_state["current"]
+                    live.update(OutputHelper.create_progress_panel(current_bytes, mpy_size, title=f"Installing to {STATE.device}", message=f"{basename} ({OutputHelper.format_bytes(mpy_size)})", counter_text=f"{OutputHelper.format_bytes(current_bytes)}/{OutputHelper.format_bytes(mpy_size)}"))
+                    time.sleep(0.05)
+                upload_thread.join()
+                live.update(OutputHelper.create_progress_panel(mpy_size, mpy_size, title=f"Installing to {STATE.device}", message=f"{basename} ({OutputHelper.format_bytes(mpy_size)})", counter_text=f"{OutputHelper.format_bytes(mpy_size)}/{OutputHelper.format_bytes(mpy_size)}"))
+
+            resp = upload_result[0]
+            if resp and not resp.get('success'):
+                upload_failed.append((basename, resp.get('error', 'Unknown error')))
+            else:
+                upload_ok.append((basename, remote_path, mpy_size))
+
+        if upload_ok:
+            if len(upload_ok) == 1:
+                name, rpath, size = upload_ok[0]
+                OutputHelper.print_panel(
+                    f"[green]✓[/green] {name} → [cyan]{rpath}[/cyan]\n\n"
+                    f"  Size: [cyan]{OutputHelper.format_bytes(size)}[/cyan]",
+                    title=f"Installed to {STATE.device}",
+                    border_style="green"
+                )
+            else:
+                lines = [f"[green]✓[/green] {name} → [cyan]{rpath}[/cyan] ({OutputHelper.format_bytes(size)})" for name, rpath, size in upload_ok]
+                total_uploaded = sum(s for _, _, s in upload_ok)
+                lines.append("")
+                lines.append(f"Total: [cyan]{OutputHelper.format_bytes(total_uploaded)}[/cyan]  Dest: [cyan]/{device_path}/[/cyan]")
+                OutputHelper.print_panel(
+                    "\n".join(lines),
+                    title=f"Installed {len(upload_ok)} files to {STATE.device}",
+                    border_style="green"
+                )
+
+        if upload_failed:
+            lines = [f"[red]✗[/red] {name}: {err}" for name, err in upload_failed]
+            OutputHelper.print_panel(
+                "\n".join(lines),
+                title="Upload Failed",
+                border_style="red"
+            )
+            raise typer.Exit(1)
+
     if failed:
         lines = [f"[red]✗[/red] {os.path.basename(f)}: {err}" for f, err in failed]
         OutputHelper.print_panel(
