@@ -197,9 +197,10 @@ def _detect_vscode_theme_for_setup() -> str | None:
         return None
 
     vscode_theme = data.get("workbench.colorTheme")
-    mapped = _map_vscode_theme_to_replx(vscode_theme if isinstance(vscode_theme, str) else None)
-    if mapped:
-        return mapped
+    if isinstance(vscode_theme, str):
+        vscode_theme = vscode_theme.strip()
+        if vscode_theme:
+            return vscode_theme
 
     return None
 
@@ -361,12 +362,17 @@ Run this once per project folder to set up your workspace.
         raise typer.Exit()
 
     selected_theme = 'dark'
+    display_theme = 'one-dark-pro'
     auto_theme = None
+    configured_theme = theme or 'dark'
     if not theme:
         auto_theme = _detect_vscode_theme_for_setup()
+        if auto_theme:
+            configured_theme = 'vscode-auto'
 
     try:
-        selected_theme = OutputHelper.set_theme(theme or auto_theme or 'dark')
+        selected_theme = OutputHelper.set_theme(configured_theme)
+        display_theme = OutputHelper.get_theme_display_name()
     except ValueError as e:
         OutputHelper.print_panel(
             f"{str(e)}",
@@ -496,7 +502,7 @@ Run this once per project folder to set up your workspace.
                     content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.config as AGENT_PORT)[/dim]\n"
                     content += f"Workspace: [dim]{workspace}[/dim]\n"
                     if auto_theme and not theme:
-                        content += f"Theme: [bright_cyan]{selected_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
+                        content += f"Theme: [bright_cyan]{display_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
                     if typehint_paths:
                         content += f"\nTypehints: [dim]{len(typehint_paths)} path(s) configured[/dim]\n"
                     if default_sync_warning:
@@ -552,7 +558,7 @@ Run this once per project folder to set up your workspace.
                         content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.config as AGENT_PORT)[/dim]\n"
                         content += f"Workspace: [dim]{workspace}[/dim]\n"
                         if auto_theme and not theme:
-                            content += f"Theme: [bright_cyan]{selected_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
+                            content += f"Theme: [bright_cyan]{display_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
                         if typehint_paths:
                             content += f"Typehints: [dim]{len(typehint_paths)} path(s) configured[/dim]\n"
                         content += f"Previous fg: [dim]{_serial_port_display(current_port)}[/dim] → bg"
@@ -691,9 +697,9 @@ Run this once per project folder to set up your workspace.
     content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.config as AGENT_PORT)[/dim]\n"
     content += f"Workspace: [dim]{workspace}[/dim]\n"
     if auto_theme and not theme:
-        content += f"Theme: [bright_cyan]{selected_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
+        content += f"Theme: [bright_cyan]{display_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
     else:
-        content += f"Theme: [bright_cyan]{selected_theme}[/bright_cyan]\n"
+        content += f"Theme: [bright_cyan]{display_theme}[/bright_cyan]\n"
     if typehint_paths:
         content += f"Typehints: [dim]{len(typehint_paths)} path(s) configured[/dim]"
 

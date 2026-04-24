@@ -100,7 +100,7 @@ class ConfigManager:
         result = {
             'connections': {},
             'default': None,
-            'theme': 'dark',
+            'theme': None,
         }
         
         if not os.path.exists(env_path):
@@ -152,7 +152,7 @@ class ConfigManager:
             return result
     
     @staticmethod
-    def write(env_path: str, connections: dict, default: Optional[str] = None, theme: Optional[str] = 'dark'):
+    def write(env_path: str, connections: dict, default: Optional[str] = None, theme: Optional[str] = None):
         lines = []
         
         for conn_key, conn_data in connections.items():
@@ -169,12 +169,10 @@ class ConfigManager:
                 lines.append(f"SERIAL_PORT={conn_data['serial_port']}")
             lines.append('')
         
-        if default or theme:
+        if default:
             lines.append('[DEFAULT]')
             if default:
                 lines.append(f'CONNECTION={default}')
-            if theme:
-                lines.append(f'THEME={theme}')
             lines.append('')
         
         os.makedirs(os.path.dirname(env_path), exist_ok=True)
@@ -287,9 +285,9 @@ class ConfigManager:
             env_data['default'] = conn_key
 
         if theme is not None:
-            env_data['theme'] = theme
+            AgentPortManager._write_registered_theme(theme)
         
-        ConfigManager.write(env_path, env_data['connections'], env_data['default'], env_data.get('theme', 'dark'))
+        ConfigManager.write(env_path, env_data['connections'], env_data['default'])
     
     @staticmethod
     def get_default(env_path: str) -> Optional[str]:
@@ -297,24 +295,19 @@ class ConfigManager:
         return env_data.get('default')
 
     @staticmethod
-    def get_theme(env_path: str) -> str:
-        env_data = ConfigManager.read(env_path)
-        return env_data.get('theme', 'dark')
+    def get_theme(env_path: str | None = None) -> str:
+        theme = AgentPortManager._read_registered_theme(legacy_env_path=env_path)
+        return theme or 'dark'
 
     @staticmethod
-    def set_theme(env_path: str, theme: str):
-        env_data = ConfigManager.read(env_path)
-        ConfigManager.write(
-            env_path,
-            env_data.get('connections', {}),
-            env_data.get('default'),
-            theme,
-        )
+    def set_theme(env_path: str | None, theme: str):
+        AgentPortManager._write_registered_theme(theme)
 
 
 class AgentPortManager:
 
     _AGENT_PORT_KEY = 'AGENT_PORT'
+    _THEME_KEY = 'THEME'
 
     @staticmethod
     def _kill_agent_process_by_port(port: int) -> bool:
@@ -471,6 +464,35 @@ class AgentPortManager:
 
         entries = AgentPortManager._read_agent_config()
         entries[AgentPortManager._AGENT_PORT_KEY] = str(port)
+        AgentPortManager._write_agent_config(entries)
+
+    @staticmethod
+    def _read_registered_theme(legacy_env_path: Optional[str] = None) -> Optional[str]:
+        config_entries = AgentPortManager._read_agent_config()
+        theme = config_entries.get(AgentPortManager._THEME_KEY)
+        if theme:
+            return theme
+
+        if legacy_env_path:
+            legacy_theme = ConfigManager.read(legacy_env_path).get('theme')
+            if legacy_theme:
+                config_entries[AgentPortManager._THEME_KEY] = legacy_theme
+                AgentPortManager._write_agent_config(config_entries)
+                return legacy_theme
+
+        return None
+
+    @staticmethod
+    def _write_registered_theme(theme: Optional[str]) -> None:
+        if theme is None:
+            return
+
+        normalized = str(theme).strip()
+        if not normalized:
+            return
+
+        entries = AgentPortManager._read_agent_config()
+        entries[AgentPortManager._THEME_KEY] = normalized
         AgentPortManager._write_agent_config(entries)
 
     @staticmethod
@@ -707,10 +729,10 @@ def _update_connection_config(env_path: str, connection: str, **kwargs):
 def _get_default_connection(env_path: str) -> Optional[str]:
     return ConfigManager.get_default(env_path)
 
-def _get_theme_config(env_path: str) -> str:
+def _get_theme_config(env_path: str | None = None) -> str:
     return ConfigManager.get_theme(env_path)
 
-def _set_theme_config(env_path: str, theme: str):
+def _set_theme_config(env_path: str | None, theme: str):
     return ConfigManager.set_theme(env_path, theme)
 
 def _find_available_agent_port(env_path: str) -> int:

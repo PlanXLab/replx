@@ -1,6 +1,9 @@
 import os
 import sys
 import re
+import json
+import subprocess
+from functools import lru_cache
 
 from rich.console import Console
 from rich.panel import Panel
@@ -62,6 +65,297 @@ _THEME_STYLES = {
     },
 }
 
+_VSCODE_AUTO_THEME = 'vscode-auto'
+
+
+def _load_jsonc(path: str):
+    if not path or not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = f.read()
+    except Exception:
+        return None
+
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+
+    try:
+        no_block_comments = re.sub(r"/\*.*?\*/", "", raw, flags=re.S)
+        no_line_comments = re.sub(r"(^|\s)//.*$", "", no_block_comments, flags=re.M)
+        no_trailing_commas = re.sub(r",\s*([}\]])", r"\1", no_line_comments)
+        return json.loads(no_trailing_commas)
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _get_portable_vscode_root_from_pshome() -> str | None:
+    pshome = os.environ.get('PSHOME', '').strip()
+    if not pshome:
+        try:
+            result = subprocess.run(
+                ['pwsh', '-NoLogo', '-NoProfile', '-Command', '$PSHOME'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=2,
+                check=False,
+            )
+            pshome = result.stdout.strip()
+        except Exception:
+            return None
+
+    if not pshome:
+        return None
+
+    return os.path.dirname(os.path.dirname(os.path.dirname(pshome)))
+
+
+@lru_cache(maxsize=1)
+def _get_vscode_theme_name_from_settings() -> str | None:
+    vscode_root = _get_portable_vscode_root_from_pshome()
+    if not vscode_root:
+        return None
+
+    settings_path = os.path.join(vscode_root, 'data', 'user-data', 'User', 'settings.json')
+    data = _load_jsonc(settings_path)
+    if not isinstance(data, dict):
+        return None
+
+    theme_name = data.get('workbench.colorTheme')
+    if isinstance(theme_name, str):
+        theme_name = theme_name.strip()
+        if theme_name:
+            return theme_name
+
+    return None
+
+
+def _normalize_hex_color(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    color = value.strip()
+    if not color:
+        return None
+
+    if re.fullmatch(r"#[0-9a-fA-F]{8}", color):
+        return color[:7]
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        return color
+    if re.fullmatch(r"#[0-9a-fA-F]{4}", color):
+        return '#' + ''.join(ch * 2 for ch in color[1:4])
+    if re.fullmatch(r"#[0-9a-fA-F]{3}", color):
+        return '#' + ''.join(ch * 2 for ch in color[1:])
+    if color.lower() in {'black', 'white', 'red', 'green', 'blue', 'yellow', 'magenta', 'cyan'}:
+        return color.lower()
+
+    return None
+
+
+def _normalize_theme_scope(scope_value) -> list[str]:
+    if isinstance(scope_value, str):
+        return [part.strip().lower() for part in scope_value.split(',') if part.strip()]
+    if isinstance(scope_value, list):
+        scopes = []
+        for item in scope_value:
+            if isinstance(item, str):
+                scopes.extend(part.strip().lower() for part in item.split(',') if part.strip())
+        return scopes
+    return []
+
+
+def _get_token_color(token_colors, needles: list[str]) -> str | None:
+    if not isinstance(token_colors, list):
+        return None
+
+    lowered_needles = [needle.lower() for needle in needles]
+    for entry in token_colors:
+        if not isinstance(entry, dict):
+            continue
+        scopes = _normalize_theme_scope(entry.get('scope'))
+        if not scopes:
+            continue
+        if not any(any(needle in scope for scope in scopes) for needle in lowered_needles):
+            continue
+        settings = entry.get('settings')
+        if not isinstance(settings, dict):
+            continue
+        foreground = _normalize_hex_color(settings.get('foreground'))
+        if foreground:
+            return foreground
+
+    return None
+
+
+def _get_color_from_keys(colors: dict, keys: list[str]) -> str | None:
+    for key in keys:
+        color = _normalize_hex_color(colors.get(key))
+        if color:
+            return color
+    return None
+
+
+def _map_vscode_theme_to_builtin(theme_name: str | None, ui_theme: str | None = None) -> str:
+    label = (theme_name or '').strip().lower()
+    ui = (ui_theme or '').strip().lower()
+
+    if 'github' in label and 'light' in label:
+        return 'github-light'
+    if 'github' in label and 'dark' in label:
+        return 'github-dark'
+    if 'one dark' in label:
+        return 'one-dark-pro'
+    if 'atom' in label and 'one' in label and 'light' in label:
+        return 'atom-one-light'
+    if 'light' in label or 'white' in label:
+        return 'atom-one-light'
+    if 'dark' in label:
+        return 'one-dark-pro'
+    if ui in {'vs', 'hc-light'}:
+        return 'atom-one-light'
+    return 'one-dark-pro'
+
+
+@lru_cache(maxsize=1)
+def _get_vscode_theme_contributions() -> tuple[tuple[str, str, str | None, str], ...]:
+    vscode_root = _get_portable_vscode_root_from_pshome()
+    if not vscode_root:
+        return ()
+
+    extensions_root = os.path.join(vscode_root, 'data', 'extensions')
+    if not os.path.isdir(extensions_root):
+        return ()
+
+    contributions: list[tuple[str, str, str | None, str]] = []
+    try:
+        extension_dirs = sorted(os.listdir(extensions_root))
+    except Exception:
+        return ()
+
+    for directory_name in extension_dirs:
+        extension_dir = os.path.join(extensions_root, directory_name)
+        if not os.path.isdir(extension_dir):
+            continue
+
+        package_path = os.path.join(extension_dir, 'package.json')
+        manifest = _load_jsonc(package_path)
+        if not isinstance(manifest, dict):
+            continue
+
+        contributes = manifest.get('contributes')
+        if not isinstance(contributes, dict):
+            continue
+
+        themes = contributes.get('themes')
+        if not isinstance(themes, list):
+            continue
+
+        for theme in themes:
+            if not isinstance(theme, dict):
+                continue
+            label = theme.get('label')
+            relative_path = theme.get('path')
+            if not isinstance(label, str) or not isinstance(relative_path, str):
+                continue
+            ui_theme = theme.get('uiTheme') if isinstance(theme.get('uiTheme'), str) else None
+            theme_path = os.path.normpath(os.path.join(extension_dir, relative_path))
+            contributions.append((label.strip().lower(), label.strip(), ui_theme, theme_path))
+
+    return tuple(contributions)
+
+
+def _find_vscode_theme_entry(theme_name: str) -> tuple[str, str | None, str] | None:
+    needle = theme_name.strip().lower()
+    if not needle:
+        return None
+
+    for label_key, label, ui_theme, theme_path in _get_vscode_theme_contributions():
+        if label_key == needle:
+            return label, ui_theme, theme_path
+
+    return None
+
+
+def _build_dynamic_vscode_styles(theme_name: str, ui_theme: str | None, theme_data: dict) -> dict[str, str]:
+    base_theme = _map_vscode_theme_to_builtin(theme_name, ui_theme)
+    styles = dict(_THEME_STYLES[base_theme])
+
+    colors = theme_data.get('colors')
+    if not isinstance(colors, dict):
+        colors = {}
+    token_colors = theme_data.get('tokenColors')
+
+    extracted = {
+        'blue': _get_color_from_keys(colors, ['terminal.ansiBlue', 'editorCursor.foreground', 'button.background', 'focusBorder']) or _get_token_color(token_colors, ['entity.name.function', 'keyword.other.special-method', 'support.function.any-method']),
+        'cyan': _get_color_from_keys(colors, ['terminal.ansiCyan', 'textLink.foreground', 'badge.background']) or _get_token_color(token_colors, ['support.function', 'support.type', 'string.regexp', 'markup.link']),
+        'green': _get_color_from_keys(colors, ['terminal.ansiGreen', 'terminal.ansiBrightGreen']) or _get_token_color(token_colors, ['string', 'markup.inserted']),
+        'yellow': _get_color_from_keys(colors, ['terminal.ansiYellow', 'terminal.ansiBrightYellow']) or _get_token_color(token_colors, ['constant.numeric', 'constant', 'entity.name.type', 'storage.type']),
+        'magenta': _get_color_from_keys(colors, ['terminal.ansiMagenta', 'terminal.ansiBrightMagenta']) or _get_token_color(token_colors, ['keyword', 'storage']),
+        'red': _get_color_from_keys(colors, ['terminal.ansiRed', 'terminal.ansiBrightRed']) or _get_token_color(token_colors, ['variable', 'invalid', 'markup.deleted']),
+        'white': _get_color_from_keys(colors, ['terminal.foreground', 'editor.foreground']),
+        'bright_white': _get_color_from_keys(colors, ['terminal.ansiBrightWhite', 'terminal.foreground', 'editor.foreground']),
+        'dim': _get_color_from_keys(colors, ['terminal.ansiBrightBlack', 'descriptionForeground', 'editorLineNumber.foreground']) or _get_token_color(token_colors, ['comment']),
+    }
+
+    for key, color in extracted.items():
+        if color:
+            styles[key] = color
+
+    for key in ('blue', 'cyan', 'green', 'yellow', 'magenta', 'red'):
+        bright_key = f'bright_{key}'
+        if extracted.get(key):
+            styles[bright_key] = extracted[key]
+
+    if styles.get('white') and not extracted.get('bright_white'):
+        styles['bright_white'] = styles['white']
+
+    return styles
+
+
+@lru_cache(maxsize=32)
+def _resolve_dynamic_vscode_theme(theme_name: str) -> tuple[str, dict[str, str]] | None:
+    entry = _find_vscode_theme_entry(theme_name)
+    if entry:
+        label, ui_theme, theme_path = entry
+        theme_data = _load_jsonc(theme_path)
+        if isinstance(theme_data, dict):
+            return label, _build_dynamic_vscode_styles(label, ui_theme, theme_data)
+        base_theme = _map_vscode_theme_to_builtin(label, ui_theme)
+        return label, dict(_THEME_STYLES[base_theme])
+
+    theme_name = theme_name.strip()
+    if theme_name:
+        base_theme = _map_vscode_theme_to_builtin(theme_name)
+        return theme_name, dict(_THEME_STYLES[base_theme])
+
+    return None
+
+
+def _resolve_theme_config(name: str | None) -> tuple[str, str, dict[str, str]]:
+    raw_name = (name or 'dark').strip() or 'dark'
+    canonical = _normalize_theme_name(raw_name)
+    if canonical in _THEME_STYLES:
+        return canonical, canonical, dict(_THEME_STYLES[canonical])
+
+    if raw_name.lower() == _VSCODE_AUTO_THEME:
+        current_vscode_theme = _get_vscode_theme_name_from_settings()
+        if current_vscode_theme:
+            resolved = _resolve_dynamic_vscode_theme(current_vscode_theme)
+            if resolved:
+                display_name, styles = resolved
+                return _VSCODE_AUTO_THEME, display_name, styles
+        return _VSCODE_AUTO_THEME, 'one-dark-pro', dict(_THEME_STYLES['one-dark-pro'])
+
+    raise ValueError(
+        f"Unsupported theme '{name}'. Available: {', '.join(OutputHelper.available_themes())}"
+    )
+
 
 def _normalize_theme_name(name: str | None) -> str:
     key = (name or 'dark').strip().lower()
@@ -69,8 +363,10 @@ def _normalize_theme_name(name: str | None) -> str:
 
 
 def _build_rich_theme(name: str) -> Theme:
-    canonical = _normalize_theme_name(name)
-    styles = _THEME_STYLES.get(canonical, _THEME_STYLES['one-dark-pro'])
+    try:
+        _, _, styles = _resolve_theme_config(name)
+    except Exception:
+        styles = _THEME_STYLES['one-dark-pro']
     return Theme(styles)
 
 
@@ -79,13 +375,15 @@ class OutputHelper:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     
     _theme_name = 'one-dark-pro'
-    _console = Console(width=CONSOLE_WIDTH, legacy_windows=False, theme=_build_rich_theme(_theme_name))
+    _theme_display_name = 'one-dark-pro'
+    _theme_styles = dict(_THEME_STYLES[_theme_name])
+    _console = Console(width=CONSOLE_WIDTH, legacy_windows=False, theme=Theme(_theme_styles))
     PANEL_WIDTH = None
 
     @staticmethod
     def make_console(width: int = CONSOLE_WIDTH, file=None, **kwargs) -> Console:
         kwargs.setdefault('legacy_windows', False)
-        kwargs.setdefault('theme', _build_rich_theme(OutputHelper._theme_name))
+        kwargs.setdefault('theme', Theme(dict(OutputHelper._theme_styles)))
         return Console(width=width, file=file, **kwargs)
 
     @staticmethod
@@ -94,18 +392,20 @@ class OutputHelper:
 
     @staticmethod
     def set_theme(theme_name: str | None) -> str:
-        canonical = _normalize_theme_name(theme_name)
-        if canonical not in _THEME_STYLES:
-            raise ValueError(
-                f"Unsupported theme '{theme_name}'. Available: {', '.join(OutputHelper.available_themes())}"
-            )
-        OutputHelper._theme_name = canonical
+        stored_name, display_name, styles = _resolve_theme_config(theme_name)
+        OutputHelper._theme_name = stored_name
+        OutputHelper._theme_display_name = display_name
+        OutputHelper._theme_styles = styles
         OutputHelper._console = OutputHelper.make_console(width=CONSOLE_WIDTH)
-        return canonical
+        return stored_name
 
     @staticmethod
     def get_theme() -> str:
         return OutputHelper._theme_name
+
+    @staticmethod
+    def get_theme_display_name() -> str:
+        return OutputHelper._theme_display_name
 
     @staticmethod
     def format_bytes(b: int) -> str:

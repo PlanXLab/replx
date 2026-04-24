@@ -101,8 +101,7 @@ def _apply_workspace_theme() -> None:
     theme = 'dark'
     try:
         env_path = _find_env_file()
-        if env_path:
-            theme = _get_theme_config(env_path) or 'dark'
+        theme = _get_theme_config(env_path) or 'dark'
     except Exception:
         theme = 'dark'
 
