@@ -9,7 +9,6 @@ from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
 from rich.live import Live
 
@@ -83,7 +82,7 @@ def pkg(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Package management for MicroPython devices.
 
@@ -1353,7 +1352,7 @@ def mpy(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Compile Python files to MicroPython bytecode (.mpy).
 

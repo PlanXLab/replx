@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
 from rich.live import Live
 from rich.spinner import Spinner
@@ -338,7 +337,7 @@ def _firmware_download():
     
     current_version = status.get('version', 'unknown')
     
-    console = Console()
+    console = OutputHelper.make_console()
     spinner = Spinner("dots", text=Text(" Checking for firmware updates...", style="bright_cyan"))
     
     try:

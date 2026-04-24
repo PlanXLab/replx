@@ -99,7 +99,8 @@ class ConfigManager:
     def read(env_path: str) -> dict:
         result = {
             'connections': {},
-            'default': None
+            'default': None,
+            'theme': 'dark',
         }
         
         if not os.path.exists(env_path):
@@ -131,6 +132,8 @@ class ConfigManager:
                     if current_section.upper() == 'DEFAULT':
                         if key == 'CONNECTION':
                             result['default'] = value
+                        elif key == 'THEME':
+                            result['theme'] = value
                     else:
                         conn = result['connections'][current_section]
                         if key == 'VERSION':
@@ -149,7 +152,7 @@ class ConfigManager:
             return result
     
     @staticmethod
-    def write(env_path: str, connections: dict, default: Optional[str] = None):
+    def write(env_path: str, connections: dict, default: Optional[str] = None, theme: Optional[str] = 'dark'):
         lines = []
         
         for conn_key, conn_data in connections.items():
@@ -166,9 +169,12 @@ class ConfigManager:
                 lines.append(f"SERIAL_PORT={conn_data['serial_port']}")
             lines.append('')
         
-        if default:
+        if default or theme:
             lines.append('[DEFAULT]')
-            lines.append(f'CONNECTION={default}')
+            if default:
+                lines.append(f'CONNECTION={default}')
+            if theme:
+                lines.append(f'THEME={theme}')
             lines.append('')
         
         os.makedirs(os.path.dirname(env_path), exist_ok=True)
@@ -199,6 +205,7 @@ class ConfigManager:
                           manufacturer: str = None,
                           serial_port: str = None,
                           agent_port: int = None,
+                          theme: str = None,
                           set_default: bool = False):
 
         def _resolve_os_serial_port_name(port: str) -> str:
@@ -278,16 +285,36 @@ class ConfigManager:
         
         if set_default:
             env_data['default'] = conn_key
+
+        if theme is not None:
+            env_data['theme'] = theme
         
-        ConfigManager.write(env_path, env_data['connections'], env_data['default'])
+        ConfigManager.write(env_path, env_data['connections'], env_data['default'], env_data.get('theme', 'dark'))
     
     @staticmethod
     def get_default(env_path: str) -> Optional[str]:
         env_data = ConfigManager.read(env_path)
         return env_data.get('default')
 
+    @staticmethod
+    def get_theme(env_path: str) -> str:
+        env_data = ConfigManager.read(env_path)
+        return env_data.get('theme', 'dark')
+
+    @staticmethod
+    def set_theme(env_path: str, theme: str):
+        env_data = ConfigManager.read(env_path)
+        ConfigManager.write(
+            env_path,
+            env_data.get('connections', {}),
+            env_data.get('default'),
+            theme,
+        )
+
 
 class AgentPortManager:
+
+    _AGENT_PORT_KEY = 'AGENT_PORT'
 
     @staticmethod
     def _kill_agent_process_by_port(port: int) -> bool:
@@ -365,20 +392,72 @@ class AgentPortManager:
         return primary_port
 
     @staticmethod
-    def _agent_port_file() -> str:
+    def _agent_config_file() -> str:
+        return os.path.join(os.path.expanduser('~'), '.replx', '.config')
+
+    @staticmethod
+    def _legacy_agent_port_file() -> str:
         return os.path.join(os.path.expanduser('~'), '.replx', '.agent_port')
 
     @staticmethod
-    def _read_registered_port() -> Optional[int]:
-        path = AgentPortManager._agent_port_file()
+    def _read_agent_config() -> dict[str, str]:
+        path = AgentPortManager._agent_config_file()
+        result: dict[str, str] = {}
         if not os.path.exists(path):
-            return None
+            return result
 
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                value = f.read().strip()
-            port = int(value)
-        except (OSError, ValueError, TypeError):
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if key:
+                        result[key] = value
+        except OSError:
+            return {}
+
+        return result
+
+    @staticmethod
+    def _write_agent_config(entries: dict[str, str]) -> None:
+        path = AgentPortManager._agent_config_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = f'{path}.tmp'
+        with _write_port_lock:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                for key in sorted(entries.keys()):
+                    f.write(f'{key}={entries[key]}\n')
+            os.replace(tmp_path, path)
+
+    @staticmethod
+    def _read_registered_port() -> Optional[int]:
+        config_entries = AgentPortManager._read_agent_config()
+        value = config_entries.get(AgentPortManager._AGENT_PORT_KEY)
+
+        # Backward compatibility: read legacy ~/.replx/.agent_port once and migrate.
+        if value is None:
+            legacy_path = AgentPortManager._legacy_agent_port_file()
+            if os.path.exists(legacy_path):
+                try:
+                    with open(legacy_path, 'r', encoding='utf-8') as f:
+                        value = f.read().strip()
+                except OSError:
+                    value = None
+
+                if value:
+                    config_entries[AgentPortManager._AGENT_PORT_KEY] = value
+                    AgentPortManager._write_agent_config(config_entries)
+
+        try:
+            port = int(value) if value is not None else None
+        except (ValueError, TypeError):
+            return None
+
+        if port is None:
             return None
 
         if MIN_AGENT_PORT <= port <= MAX_AGENT_PORT:
@@ -390,13 +469,9 @@ class AgentPortManager:
         if not isinstance(port, int) or not (MIN_AGENT_PORT <= port <= MAX_AGENT_PORT):
             return
 
-        path = AgentPortManager._agent_port_file()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp_path = f'{path}.tmp'
-        with _write_port_lock:
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                f.write(f'{port}\n')
-            os.replace(tmp_path, path)
+        entries = AgentPortManager._read_agent_config()
+        entries[AgentPortManager._AGENT_PORT_KEY] = str(port)
+        AgentPortManager._write_agent_config(entries)
 
     @staticmethod
     def _can_bind_port(port: Optional[int]) -> bool:
@@ -631,6 +706,12 @@ def _update_connection_config(env_path: str, connection: str, **kwargs):
 
 def _get_default_connection(env_path: str) -> Optional[str]:
     return ConfigManager.get_default(env_path)
+
+def _get_theme_config(env_path: str) -> str:
+    return ConfigManager.get_theme(env_path)
+
+def _set_theme_config(env_path: str, theme: str):
+    return ConfigManager.set_theme(env_path, theme)
 
 def _find_available_agent_port(env_path: str) -> int:
     return AgentPortManager.find_available_port(env_path)

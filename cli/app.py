@@ -1,7 +1,6 @@
 import sys
 from typing import Optional
 import typer
-from rich.console import Console
 from rich.panel import Panel
 
 from replx import __version__
@@ -9,7 +8,7 @@ from .helpers.output import OutputHelper, get_panel_box, CONSOLE_WIDTH
 from .helpers.updater import UpdateChecker
 from .helpers.environment import EnvironmentManager
 from .connection import _ensure_connected, _create_agent_client
-from .config import STATE, _set_global_options
+from .config import STATE, _set_global_options, _find_env_file, _get_theme_config
 
 
 import re
@@ -98,8 +97,26 @@ _preprocess_connection_shortcut()
 _preprocess_cli_aliases()
 
 
+def _apply_workspace_theme() -> None:
+    theme = 'dark'
+    try:
+        env_path = _find_env_file()
+        if env_path:
+            theme = _get_theme_config(env_path) or 'dark'
+    except Exception:
+        theme = 'dark'
+
+    try:
+        OutputHelper.set_theme(theme)
+    except Exception:
+        OutputHelper.set_theme('dark')
+
+
+_apply_workspace_theme()
+
+
 def _get_console():
-    return Console(width=CONSOLE_WIDTH, legacy_windows=False)
+    return OutputHelper.make_console(width=CONSOLE_WIDTH)
 
 
 try:
@@ -119,7 +136,7 @@ try:
     def _format_help_width(self, ctx, formatter):
         old_console = getattr(self, '_rich_console', None)
         try:
-            self._rich_console = Console(width=CONSOLE_WIDTH, legacy_windows=False)
+            self._rich_console = OutputHelper.make_console(width=CONSOLE_WIDTH)
             return _original_rich_command_format_help(self, ctx, formatter)
         finally:
             if old_console is not None:
@@ -204,7 +221,7 @@ def _build_command_help(ctx) -> str:
 
 
 def _custom_usage_error_show(self, output_file=None):
-    console = Console(width=CONSOLE_WIDTH, file=sys.stderr)
+    console = OutputHelper.make_console(width=CONSOLE_WIDTH, file=sys.stderr)
     
     error_msg = _original_usage_error_format_message(self)
     error_lines = []
@@ -240,7 +257,7 @@ def _custom_usage_error_show(self, output_file=None):
 
 
 def _handle_usage_error(e):
-    console = Console(width=CONSOLE_WIDTH, file=sys.stderr)
+    console = OutputHelper.make_console(width=CONSOLE_WIDTH, file=sys.stderr)
     
     error_msg = str(e.format_message()) if hasattr(e, 'format_message') else str(e)
     error_lines = []

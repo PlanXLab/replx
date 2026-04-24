@@ -3,10 +3,10 @@ import sys
 import time
 import re
 import json
+import subprocess
 from io import StringIO
 
 import typer
-from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
@@ -113,6 +113,97 @@ def _check_vscode_version(vscode_dir: str) -> bool:
     return False
 
 
+def _load_jsonc(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+    except Exception:
+        return None
+
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        pass
+
+    # Best-effort JSONC support for VS Code settings.
+    try:
+        no_block_comments = re.sub(r"/\*.*?\*/", "", raw, flags=re.S)
+        no_line_comments = re.sub(r"(^|\s)//.*$", "", no_block_comments, flags=re.M)
+        no_trailing_commas = re.sub(r",\s*([}\]])", r"\1", no_line_comments)
+        data = json.loads(no_trailing_commas)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _get_portable_vscode_root_from_pshome() -> str | None:
+    pshome = os.environ.get("PSHOME", "").strip()
+    if not pshome:
+        try:
+            result = subprocess.run(
+                ["pwsh", "-NoLogo", "-NoProfile", "-Command", "$PSHOME"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=2,
+                check=False,
+            )
+            pshome = result.stdout.strip()
+        except Exception:
+            return None
+
+    if not pshome:
+        return None
+
+    return os.path.dirname(os.path.dirname(os.path.dirname(pshome)))
+
+
+def _map_vscode_theme_to_replx(vscode_theme: str | None) -> str | None:
+    if not vscode_theme:
+        return None
+
+    t = vscode_theme.strip().lower()
+
+    if "github" in t and "light" in t:
+        return "github-light"
+    if "github" in t and "dark" in t:
+        return "github-dark"
+    if "one dark" in t:
+        return "one-dark-pro"
+    if "atom" in t and "one" in t and "light" in t:
+        return "atom-one-light"
+    if "light" in t or "white" in t:
+        return "white"
+    if "dark" in t:
+        return "dark"
+
+    return None
+
+
+def _detect_vscode_theme_for_setup() -> str | None:
+    vscode_root = _get_portable_vscode_root_from_pshome()
+    if not vscode_root:
+        return None
+
+    portable_settings = os.path.join(vscode_root, "data", "user-data", "User", "settings.json")
+
+    data = _load_jsonc(portable_settings)
+    if not isinstance(data, dict):
+        return None
+
+    vscode_theme = data.get("workbench.colorTheme")
+    mapped = _map_vscode_theme_to_replx(vscode_theme if isinstance(vscode_theme, str) else None)
+    if mapped:
+        return mapped
+
+    return None
+
+
 def _create_vscode_files_and_typehints(vscode_dir: str, core: str, device: str, overwrite: bool = False):
     task_file = os.path.join(vscode_dir, "tasks.json")
     settings_file = os.path.join(vscode_dir, "settings.json")
@@ -210,10 +301,15 @@ def _create_vscode_files_and_typehints(vscode_dir: str, core: str, device: str, 
 @app.command(rich_help_panel="Connection & Session")
 def setup(
     clean: bool = typer.Option(False, "--clean", help="Delete .vscode folder in current project"),
+    theme: str = typer.Option(
+        None,
+        "--theme",
+        help="UI theme: dark, white, one-dark-pro, atom-one-light, github-dark, github-light",
+    ),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Initialize MicroPython development environment for VSCode.
 
@@ -229,21 +325,25 @@ Run this once per project folder to set up your workspace.
   4. Saves connection info for subsequent commands
 
 [bold cyan]Usage:[/bold cyan]
-  replx [yellow]PORT[/yellow] setup                          [dim]# Serial: COM3, /dev/ttyUSB0[/dim]
+  replx [yellow]PORT[/yellow] setup                       [dim]# Serial: COM3, /dev/ttyUSB0[/dim]
   replx setup [yellow]--clean[/yellow]                    [dim]# Delete .vscode folder (no PORT needed)[/dim]
 
 [bold cyan]Options:[/bold cyan]
   [yellow]--clean[/yellow]   Delete the [yellow].vscode[/yellow] folder in the current project directory.
             All configuration and typehints will be removed.
+  [yellow]--theme[/yellow]   UI theme preset. If omitted, try VSCode theme auto-detect, fallback [yellow]dark[/yellow].
+            Supported: [dim]dark, white, one-dark-pro, atom-one-light, github-dark, github-light[/dim]
 
 [bold cyan]Agent Port:[/bold cyan]
     replx automatically selects a free UDP port from the dynamic range
-    [cyan]49152-65535[/cyan] and stores it in [dim]~/.replx/.agent_port[/dim].
+    [cyan]49152-65535[/cyan] and stores it in [dim]~/.replx/.config[/dim] as [dim]AGENT_PORT=...[/dim].
     If that port is already used by another program, replx chooses a new one automatically.
 
 [bold cyan]Examples:[/bold cyan]
   replx COM3 setup                         [dim]# Windows serial port[/dim]
   replx /dev/ttyACM0 setup                 [dim]# Linux serial port[/dim]
+  replx COM3 setup --theme white           [dim]# Light UI preset[/dim]
+  replx COM3 setup --theme github-light    [dim]# GitHub light preset[/dim]
   replx setup --clean                      [dim]# Remove .vscode folder[/dim]
 
 [bold cyan]After setup, you can:[/bold cyan]
@@ -259,6 +359,21 @@ Run this once per project folder to set up your workspace.
         OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
+
+    selected_theme = 'dark'
+    auto_theme = None
+    if not theme:
+        auto_theme = _detect_vscode_theme_for_setup()
+
+    try:
+        selected_theme = OutputHelper.set_theme(theme or auto_theme or 'dark')
+    except ValueError as e:
+        OutputHelper.print_panel(
+            f"{str(e)}",
+            title="Invalid Theme",
+            border_style="red"
+        )
+        raise typer.Exit(1)
 
     if clean:
         _port = _get_global_options().get('port')
@@ -355,6 +470,7 @@ Run this once per project folder to set up your workspace.
                         env_path, port,
                         version=version, core=core, device=device,
                         manufacturer=manufacturer,
+                        theme=selected_theme,
                         set_default=True
                     )
 
@@ -377,8 +493,10 @@ Run this once per project folder to set up your workspace.
                     content += f"Device: [bright_yellow]{device}[/bright_yellow]\n"
                     if manufacturer:
                         content += f"Manufacturer: [bright_magenta]{manufacturer}[/bright_magenta]\n"
-                    content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.agent_port)[/dim]\n"
+                    content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.config as AGENT_PORT)[/dim]\n"
                     content += f"Workspace: [dim]{workspace}[/dim]\n"
+                    if auto_theme and not theme:
+                        content += f"Theme: [bright_cyan]{selected_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
                     if typehint_paths:
                         content += f"\nTypehints: [dim]{len(typehint_paths)} path(s) configured[/dim]\n"
                     if default_sync_warning:
@@ -391,7 +509,7 @@ Run this once per project folder to set up your workspace.
                     
                     OutputHelper.print_panel(
                         content,
-                        title="Current Connection",
+                        title="Setup Complete",
                         border_style="green"
                     )
                     raise typer.Exit()
@@ -418,6 +536,7 @@ Run this once per project folder to set up your workspace.
                             env_path, port,
                             version=STATE.version, core=STATE.core, device=STATE.device,
                             manufacturer=STATE.manufacturer,
+                            theme=selected_theme,
                             set_default=True 
                         )
                         
@@ -430,8 +549,10 @@ Run this once per project folder to set up your workspace.
                         content += f"Device: [bright_yellow]{STATE.device}[/bright_yellow]\n"
                         if STATE.manufacturer:
                             content += f"Manufacturer: [bright_magenta]{STATE.manufacturer}[/bright_magenta]\n"
-                        content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.agent_port)[/dim]\n"
+                        content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.config as AGENT_PORT)[/dim]\n"
                         content += f"Workspace: [dim]{workspace}[/dim]\n"
+                        if auto_theme and not theme:
+                            content += f"Theme: [bright_cyan]{selected_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
                         if typehint_paths:
                             content += f"Typehints: [dim]{len(typehint_paths)} path(s) configured[/dim]\n"
                         content += f"Previous fg: [dim]{_serial_port_display(current_port)}[/dim] → bg"
@@ -553,6 +674,7 @@ Run this once per project folder to set up your workspace.
         core=STATE.core,
         device=STATE.device,
         manufacturer=STATE.manufacturer,
+        theme=selected_theme,
         set_default=set_as_default
     )
     
@@ -566,8 +688,12 @@ Run this once per project folder to set up your workspace.
     content += f"Device: [bright_yellow]{STATE.device}[/bright_yellow]\n"
     if STATE.manufacturer:
         content += f"Manufacturer: [bright_magenta]{STATE.manufacturer}[/bright_magenta]\n"
-    content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.agent_port)[/dim]\n"
+    content += f"Agent Port: [cyan]{agent_port}[/cyan] [dim](UDP, saved to ~/.replx/.config as AGENT_PORT)[/dim]\n"
     content += f"Workspace: [dim]{workspace}[/dim]\n"
+    if auto_theme and not theme:
+        content += f"Theme: [bright_cyan]{selected_theme}[/bright_cyan] [dim](auto-detected from VSCode theme)[/dim]\n"
+    else:
+        content += f"Theme: [bright_cyan]{selected_theme}[/bright_cyan]\n"
     if typehint_paths:
         content += f"Typehints: [dim]{len(typehint_paths)} path(s) configured[/dim]"
 
@@ -583,7 +709,7 @@ def usage(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Show memory and storage usage of the connected device.
 
@@ -672,7 +798,7 @@ def scan(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Find and list all connected MicroPython boards.
 
@@ -894,7 +1020,7 @@ Scans all serial ports to detect MicroPython devices.
             has_serial = True
     
     string_io = StringIO()
-    temp_console = Console(file=string_io, force_terminal=True, width=300)
+    temp_console = OutputHelper.make_console(file=string_io, force_terminal=True, width=300)
     
     if has_serial:
         temp_console.print(serial_table)

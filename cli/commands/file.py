@@ -8,7 +8,6 @@ import threading
 from typing import Optional
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
 from rich.live import Live
 
@@ -24,7 +23,7 @@ def get(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Download files or directories from the device to your computer.
 
@@ -298,7 +297,7 @@ def cat(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Display the contents of a file on the connected device.
 
@@ -538,7 +537,7 @@ def mkdir(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Create directories on the connected device.
 
@@ -630,7 +629,7 @@ def rm(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Delete files or directories from the connected device.
 
@@ -915,7 +914,7 @@ def cp(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Copy files or directories on the connected device.
 
@@ -1179,7 +1178,7 @@ def mv(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Move or rename files and directories on the connected device.
 
@@ -1429,7 +1428,7 @@ def touch(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Create empty files on the connected device.
 
@@ -1514,7 +1513,7 @@ def ls(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 List files and directories on the connected device.
 
@@ -1689,7 +1688,7 @@ def put(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Upload files or directories from your computer to the device.
 

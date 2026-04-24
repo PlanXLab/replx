@@ -4,16 +4,108 @@ import re
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.theme import Theme
 
 from . import get_panel_box, CONSOLE_WIDTH, get_global_context
+
+
+_THEME_ALIASES = {
+    'dark': 'one-dark-pro',
+    'light': 'atom-one-light',
+    'white': 'atom-one-light',
+    'one-dark-pro': 'one-dark-pro',
+    'atom-one-light': 'atom-one-light',
+    'github-dark': 'github-dark',
+    'github-light': 'github-light',
+}
+
+_THEME_STYLES = {
+    'one-dark-pro': {
+        'blue': '#61afef', 'bright_blue': '#61afef',
+        'cyan': '#56b6c2', 'bright_cyan': '#56b6c2',
+        'green': '#98c379', 'bright_green': '#98c379',
+        'yellow': '#e5c07b', 'bright_yellow': '#e5c07b',
+        'magenta': '#c678dd', 'bright_magenta': '#c678dd',
+        'red': '#e06c75', 'bright_red': '#e06c75',
+        'white': '#abb2bf', 'bright_white': '#d7dae0',
+        'dim': '#7f848e',
+    },
+    'atom-one-light': {
+        'blue': '#005cc5', 'bright_blue': '#005cc5',
+        'cyan': '#0184bc', 'bright_cyan': '#0184bc',
+        'green': '#22863a', 'bright_green': '#22863a',
+        'yellow': '#b08800', 'bright_yellow': '#b08800',
+        'magenta': '#6f42c1', 'bright_magenta': '#6f42c1',
+        'red': '#d73a49', 'bright_red': '#d73a49',
+        'white': '#24292e', 'bright_white': '#24292e',
+        'dim': '#6a737d',
+    },
+    'github-dark': {
+        'blue': '#79c0ff', 'bright_blue': '#79c0ff',
+        'cyan': '#39c5cf', 'bright_cyan': '#39c5cf',
+        'green': '#7ee787', 'bright_green': '#7ee787',
+        'yellow': '#d29922', 'bright_yellow': '#d29922',
+        'magenta': '#d2a8ff', 'bright_magenta': '#d2a8ff',
+        'red': '#ff7b72', 'bright_red': '#ff7b72',
+        'white': '#c9d1d9', 'bright_white': '#f0f6fc',
+        'dim': '#8b949e',
+    },
+    'github-light': {
+        'blue': '#0969da', 'bright_blue': '#0969da',
+        'cyan': '#1b7c83', 'bright_cyan': '#1b7c83',
+        'green': '#1a7f37', 'bright_green': '#1a7f37',
+        'yellow': '#9a6700', 'bright_yellow': '#9a6700',
+        'magenta': '#8250df', 'bright_magenta': '#8250df',
+        'red': '#cf222e', 'bright_red': '#cf222e',
+        'white': '#1f2328', 'bright_white': '#1f2328',
+        'dim': '#656d76',
+    },
+}
+
+
+def _normalize_theme_name(name: str | None) -> str:
+    key = (name or 'dark').strip().lower()
+    return _THEME_ALIASES.get(key, key)
+
+
+def _build_rich_theme(name: str) -> Theme:
+    canonical = _normalize_theme_name(name)
+    styles = _THEME_STYLES.get(canonical, _THEME_STYLES['one-dark-pro'])
+    return Theme(styles)
 
 
 class OutputHelper:
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     
-    _console = Console(width=CONSOLE_WIDTH, legacy_windows=False)
+    _theme_name = 'one-dark-pro'
+    _console = Console(width=CONSOLE_WIDTH, legacy_windows=False, theme=_build_rich_theme(_theme_name))
     PANEL_WIDTH = None
+
+    @staticmethod
+    def make_console(width: int = CONSOLE_WIDTH, file=None, **kwargs) -> Console:
+        kwargs.setdefault('legacy_windows', False)
+        kwargs.setdefault('theme', _build_rich_theme(OutputHelper._theme_name))
+        return Console(width=width, file=file, **kwargs)
+
+    @staticmethod
+    def available_themes() -> list[str]:
+        return ['dark', 'white', 'one-dark-pro', 'atom-one-light', 'github-dark', 'github-light']
+
+    @staticmethod
+    def set_theme(theme_name: str | None) -> str:
+        canonical = _normalize_theme_name(theme_name)
+        if canonical not in _THEME_STYLES:
+            raise ValueError(
+                f"Unsupported theme '{theme_name}'. Available: {', '.join(OutputHelper.available_themes())}"
+            )
+        OutputHelper._theme_name = canonical
+        OutputHelper._console = OutputHelper.make_console(width=CONSOLE_WIDTH)
+        return canonical
+
+    @staticmethod
+    def get_theme() -> str:
+        return OutputHelper._theme_name
 
     @staticmethod
     def format_bytes(b: int) -> str:

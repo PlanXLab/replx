@@ -594,7 +594,7 @@ When you have multiple boards connected, use this to switch between them.
 
 [bold cyan]Usage:[/bold cyan]
   replx fg                    [dim]# Interactive: select from list[/dim]
-  replx [cyan]PORT[/cyan] fg                [dim]# Direct: switch to PORT[/dim]
+  replx [cyan]PORT[/cyan] fg               [dim]# Direct: switch to PORT[/dim]
 
 [bold cyan]Examples:[/bold cyan]
   replx fg                    [dim]# Show menu to pick a board[/dim]
@@ -613,7 +613,7 @@ When you have multiple boards connected, use this to switch between them.
   • Press Enter to switch
 
 [bold cyan]Related:[/bold cyan]
-  replx status            [dim]# See all active connections[/dim]"""
+  replx status                [dim]# See all active connections[/dim]"""
         OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
@@ -808,7 +808,7 @@ The connection is closed and removed from ALL sessions that reference it.
   • For full cleanup (stop agent too), use [yellow]replx shutdown[/yellow]
 
 [bold cyan]Related:[/bold cyan]
-  replx shutdown          [dim]# Stop ALL connections and agent[/dim]"""
+  replx shutdown                [dim]# Stop ALL connections and agent[/dim]"""
         OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()

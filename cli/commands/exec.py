@@ -14,7 +14,6 @@ from collections import deque
 from pathlib import Path
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
 
 from replx.terminal import IS_WINDOWS, getch, disable_quick_edit_mode, restore_console_mode, LineModeTerminal, utf8_need_follow
@@ -152,35 +151,11 @@ def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> 
         except Exception as e:
             return False, str(e)
 
-        last_seen_hash = original_hash
-        changed_stable_since = None
-        timeout_sec = 120
-
         while True:
-            now = time.monotonic()
-            elapsed = now - start_ts
-
-            current_hash = _file_md5(local_path)
-            hash_changed = bool(original_hash and current_hash and current_hash != original_hash)
-
-            if hash_changed:
-                if changed_stable_since is None or current_hash != last_seen_hash:
-                    changed_stable_since = now
-                    last_seen_hash = current_hash
-                elif now - changed_stable_since >= 0.4:
-                    return True
-            else:
-                changed_stable_since = None
-
             rc = proc.poll()
             if rc is not None:
                 if rc != 0:
                     return False, f"Editor exited with code {rc}"
-                return True, None
-
-            if elapsed >= timeout_sec:
-                print("Waiting for editor close is taking longer than expected.")
-                input("After closing the editor tab/window, press Enter to continue...")
                 return True, None
 
             time.sleep(0.1)
@@ -205,7 +180,7 @@ def exec_cmd(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Run a single MicroPython command on the connected board.
 
@@ -658,7 +633,7 @@ def run(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Run a MicroPython script on the connected board.
 
@@ -820,7 +795,7 @@ By default, runs a file from your computer. Use -d to run from device.
         local_file = os.path.abspath(script_file)
     
     client = _create_agent_client()
-    
+
     try:
         if not non_interactive:
             if line_mode is not None:
@@ -1277,7 +1252,7 @@ def repl(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Enter interactive MicroPython mode on the connected board.
 
@@ -1609,7 +1584,7 @@ def shell(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Enter interactive shell for managing files on the device.
 
@@ -1619,7 +1594,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
   replx shell
 
 [bold cyan]File commands (same as replx commands):[/bold cyan]
-  [yellow]ls[/yellow] [path]              List directory contents
+  [yellow]ls[/yellow] [path]                    List directory contents
   [yellow]cat[/yellow] file               Show file contents
   [yellow]cp[/yellow] src dest            Copy file/directory
   [yellow]mv[/yellow] src dest            Move/rename
@@ -1638,8 +1613,8 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
   [yellow]run[/yellow] script.py          Run script from device
   [yellow]repl[/yellow]                   Enter Python REPL
   [yellow]edit[/yellow] file              Open file in VSCode
-  [yellow]exit[/yellow] or [yellow]quit[/yellow]          Exit shell
-  [yellow]help[/yellow] [command]         Show help
+  [yellow]exit[/yellow]                   Exit shell
+  [yellow]help[/yellow] [command]                  Show help
 
 [bold cyan]Example session:[/bold cyan]
   [ticle]:/ > ls
@@ -1656,7 +1631,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
   • Current directory is remembered until you exit
 
 [bold cyan]Related:[/bold cyan]
-  replx repl              [dim]# Interactive MicroPython instead[/dim]"""
+  replx repl             [dim]# Interactive MicroPython instead[/dim]"""
         OutputHelper.print_panel(help_text, border_style="dim")
         console.print()
         raise typer.Exit()
@@ -1674,12 +1649,28 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
     }
     
     current_path = '/'
+
+    def _cleanup_windows_batch_prompt_artifacts() -> None:
+        if not IS_WINDOWS:
+            return
+        try:
+            import msvcrt
+            while msvcrt.kbhit():
+                msvcrt.getwch()
+        except Exception:
+            pass
+        try:
+            # Remove any lingering "Terminate batch job (Y/N)?" artifact line.
+            sys.stdout.write('\r\x1b[2K\r')
+            sys.stdout.flush()
+        except Exception:
+            pass
     
     def print_prompt():
         print(f"\n[{STATE.device}]:{current_path} > ", end="", flush=True)
 
     def print_shell_help(cmd: str):
-        shell_console = Console(width=CONSOLE_WIDTH)
+        shell_console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         
         shell_only_help = {
             "cd": """\
@@ -1835,10 +1826,10 @@ Manage WiFi connection.
                 if len(args) > 1:
                     print_shell_help(args[1])
                 else:
-                    shell_console = Console(width=CONSOLE_WIDTH)
+                    shell_console = OutputHelper.make_console(width=CONSOLE_WIDTH)
                     help_text = """\
 [bold cyan]Commands:[/bold cyan]
-  [yellow]ls[/yellow] [path] [-r]      List files/directories
+  [yellow]ls[/yellow] [path] [-r]            List files/directories
   [yellow]cat[/yellow] <file>          Display file contents
   [yellow]cp[/yellow] <src...> <dst>   Copy files (use -r for directories)
   [yellow]mv[/yellow] <src...> <dst>   Move/rename files (use -r for directories)
@@ -1849,11 +1840,11 @@ Manage WiFi connection.
   [yellow]exec[/yellow] <code>         Execute MicroPython code
   [yellow]repl[/yellow]                Enter Python REPL
   [yellow]run[/yellow] <script>        Run script from device
-  [yellow]wifi[/yellow] [args]         Manage WiFi
+  [yellow]wifi[/yellow] [args]               Manage WiFi
   [yellow]cd[/yellow] <dir>            Change directory
   [yellow]pwd[/yellow]                 Print current directory
   [yellow]clear[/yellow]               Clear screen
-  [yellow]edit[/yellow] <file>          Edit file in VSCode
+  [yellow]edit[/yellow] <file>         Edit file in VSCode
   [yellow]exit[/yellow]                Exit shell
 
 [dim]Type 'help <command>' for detailed help on a specific command.[/dim]"""
@@ -2087,7 +2078,16 @@ Manage WiFi connection.
                 else:
                     remote_path = posixpath.normpath(posixpath.join(current_path, script_file))
                 
-                run(script_file=remote_path, non_interactive=False, echo=False, device=True, show_help=False)
+                run(
+                    script_file=remote_path,
+                    non_interactive=False,
+                    echo=False,
+                    device=True,
+                    line_text=False,
+                    line_hex=False,
+                    show_help=False,
+                )
+                _cleanup_windows_batch_prompt_artifacts()
                 return
                 
             elif cmd == "edit":
@@ -2172,6 +2172,7 @@ Manage WiFi connection.
                             shutil.rmtree(temp_dir)
                     except Exception:
                         pass
+                    _cleanup_windows_batch_prompt_artifacts()
                 return
             
             elif cmd == "wifi":
@@ -2179,7 +2180,7 @@ Manage WiFi connection.
                     print_shell_help("wifi")
                     return
                 
-                from replx.cli.commands.device import wifi
+                from replx.cli.commands.wifi import wifi
                 
                 if len(args) == 1:
                     wifi(args=None, show_help=False)
@@ -2226,6 +2227,7 @@ Manage WiFi connection.
     try:
         while shell_running:
             try:
+                _cleanup_windows_batch_prompt_artifacts()
                 print_prompt()
                 line = sys.stdin.buffer.readline().decode(errors='replace').rstrip()
                 if not line:
@@ -2255,7 +2257,7 @@ def reset(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Reset the connected MicroPython device.
 
@@ -2350,7 +2352,7 @@ def _reset_hard(device: str, status: dict):
     from rich.text import Text
     
     port = status.get('port', '')
-    console = Console()
+    console = OutputHelper.make_console()
     
     spinner = Spinner("dots", text=Text(" Executing hard reset...", style="bright_cyan"))
     

@@ -683,7 +683,7 @@ def _setup_seq_screen(pin_name: str, freq_str: str, mode: str, seq_label: str, w
         box=get_panel_box(), expand=True, width=CONSOLE_WIDTH, title_align="left",
     )
     buf = io.StringIO()
-    Console(file=buf, width=CONSOLE_WIDTH, legacy_windows=False, force_terminal=True).print(panel)
+    OutputHelper.make_console(file=buf, width=CONSOLE_WIDTH, force_terminal=True).print(panel)
     rendered = buf.getvalue()
     hint = _DIM + '  [Ctrl+C] ' + ('exit' if repeat == 0 else 'cancel') + _RST + '\n'
     num_row = 0

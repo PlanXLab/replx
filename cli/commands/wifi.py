@@ -2,7 +2,6 @@ import json
 import re
 
 import typer
-from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 from rich.spinner import Spinner
@@ -21,7 +20,7 @@ def wifi(
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         help_text = """\
 Manage WiFi connection on the connected device.
 
@@ -286,7 +285,7 @@ result = {{
 }}
 print(json.dumps(result))
 '''
-    console = Console()
+    console = OutputHelper.make_console()
     spinner = Spinner("dots", text=Text(f" Connecting to {ssid}...", style="bright_cyan"))
     
     try:
@@ -310,15 +309,27 @@ print(json.dumps(result))
         
         if not data.get("connected"):
             import time as pytime
-            pytime.sleep(1.0)
-            verify = _wifi_check_current_connection(client, target_ssid=ssid)
-            if verify.get("connected") and verify.get("same_ssid"):
-                return {
-                    "connected": True,
-                    "ifconfig": verify.get("ifconfig"),
-                    "status": 5
-                }
-            
+
+            # Connection status can lag behind final association/auth state,
+            # especially on busy APs. Re-check for a short stabilization window.
+            verify = None
+            for _ in range(8):  # up to ~4s
+                pytime.sleep(0.5)
+                verify = _wifi_check_current_connection(client, target_ssid=ssid)
+                if not verify.get("connected"):
+                    continue
+
+                same_ssid = verify.get("same_ssid")
+                current_ssid = verify.get("ssid")
+                # Accept if SSID matches, or if SSID is temporarily unavailable
+                # but interface is already connected.
+                if same_ssid or not current_ssid:
+                    return {
+                        "connected": True,
+                        "ifconfig": verify.get("ifconfig"),
+                        "status": 5
+                    }
+
             status = data.get("status")
             if status is not None:
                 msg, _ = _wifi_get_status_message(status)
@@ -340,15 +351,21 @@ print(json.dumps(result))
                 pass
         
         import time as pytime
-        pytime.sleep(1.0)
         try:
-            verify = _wifi_check_current_connection(client, target_ssid=ssid)
-            if verify.get("connected") and verify.get("same_ssid"):
-                return {
-                    "connected": True,
-                    "ifconfig": verify.get("ifconfig"),
-                    "status": 5
-                }
+            verify = None
+            for _ in range(8):  # up to ~4s
+                pytime.sleep(0.5)
+                verify = _wifi_check_current_connection(client, target_ssid=ssid)
+                if not verify.get("connected"):
+                    continue
+                same_ssid = verify.get("same_ssid")
+                current_ssid = verify.get("ssid")
+                if same_ssid or not current_ssid:
+                    return {
+                        "connected": True,
+                        "ifconfig": verify.get("ifconfig"),
+                        "status": 5
+                    }
         except Exception:
             pass
         
@@ -852,7 +869,7 @@ print(json.dumps(results))
                 ap["auth"]
             )
         
-        console = Console(width=CONSOLE_WIDTH)
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
         console.print(Panel(
             table,
             title=f"WiFi Networks ({len(data)} found)",

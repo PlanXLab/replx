@@ -30,8 +30,8 @@ Each CLI command communicates with a background Agent Server over UDP/IPC. The A
 
 - `replx` uses one local Agent Server per PC.
 - The agent listens on a UDP port selected from `49152-65535`.
-- The selected port is stored in `~/.replx/.agent_port` and reused by later CLI commands.
-- If the stored port is occupied by another program and no replx agent is running there, replx selects a new free port and updates `~/.replx/.agent_port`.
+- The selected port is stored in `~/.replx/.config` as `AGENT_PORT=...` and reused by later CLI commands.
+- If the stored port is occupied by another program and no replx agent is running there, replx selects a new free port and updates `~/.replx/.config`.
 
 ### Session / FG / BG / Default
 
