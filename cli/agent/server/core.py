@@ -496,6 +496,12 @@ class AgentServer(
         command = msg.get('command')
 
         if not self._check_and_record_seq(client_addr, seq):
+            # Duplicate request (same seq from same UDP source): re-ACK so
+            # client retransmits can recover from a previously lost ACK.
+            self._safe_send(
+                AgentProtocol.encode_message(AgentProtocol.create_ack(seq)),
+                client_addr,
+            )
             return
 
         self._safe_send(
@@ -540,6 +546,11 @@ class AgentServer(
             
             if msg_type == 'request':
                 if not self._check_and_record_seq(client_addr, seq):
+                    # Duplicate request (same seq from same UDP source):
+                    # send ACK again so the client can proceed.
+                    ack = AgentProtocol.create_ack(seq)
+                    ack_data = AgentProtocol.encode_message(ack)
+                    self._safe_send(ack_data, client_addr)
                     return
             
             ack = AgentProtocol.create_ack(seq)

@@ -285,19 +285,29 @@ class ExecCommandsMixin:
         output_buffer = bytearray()
         buffer_lock = threading.Lock()
         last_flush_time = [time.time()]
+        last_stream_send_time = [time.time()]
         flush_timer_running = [True]
         BUFFER_FLUSH_SIZE = 4096
         FLUSH_INTERVAL = 0.05
+        KEEPALIVE_INTERVAL = 1.0
         
         def send_stream(output: str = '', completed: bool = False, error: str = None):
-            try:
-                msg = {'type': 'stream', 'seq': seq, 'output': output}
-                if completed:
-                    msg['completed'] = True
-                    msg['error'] = error
-                self._safe_send(AgentProtocol.encode_message(msg), client_addr)
-            except Exception:
-                pass
+            # When script completes (especially with error), retry sending to ensure client receives it
+            retry_count = 5 if completed else 1
+            retry_interval = 0.05  # 50ms between retries for completed messages
+            
+            for attempt in range(retry_count):
+                try:
+                    msg = {'type': 'stream', 'seq': seq, 'output': output}
+                    if completed:
+                        msg['completed'] = True
+                        msg['error'] = error
+                    self._safe_send(AgentProtocol.encode_message(msg), client_addr)
+                    last_stream_send_time[0] = time.time()
+                    if completed and attempt < retry_count - 1:
+                        time.sleep(retry_interval)
+                except Exception:
+                    pass
         
         def flush_buffer():
             with buffer_lock:
@@ -335,6 +345,10 @@ class ExecCommandsMixin:
             while flush_timer_running[0]:
                 time.sleep(FLUSH_INTERVAL)
                 flush_buffer()
+                # Keep interactive session alive for client-side timeout logic,
+                # even when the script is running silently with no output.
+                if time.time() - last_stream_send_time[0] >= KEEPALIVE_INTERVAL:
+                    send_stream('')
         
         flush_thread = threading.Thread(target=flush_timer, daemon=True)
         flush_thread.start()

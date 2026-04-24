@@ -128,35 +128,64 @@ class AgentClient:
         seq = request['seq']
         request_data = AgentProtocol.encode_message(request)
 
-        self.sock.sendto(request_data, (AGENT_HOST, self.agent_port))
-
-        self.sock.settimeout(5.0)
+        # UDP can drop ACK packets. Retry start request a few times while
+        # waiting for ACK/early stream for this seq.
+        self.sock.settimeout(0.2)
         ack_received = False
         error_response = None
+        completed_during_handshake = False
 
-        while True:
-            try:
-                data, addr = self.sock.recvfrom(MAX_UDP_SIZE)
-                msg = AgentProtocol.decode_message(data)
-                if msg and msg.get('seq') == seq:
-                    if msg.get('type') == 'ack':
-                        ack_received = True
-                        break
-                    elif msg.get('type') == 'response' and msg.get('error'):
-                        error_response = msg
-                        break
-            except socket.timeout:
+        max_attempts = max(1, self.MAX_RETRIES)
+        for attempt in range(max_attempts):
+            self.sock.sendto(request_data, (AGENT_HOST, self.agent_port))
+
+            attempt_deadline = time.time() + 1.5
+            while time.time() < attempt_deadline:
+                try:
+                    data, addr = self.sock.recvfrom(MAX_UDP_SIZE)
+                    msg = AgentProtocol.decode_message(data)
+                    if msg and msg.get('seq') == seq:
+                        msg_type = msg.get('type')
+                        if msg_type == 'ack':
+                            ack_received = True
+                            break
+                        if msg_type == 'response' and msg.get('error'):
+                            error_response = msg
+                            break
+                        # If stream arrives before ACK (ACK loss/reordering),
+                        # treat it as a successful start.
+                        if msg_type == 'stream':
+                            ack_received = True
+                            output = msg.get('output', '')
+                            if output and output_callback:
+                                output_callback(output.encode('utf-8'), 'stdout')
+                            if msg.get('completed'):
+                                error = msg.get('error')
+                                if error and output_callback:
+                                    output_callback(error.encode('utf-8'), 'stderr')
+                                completed_during_handshake = True
+                            break
+                except socket.timeout:
+                    continue
+
+            if ack_received or error_response:
                 break
 
         if error_response:
             raise RuntimeError(error_response['error'])
 
         if not ack_received:
-            raise RuntimeError("No ACK from agent - run_interactive failed to start")
+            raise RuntimeError(f"No ACK from agent - run_interactive failed to start (attempts={max_attempts})")
+
+        if completed_during_handshake:
+            self.sock.settimeout(self.TIMEOUT)
+            return {"run": True, "completed": True}
 
         self.sock.settimeout(0.01)
         input_interval = 0.001
         last_input_time = 0
+        last_stream_time = time.time()
+        stream_timeout = 5.0  # 5 seconds without stream = connection lost
 
         try:
             while True:
@@ -181,6 +210,7 @@ class AgentClient:
                             msg = AgentProtocol.decode_message(data)
                             if msg and msg.get('seq') == seq:
                                 if msg.get('type') == 'stream':
+                                    last_stream_time = time.time()
                                     output = msg.get('output', '')
                                     if output and output_callback:
                                         output_callback(output.encode('utf-8'), 'stdout')
@@ -204,6 +234,10 @@ class AgentClient:
 
                 now = time.time()
 
+                # Check for stream reception timeout (connection loss detection)
+                if now - last_stream_time > stream_timeout:
+                    raise RuntimeError("Connection lost - no data from board for {}s".format(stream_timeout))
+
                 if now - last_input_time >= input_interval:
                     last_input_time = now
                     if input_provider:
@@ -225,6 +259,7 @@ class AgentClient:
                         if msg.get('type') == 'response' and msg.get('error'):
                             _pending_error = msg['error']
                         elif msg.get('type') == 'stream':
+                            last_stream_time = time.time()  # Update on any stream (even empty)
                             output = msg.get('output', '')
                             if output and output_callback:
                                 output_callback(output.encode('utf-8'), 'stdout')
