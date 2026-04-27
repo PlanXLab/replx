@@ -4,6 +4,7 @@ import re
 import time
 import json
 import urllib.request
+from rich import print as rich_print
 
 from .store import StoreManager
 
@@ -56,8 +57,8 @@ class UpdateChecker:
 
             if _is_newer(latest_version, current_version):
                 if UpdateChecker.is_interactive_tty():
-                    print(f"\n[bright_yellow]New version available: {latest_version}[/bright_yellow]")
-                    print("Run: [bright_blue]pip install --upgrade replx[/bright_blue]\n")
+                    rich_print(f"\n[bright_yellow]New version available: {latest_version}[/bright_yellow]")
+                    rich_print("Run: [bright_blue]pip install --upgrade replx[/bright_blue]\n")
         except Exception:
             pass
         finally:
