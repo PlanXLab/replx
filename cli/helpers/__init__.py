@@ -33,16 +33,10 @@ def get_global_context():
 
 
 from .output import OutputHelper
-from .scanner import DeviceScanner
 from replx.utils import (
     SUPPORT_CORE_DEVICE_TYPES, CORE_ROOT_FS, DEFAULT_ROOT_FS,
     get_root_fs_for_core, parse_device_banner,
 )
-from .environment import EnvironmentManager
-from .store import StoreManager
-from .compiler import CompilerHelper
-from .registry import InstallHelper, SearchHelper, RegistryHelper
-from .updater import UpdateChecker
 
 __all__ = [
     'PANEL_BOX_STYLE', 'CONSOLE_WIDTH', 'get_panel_box',
@@ -57,3 +51,27 @@ __all__ = [
     'InstallHelper', 'SearchHelper', 'RegistryHelper',
     'UpdateChecker',
 ]
+
+
+_LAZY_ATTRS = {
+    'DeviceScanner': ('.scanner', 'DeviceScanner'),
+    'EnvironmentManager': ('.environment', 'EnvironmentManager'),
+    'StoreManager': ('.store', 'StoreManager'),
+    'CompilerHelper': ('.compiler', 'CompilerHelper'),
+    'InstallHelper': ('.registry', 'InstallHelper'),
+    'SearchHelper': ('.registry', 'SearchHelper'),
+    'RegistryHelper': ('.registry', 'RegistryHelper'),
+    'UpdateChecker': ('.updater', 'UpdateChecker'),
+}
+
+
+def __getattr__(name):
+    target = _LAZY_ATTRS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    module = import_module(target[0], __name__)
+    value = getattr(module, target[1])
+    globals()[name] = value
+    return value

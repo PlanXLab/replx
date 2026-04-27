@@ -29,9 +29,6 @@ from ..connection import (
 
 from ..app import app
 
-from .file import ls, cat, cp, mv, rm, mkdir, touch
-from .device import usage
-
 
 def _wrap_trailing_expression_for_print(code: str) -> str:
     try:
@@ -1637,6 +1634,9 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
         raise typer.Exit()
     
     _ensure_connected()
+
+    from .device import usage
+    from .file import cat, cp, ls, mkdir, mv, rm, touch
     
     SHELL_COMMANDS = {
         'ls', 'cat', 'cp', 'mv', 'rm', 'mkdir', 'touch', 'usage', 'exec', 'repl', 'run',

@@ -1,6 +1,7 @@
 import sys
 import re
 import time
+import gc
 from typing import Optional, Tuple
 
 from replx.utils import (
@@ -15,6 +16,37 @@ from replx.utils.constants import (
 
 
 class DeviceScanner:
+
+    @staticmethod
+    def _close_scanner_serial(ser) -> None:
+        if not ser:
+            return
+
+        try:
+            if getattr(ser, 'is_open', False):
+                try:
+                    ser.cancel_read()
+                except Exception:
+                    pass
+                try:
+                    ser.cancel_write()
+                except Exception:
+                    pass
+                try:
+                    ser.reset_input_buffer()
+                except Exception:
+                    pass
+                try:
+                    ser.reset_output_buffer()
+                except Exception:
+                    pass
+                ser.close()
+        except Exception:
+            pass
+        finally:
+            if sys.platform == 'win32':
+                gc.collect()
+                time.sleep(0.05)
     
     @staticmethod
     def get_board_info_from_banner(port: str, timeout: float = 2.0) -> Optional[Tuple[str, str, str, str]]:
@@ -62,11 +94,7 @@ class DeviceScanner:
         except ImportError:
             pass
         finally:
-            if ser:
-                try:
-                    ser.close()
-                except (OSError, IOError):
-                    pass
+            DeviceScanner._close_scanner_serial(ser)
         
         return None
     

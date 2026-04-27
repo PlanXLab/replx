@@ -204,6 +204,7 @@ class ConfigManager:
                           serial_port: str = None,
                           agent_port: int = None,
                           theme: str = None,
+                          theme_mode: str = None,
                           set_default: bool = False):
 
         def _resolve_os_serial_port_name(port: str) -> str:
@@ -286,6 +287,7 @@ class ConfigManager:
 
         if theme is not None:
             AgentPortManager._write_registered_theme(theme)
+            AgentPortManager._write_registered_theme_mode(theme_mode)
         
         ConfigManager.write(env_path, env_data['connections'], env_data['default'])
     
@@ -296,18 +298,25 @@ class ConfigManager:
 
     @staticmethod
     def get_theme(env_path: str | None = None) -> str:
+        theme_mode = AgentPortManager._read_registered_theme_mode()
+        if theme_mode:
+            return theme_mode
+
         theme = AgentPortManager._read_registered_theme(legacy_env_path=env_path)
         return theme or 'dark'
 
     @staticmethod
-    def set_theme(env_path: str | None, theme: str):
+    def set_theme(env_path: str | None, theme: str, theme_mode: str | None = None):
         AgentPortManager._write_registered_theme(theme)
+        AgentPortManager._write_registered_theme_mode(theme_mode)
 
 
 class AgentPortManager:
 
     _AGENT_PORT_KEY = 'AGENT_PORT'
     _THEME_KEY = 'THEME'
+    _THEME_MODE_KEY = 'THEME_MODE'
+    _VSCODE_ROOT_KEY = 'VSCODE_ROOT'
 
     @staticmethod
     def _kill_agent_process_by_port(port: int) -> bool:
@@ -341,9 +350,36 @@ class AgentPortManager:
 
         return min(running_ports)
 
+    _singleton_cache: Optional[int] = None
+    _singleton_cache_miss: bool = False
+
     @staticmethod
     def _ensure_singleton_running_agent(preferred_port: Optional[int] = None) -> Optional[int]:
         from .agent.client import AgentClient
+
+        # Process-level cache: ``_ensure_connected`` calls this twice in the same
+        # CLI invocation. The set of running agents cannot change between those
+        # back-to-back calls, so reuse the prior result.
+        if AgentPortManager._singleton_cache is not None:
+            return AgentPortManager._singleton_cache
+        if AgentPortManager._singleton_cache_miss:
+            return None
+
+        # Fast path: if the preferred / registered / default port already responds
+        # to a ping, skip the slow scan-and-cleanup phase. Stale agent processes
+        # left from previous sessions can otherwise add ~0.3s per dead candidate
+        # (UDP probe timeout) on every CLI invocation. Singleton enforcement and
+        # zombie cleanup still happen on cold paths (setup / shutdown) where the
+        # priority candidate is unreachable.
+        registered_port = AgentPortManager._read_registered_port()
+        for candidate in (preferred_port, registered_port, DEFAULT_AGENT_PORT):
+            if not isinstance(candidate, int):
+                continue
+            if AgentClient.is_agent_running(port=candidate):
+                AgentPortManager._singleton_cache = candidate
+                if registered_port != candidate:
+                    AgentPortManager._write_registered_port(candidate)
+                return candidate
 
         running_ports = []
         for port in AgentPortManager._get_candidate_agent_ports(preferred_port=preferred_port):
@@ -351,10 +387,12 @@ class AgentPortManager:
                 running_ports.append(port)
 
         if not running_ports:
+            AgentPortManager._singleton_cache_miss = True
             return None
 
         primary_port = AgentPortManager._pick_primary_port(running_ports, preferred_port=preferred_port)
         if primary_port is None:
+            AgentPortManager._singleton_cache_miss = True
             return None
 
         for port in running_ports:
@@ -382,6 +420,7 @@ class AgentPortManager:
             )
 
         AgentPortManager._write_registered_port(primary_port)
+        AgentPortManager._singleton_cache = primary_port
         return primary_port
 
     @staticmethod
@@ -483,6 +522,14 @@ class AgentPortManager:
         return None
 
     @staticmethod
+    def _read_registered_theme_mode() -> Optional[str]:
+        config_entries = AgentPortManager._read_agent_config()
+        theme_mode = config_entries.get(AgentPortManager._THEME_MODE_KEY)
+        if theme_mode:
+            return theme_mode.strip() or None
+        return None
+
+    @staticmethod
     def _write_registered_theme(theme: Optional[str]) -> None:
         if theme is None:
             return
@@ -493,6 +540,54 @@ class AgentPortManager:
 
         entries = AgentPortManager._read_agent_config()
         entries[AgentPortManager._THEME_KEY] = normalized
+        AgentPortManager._write_agent_config(entries)
+
+    @staticmethod
+    def _write_registered_theme_mode(theme_mode: Optional[str]) -> None:
+        entries = AgentPortManager._read_agent_config()
+
+        if theme_mode is None:
+            entries.pop(AgentPortManager._THEME_MODE_KEY, None)
+            AgentPortManager._write_agent_config(entries)
+            return
+
+        normalized = str(theme_mode).strip()
+        if not normalized:
+            entries.pop(AgentPortManager._THEME_MODE_KEY, None)
+            AgentPortManager._write_agent_config(entries)
+            return
+
+        entries[AgentPortManager._THEME_MODE_KEY] = normalized
+        AgentPortManager._write_agent_config(entries)
+
+    @staticmethod
+    def _read_cached_vscode_root() -> Optional[str]:
+        entries = AgentPortManager._read_agent_config()
+        root = entries.get(AgentPortManager._VSCODE_ROOT_KEY)
+        if not root:
+            return None
+
+        settings_path = os.path.join(root, 'data', 'user-data', 'User', 'settings.json')
+        if os.path.exists(settings_path):
+            return root
+
+        return None
+
+    @staticmethod
+    def _write_cached_vscode_root(root: Optional[str]) -> None:
+        if root is None:
+            return
+
+        normalized = str(root).strip()
+        if not normalized:
+            return
+
+        settings_path = os.path.join(normalized, 'data', 'user-data', 'User', 'settings.json')
+        if not os.path.exists(settings_path):
+            return
+
+        entries = AgentPortManager._read_agent_config()
+        entries[AgentPortManager._VSCODE_ROOT_KEY] = normalized
         AgentPortManager._write_agent_config(entries)
 
     @staticmethod
@@ -732,8 +827,8 @@ def _get_default_connection(env_path: str) -> Optional[str]:
 def _get_theme_config(env_path: str | None = None) -> str:
     return ConfigManager.get_theme(env_path)
 
-def _set_theme_config(env_path: str | None, theme: str):
-    return ConfigManager.set_theme(env_path, theme)
+def _set_theme_config(env_path: str | None, theme: str, theme_mode: str | None = None):
+    return ConfigManager.set_theme(env_path, theme, theme_mode)
 
 def _find_available_agent_port(env_path: str) -> int:
     return AgentPortManager.find_available_port(env_path)

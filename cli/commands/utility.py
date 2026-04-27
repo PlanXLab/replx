@@ -29,7 +29,6 @@ from ..connection import (
     _get_current_agent_port
 )
 from ..app import app
-from .package import _install_spec_internal
 
 
 def _port_sort_key(port: str) -> tuple:
@@ -1291,6 +1290,8 @@ Completely reset device: format filesystem and install all libraries.
     
     try:
         specs_to_install = ["core.all"]
+
+        from .package import _install_spec_internal
         
         dev_src = os.path.join(StoreManager.pkg_root(), "device", device_name_to_path(STATE.device), "src")
         if os.path.isdir(dev_src):

@@ -1,13 +1,14 @@
 import sys
+import importlib
 from typing import Optional
 import typer
 from rich.panel import Panel
 
+if __name__ == '__main__':
+    sys.modules['replx.cli.app'] = sys.modules[__name__]
+
 from replx import __version__
 from .helpers.output import OutputHelper, get_panel_box, CONSOLE_WIDTH
-from .helpers.updater import UpdateChecker
-from .helpers.environment import EnvironmentManager
-from .connection import _ensure_connected, _create_agent_client
 from .config import STATE, _set_global_options, _find_env_file, _get_theme_config
 
 
@@ -118,32 +119,43 @@ def _get_console():
     return OutputHelper.make_console(width=CONSOLE_WIDTH)
 
 
-try:
-    import typer.rich_utils
-    
-    def _patched_get_rich_console():
-        return _get_console()
-    
-    typer.rich_utils._get_rich_console = _patched_get_rich_console
-except ImportError:
-    pass
+_RICH_HELP_CONFIGURED = False
 
-try:
-    from typer.core import RichCommand
-    _original_rich_command_format_help = RichCommand.format_help
-    
-    def _format_help_width(self, ctx, formatter):
-        old_console = getattr(self, '_rich_console', None)
-        try:
-            self._rich_console = OutputHelper.make_console(width=CONSOLE_WIDTH)
-            return _original_rich_command_format_help(self, ctx, formatter)
-        finally:
-            if old_console is not None:
-                self._rich_console = old_console
-    
-    RichCommand.format_help = _format_help_width
-except ImportError:
-    pass
+
+def _configure_rich_help_rendering() -> None:
+    global _RICH_HELP_CONFIGURED
+    if _RICH_HELP_CONFIGURED:
+        return
+
+    try:
+        import typer.rich_utils
+
+        def _patched_get_rich_console():
+            return _get_console()
+
+        typer.rich_utils._get_rich_console = _patched_get_rich_console
+    except ImportError:
+        pass
+
+    try:
+        from typer.core import RichCommand
+
+        original_format_help = RichCommand.format_help
+
+        def _format_help_width(self, ctx, formatter):
+            old_console = getattr(self, '_rich_console', None)
+            try:
+                self._rich_console = OutputHelper.make_console(width=CONSOLE_WIDTH)
+                return original_format_help(self, ctx, formatter)
+            finally:
+                if old_console is not None:
+                    self._rich_console = old_console
+
+        RichCommand.format_help = _format_help_width
+    except ImportError:
+        pass
+
+    _RICH_HELP_CONFIGURED = True
 
 
 import click
@@ -303,6 +315,64 @@ app = typer.Typer(
 )
 
 
+_COMMAND_MODULES = {
+    'get': 'file',
+    'cat': 'file',
+    'put': 'file',
+    'ls': 'file',
+    'cp': 'file',
+    'mv': 'file',
+    'rm': 'file',
+    'mkdir': 'file',
+    'touch': 'file',
+    'setup': 'device',
+    'usage': 'device',
+    'scan': 'device',
+    'exec': 'exec',
+    'run': 'exec',
+    'repl': 'exec',
+    'shell': 'exec',
+    'reset': 'exec',
+    'pkg': 'package',
+    'mpy': 'package',
+    'version': 'utility',
+    'status': 'utility',
+    'fg': 'utility',
+    'whoami': 'utility',
+    'disconnect': 'utility',
+    'shutdown': 'utility',
+    'format': 'utility',
+    'init': 'utility',
+    'firmware': 'firmware',
+    'i2c': 'i2c',
+    'gpio': 'gpio',
+    'adc': 'adc',
+    'pwm': 'pwm',
+    'uart': 'uart',
+    'spi': 'spi',
+    'wifi': 'wifi',
+}
+_KNOWN_COMMANDS = set(_COMMAND_MODULES) | {'connect', 'help'}
+_LOADED_COMMAND_MODULES: set[str] = set()
+
+
+def _load_command_module(module_name: str) -> None:
+    if module_name in _LOADED_COMMAND_MODULES:
+        return
+
+    importlib.import_module(f'replx.cli.commands.{module_name}')
+    _LOADED_COMMAND_MODULES.add(module_name)
+
+
+def _load_required_command_module(command_name: Optional[str]) -> None:
+    if not command_name:
+        return
+
+    module_name = _COMMAND_MODULES.get(command_name)
+    if module_name:
+        _load_command_module(module_name)
+
+
 def _print_main_help():
     lines = []
     lines.append("[bold]MicroPython development tool for VSCode[/bold]")
@@ -384,16 +454,7 @@ def _print_main_help():
 
 
 def _get_known_commands() -> set[str]:
-    known = {'connect', 'help', 'version'}
-    for command_info in getattr(app, 'registered_commands', []):
-        name = getattr(command_info, 'name', None)
-        if name:
-            known.add(name)
-        callback = getattr(command_info, 'callback', None)
-        callback_name = getattr(callback, '__name__', None)
-        if callback_name:
-            known.add(callback_name)
-    return known
+    return set(_KNOWN_COMMANDS)
 
 
 @app.callback(invoke_without_command=True)
@@ -425,9 +486,6 @@ def cli(
     if ctx.invoked_subcommand is None:
         _print_main_help()
         raise typer.Exit()
-
-
-from .commands import file, device, exec, package, utility, firmware, i2c, gpio, adc, pwm, uart, spi, wifi
 
 def main():
     if len(sys.argv) == 1:
@@ -462,6 +520,8 @@ def main():
         command_str = sys.argv[2]
         
         try:
+            from .connection import _ensure_connected, _create_agent_client
+
             _ensure_connected()
             client = _create_agent_client()
             result = client.send_command('exec', code=command_str)
@@ -559,12 +619,21 @@ def main():
         first_nonopt_idx = next((i for i, a in enumerate(sys.argv[1:], 1) if not a.startswith('-')), None)
         first_nonopt = sys.argv[first_nonopt_idx] if first_nonopt_idx is not None else None
 
+    _load_required_command_module(first_nonopt)
+
     suppressed = {'scan'}
+    if any(x in sys.argv for x in ('--help', '-h')):
+        _configure_rich_help_rendering()
+
     if not any(x in sys.argv for x in ('--help','-h','--version','-v')):
         if (first_nonopt is None) or (first_nonopt not in suppressed):
+            from .helpers.updater import UpdateChecker
+
             UpdateChecker.check_for_updates(__version__)
         
     try:
+        from .helpers.environment import EnvironmentManager
+
         EnvironmentManager.load_env_from_rep()
         app(standalone_mode=False)
         exit_code = 0

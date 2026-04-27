@@ -23,7 +23,7 @@ from ..config import (
     _find_env_file, _find_or_create_vscode_dir,
     _read_env_ini,
     _update_connection_config, _find_available_agent_port, _find_running_agent_ports,
-    _get_global_options
+    _get_global_options, AgentPortManager
 )
 from ..connection import (
     _ensure_connected, _create_agent_client
@@ -141,17 +141,30 @@ def _load_jsonc(path: str) -> dict | None:
 
 
 def _get_portable_vscode_root_from_pshome() -> str | None:
+    cached_root = AgentPortManager._read_cached_vscode_root()
+    if cached_root:
+        return cached_root
+
     pshome = os.environ.get("PSHOME", "").strip()
     if not pshome:
         try:
+            run_kwargs = {
+                "capture_output": True,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+                "timeout": 2,
+                "check": False,
+            }
+            if sys.platform.startswith("win"):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0
+                run_kwargs["startupinfo"] = startupinfo
+                run_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             result = subprocess.run(
                 ["pwsh", "-NoLogo", "-NoProfile", "-Command", "$PSHOME"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=2,
-                check=False,
+                **run_kwargs,
             )
             pshome = result.stdout.strip()
         except Exception:
@@ -160,7 +173,9 @@ def _get_portable_vscode_root_from_pshome() -> str | None:
     if not pshome:
         return None
 
-    return os.path.dirname(os.path.dirname(os.path.dirname(pshome)))
+    vscode_root = os.path.dirname(os.path.dirname(os.path.dirname(pshome)))
+    AgentPortManager._write_cached_vscode_root(vscode_root)
+    return vscode_root
 
 
 def _map_vscode_theme_to_replx(vscode_theme: str | None) -> str | None:
@@ -381,6 +396,12 @@ Run this once per project folder to set up your workspace.
         )
         raise typer.Exit(1)
 
+    stored_theme = selected_theme
+    theme_mode = None
+    if auto_theme and not theme:
+        stored_theme = display_theme
+        theme_mode = 'vscode-auto'
+
     if clean:
         _port = _get_global_options().get('port')
         if _port:
@@ -476,7 +497,8 @@ Run this once per project folder to set up your workspace.
                         env_path, port,
                         version=version, core=core, device=device,
                         manufacturer=manufacturer,
-                        theme=selected_theme,
+                        theme=stored_theme,
+                        theme_mode=theme_mode,
                         set_default=True
                     )
 
@@ -542,7 +564,8 @@ Run this once per project folder to set up your workspace.
                             env_path, port,
                             version=STATE.version, core=STATE.core, device=STATE.device,
                             manufacturer=STATE.manufacturer,
-                            theme=selected_theme,
+                            theme=stored_theme,
+                            theme_mode=theme_mode,
                             set_default=True 
                         )
                         
@@ -680,7 +703,8 @@ Run this once per project folder to set up your workspace.
         core=STATE.core,
         device=STATE.device,
         manufacturer=STATE.manufacturer,
-        theme=selected_theme,
+        theme=stored_theme,
+        theme_mode=theme_mode,
         set_default=set_as_default
     )
     

@@ -334,7 +334,7 @@ class AgentServer(
         )
         self._datagram_transport = transport
         self.running = True
-        print(f'replx agent started — listening on {AGENT_HOST}:{self.agent_port} (UDP)')
+        print(f'replx agent started - listening on {AGENT_HOST}:{self.agent_port} (UDP)')
 
         heartbeat_task = asyncio.create_task(
             self._heartbeat_coro(), name='replx-heartbeat'
