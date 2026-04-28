@@ -1799,6 +1799,16 @@ Upload files or directories from your computer to the device.
     
     client = _create_agent_client()
 
+    def _exit_upload_error(error: RuntimeError) -> None:
+        if OutputHelper.handle_error(error, "Upload"):
+            raise typer.Exit(1)
+        OutputHelper.print_panel(
+            f"Upload failed: [red]{error}[/red]",
+            title="Upload Failed",
+            border_style="red"
+        )
+        raise typer.Exit(1)
+
     def ensure_remote_dir_tree(dir_path: str) -> None:
         normalized = OutputHelper.normalize_remote_path(dir_path).rstrip('/')
         if not normalized:
@@ -1837,7 +1847,10 @@ Upload files or directories from your computer to the device.
 
         target_dir = remote if is_remote_dir else posixpath.dirname(remote_path)
         if target_dir and target_dir != '/':
-            ensure_remote_dir_tree(target_dir)
+            try:
+                ensure_remote_dir_tree(target_dir)
+            except RuntimeError as e:
+                _exit_upload_error(e)
         
         display_remote = remote_path.replace(device_root_fs, "", 1)
         item_type = "Directory" if is_dir else "File"
@@ -1914,6 +1927,8 @@ Upload files or directories from your computer to the device.
                 border_style="green"
             )
         except Exception as e:
+            if isinstance(e, RuntimeError):
+                _exit_upload_error(e)
             OutputHelper.print_panel(
                 f"Upload failed: [red]{str(e)}[/red]",
                 title="Upload Failed",
@@ -1930,7 +1945,10 @@ Upload files or directories from your computer to the device.
             raise typer.Exit(1)
 
         if remote and remote != '/':
-            ensure_remote_dir_tree(remote)
+            try:
+                ensure_remote_dir_tree(remote)
+            except RuntimeError as e:
+                _exit_upload_error(e)
         
         def count_bytes(path):
             if os.path.isfile(path):
@@ -2051,6 +2069,13 @@ Upload files or directories from your computer to the device.
                         ))
                         break 
                         
+                    except RuntimeError as e:
+                        if retry == max_retries - 1:
+                            if OutputHelper.handle_error(e, f"Upload: {remote_path}"):
+                                raise typer.Exit(1)
+                            OutputHelper._console.print(f"[red]Failed to upload {base_name}: {str(e)}[/red]")
+                        else:
+                            time.sleep(0.2)
                     except Exception as e:
                         if retry == max_retries - 1:
                             OutputHelper._console.print(f"[red]Failed to upload {base_name}: {str(e)}[/red]")
