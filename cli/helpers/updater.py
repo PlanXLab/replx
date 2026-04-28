@@ -4,7 +4,6 @@ import re
 import time
 import json
 import urllib.request
-from rich import print as rich_print
 
 from .store import StoreManager
 
@@ -44,11 +43,7 @@ class UpdateChecker:
             return tuple(int(p) for p in parts) or (0,)
 
         def _is_newer(latest: str, current: str) -> bool:
-            try:
-                from packaging.version import Version
-                return Version(str(latest)) > Version(str(current))
-            except Exception:
-                return _vt(latest) > _vt(current)
+            return _vt(latest) > _vt(current)
 
         try:
             with urllib.request.urlopen("https://pypi.org/pypi/replx/json", timeout=3) as resp:
@@ -57,8 +52,9 @@ class UpdateChecker:
 
             if _is_newer(latest_version, current_version):
                 if UpdateChecker.is_interactive_tty():
-                    rich_print(f"\n[bright_yellow]New version available: {latest_version}[/bright_yellow]")
-                    rich_print("Run: [bright_blue]pip install --upgrade replx[/bright_blue]\n")
+                    from .output import OutputHelper
+                    OutputHelper._console.print(f"\n[bright_yellow]New version available: {latest_version}[/bright_yellow]")
+                    OutputHelper._console.print("Run: [bright_blue]pip install --upgrade replx[/bright_blue]\n")
         except Exception:
             pass
         finally:
