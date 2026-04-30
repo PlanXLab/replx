@@ -35,6 +35,44 @@ class AgentClient:
             self.sock.close()
             self.sock = None
 
+    def _release_device_port_safe(self) -> None:
+        """Best-effort release of the bound device port on the agent.
+
+        Used when the client detects the device is unresponsive (e.g. cable
+        unplugged, board hung) so that subsequent commands won't operate on
+        a stale serial connection that the agent still believes is active.
+        """
+        if not self.device_port:
+            return
+        try:
+            request = AgentProtocol.create_request(
+                'disconnect_port',
+                ppid=self._ppid,
+                port=self.device_port,
+            )
+            data = AgentProtocol.encode_message(request)
+            try:
+                self.sock.sendto(data, (AGENT_HOST, self.agent_port))
+            except Exception:
+                return
+            # Drain any matching response briefly; ignore errors.
+            deadline = time.time() + 1.0
+            seq = request.get('seq')
+            try:
+                self.sock.settimeout(0.2)
+            except Exception:
+                pass
+            while time.time() < deadline:
+                try:
+                    pkt, _ = self.sock.recvfrom(MAX_UDP_SIZE)
+                    msg = AgentProtocol.decode_message(pkt)
+                    if msg and msg.get('seq') == seq and msg.get('type') == 'response':
+                        break
+                except Exception:
+                    break
+        except Exception:
+            pass
+
     def send_command(self, command: str, timeout: float = None, max_retries: int = None, **args) -> Dict[str, Any]:
         if not self.sock:
             self.connect()
@@ -236,6 +274,9 @@ class AgentClient:
 
                 # Check for stream reception timeout (connection loss detection)
                 if now - last_stream_time > stream_timeout:
+                    # Release the device port on the agent so subsequent
+                    # commands don't operate on a stale serial connection.
+                    self._release_device_port_safe()
                     raise RuntimeError("Connection lost - no data from board for {}s".format(stream_timeout))
 
                 if now - last_input_time >= input_interval:
