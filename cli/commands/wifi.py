@@ -807,15 +807,31 @@ def _wifi_scan(client: AgentClient):
     code = '''
 import network
 import json
-
 import utime
+
 wlan = network.WLAN(network.STA_IF)
 was_active = wlan.active()
 if not was_active:
     wlan.active(True)
-    utime.sleep_ms(200)
+    utime.sleep_ms(300)
+else:
+    # Already active: wait until driver is no longer in connecting state
+    for _ in range(30):
+        if wlan.status() != 1:
+            break
+        utime.sleep_ms(100)
 
-aps = wlan.scan()
+# Retry scan up to 3 times (CYW43 may fail when driver is transitioning)
+aps = None
+for _attempt in range(3):
+    try:
+        aps = wlan.scan()
+        break
+    except OSError:
+        utime.sleep_ms(500)
+if aps is None:
+    aps = []
+
 results = []
 for ap in aps:
     ssid, bssid, channel, rssi, auth, hidden = ap
