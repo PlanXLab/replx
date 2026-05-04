@@ -808,9 +808,12 @@ def _wifi_scan(client: AgentClient):
 import network
 import json
 
+import utime
 wlan = network.WLAN(network.STA_IF)
 was_active = wlan.active()
-wlan.active(True)
+if not was_active:
+    wlan.active(True)
+    utime.sleep_ms(200)
 
 aps = wlan.scan()
 results = []
