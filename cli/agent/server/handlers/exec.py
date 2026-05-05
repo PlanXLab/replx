@@ -4,18 +4,12 @@ import threading
 import sys
 from typing import Optional
 
+from replx.utils import canon_port
 from replx.utils.constants import CTRL_C, CTRL_D, EOF_MARKER, MAX_PAYLOAD_SIZE
 from replx.utils.exceptions import ProtocolError
 from replx.cli.agent.protocol import AgentProtocol
 from ..command_dispatcher import CommandContext
 from ..connection_manager import BoardConnection
-
-
-def _normalize_port(port: str) -> str:
-    if sys.platform.startswith("win"):
-        return port.upper()
-    else:
-        return port
 
 
 def _find_connection_by_port(connection_manager, port: str) -> Optional[BoardConnection]:
@@ -27,7 +21,7 @@ def _find_connection_by_port(connection_manager, port: str) -> Optional[BoardCon
         return conn
 
     if sys.platform.startswith("win"):
-        normalized = _normalize_port(port)
+        normalized = canon_port(port)
         conn = connection_manager.get_connection(normalized)
         if conn:
             return conn
@@ -292,22 +286,23 @@ class ExecCommandsMixin:
         KEEPALIVE_INTERVAL = 1.0
         
         def send_stream(output: str = '', completed: bool = False, error: str = None):
-            # When script completes (especially with error), retry sending to ensure client receives it
-            retry_count = 5 if completed else 1
-            retry_interval = 0.05  # 50ms between retries for completed messages
-            
-            for attempt in range(retry_count):
-                try:
-                    msg = {'type': 'stream', 'seq': seq, 'output': output}
-                    if completed:
-                        msg['completed'] = True
-                        msg['error'] = error
+            try:
+                msg = {'type': 'stream', 'seq': seq, 'output': output}
+                if completed:
+                    msg['completed'] = True
+                    msg['error'] = error
+                    encoded = AgentProtocol.encode_message(msg)
+                    # Block briefly waiting for client ACK so a single dropped
+                    # UDP packet does not lose the completion (M1 fix).
+                    self.send_completion_with_ack(
+                        encoded, client_addr, seq,
+                        max_retries=10, interval_s=0.1,
+                    )
+                else:
                     self._safe_send(AgentProtocol.encode_message(msg), client_addr)
-                    last_stream_send_time[0] = time.time()
-                    if completed and attempt < retry_count - 1:
-                        time.sleep(retry_interval)
-                except Exception:
-                    pass
+                last_stream_send_time[0] = time.time()
+            except Exception:
+                pass
         
         def flush_buffer():
             with buffer_lock:
@@ -397,7 +392,6 @@ class ExecCommandsMixin:
                 flush_timer_running[0] = False
                 flush_buffer()
             
-            conn.interactive.completed = True
             send_stream(completed=True, error=conn.interactive.error)
             self._safe_reset_repl(repl)
                 
@@ -405,7 +399,6 @@ class ExecCommandsMixin:
             input_thread_running[0] = False
             flush_timer_running[0] = False
             conn.interactive.error = str(e)
-            conn.interactive.completed = True
             send_stream(completed=True, error=str(e))
             if conn and conn.repl_protocol:
                 self._safe_reset_repl(conn.repl_protocol)

@@ -2,19 +2,14 @@ import time
 import threading
 import sys
 
+from replx.utils import canon_port as _canon_port
 from ..command_dispatcher import CommandContext
 
 
 class SessionCommandsMixin:
     @staticmethod
     def _canon_port(port: str) -> str:
-        if port is None:
-            return port
-        p = str(port).strip()
-        if sys.platform == "win32" or sys.platform.startswith("win"):
-            if p.lower().startswith("com") and p[3:].isdigit():
-                return p.upper()
-        return p
+        return _canon_port(port)
 
     def _cmd_session_setup(self, ctx: CommandContext, port: str = None,
                            core: str = "RP2350", device: str = None,
@@ -44,7 +39,7 @@ class SessionCommandsMixin:
             self.session_manager.add_connection_to_session(
                 ppid, port,
                 as_foreground=as_foreground,
-                default_port=session.default_port or self._default_port
+                default_port=self._effective_default_port(session)
             )
 
             if set_default:
@@ -74,7 +69,7 @@ class SessionCommandsMixin:
         self.session_manager.add_connection_to_session(
             ppid, port,
             as_foreground=as_foreground,
-            default_port=session.default_port or self._default_port
+            default_port=self._effective_default_port(session)
         )
 
         if set_default:
@@ -128,17 +123,30 @@ class SessionCommandsMixin:
             freed_port = session.foreground
 
         for conn_port in ports_to_close:
+            # Remove this port from every session that referenced it. After
+            # this loop, ``find_sessions_using_port`` reflects the updated
+            # state so we can decide whether the underlying serial connection
+            # is now orphaned and safe to close.
             for sess in self.session_manager.get_all_sessions().values():
                 if conn_port in sess.get_all_connections():
                     sess.remove_connection(conn_port)
 
-            self.connection_manager.disconnect(conn_port)
+            # Only close the underlying serial port if no other session still
+            # references it; otherwise we would yank the connection out from
+            # under terminals that are still using it (C2 fix).
+            remaining = self.session_manager.find_sessions_using_port(conn_port)
+            if not remaining:
+                self.connection_manager.disconnect(conn_port)
 
         self.session_manager.cleanup_empty_sessions()
 
         if not self.session_manager.has_sessions():
             def delayed_shutdown():
                 time.sleep(0.3)
+                # A new client may have created a session inside the grace
+                # window; abort the shutdown if so (C3 fix).
+                if self.session_manager.has_sessions():
+                    return
                 self.cleanup()
 
             shutdown_thread = threading.Thread(target=delayed_shutdown, daemon=True)

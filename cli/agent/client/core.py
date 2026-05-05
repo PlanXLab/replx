@@ -3,6 +3,7 @@ import os
 import sys
 import socket
 import time
+import atexit
 import tempfile
 from typing import Dict, Any, Optional, Callable
 
@@ -24,11 +25,29 @@ class AgentClient:
         self.sock: Optional[socket.socket] = None
 
         self._ppid = get_cached_session_id()
+        self._atexit_registered = False
 
     def connect(self):
         if not self.sock:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.settimeout(self.TIMEOUT)
+        # M7: ensure the agent releases the device port if the CLI process
+        # exits abnormally (Ctrl-C, unhandled exception, parent terminated)
+        # without its normal teardown path running.
+        if not self._atexit_registered and self.device_port:
+            try:
+                atexit.register(self._atexit_release)
+                self._atexit_registered = True
+            except Exception:
+                pass
+
+    def _atexit_release(self) -> None:
+        try:
+            if self.sock is None:
+                return
+            self._release_device_port_safe()
+        except Exception:
+            pass
 
     def disconnect(self):
         if self.sock:
@@ -202,6 +221,16 @@ class AgentClient:
                                 if error and output_callback:
                                     output_callback(error.encode('utf-8'), 'stderr')
                                 completed_during_handshake = True
+                                # M1: ACK so server stops retransmitting.
+                                try:
+                                    self.sock.sendto(
+                                        AgentProtocol.encode_message(
+                                            AgentProtocol.create_stream_ack(seq)
+                                        ),
+                                        (AGENT_HOST, self.agent_port),
+                                    )
+                                except Exception:
+                                    pass
                             break
                 except socket.timeout:
                     continue
@@ -257,6 +286,16 @@ class AgentClient:
                                         if error and output_callback:
                                             output_callback(error.encode('utf-8'), 'stderr')
                                         graceful = True
+                                        # M1: ACK so server stops retransmitting.
+                                        try:
+                                            self.sock.sendto(
+                                                AgentProtocol.encode_message(
+                                                    AgentProtocol.create_stream_ack(seq)
+                                                ),
+                                                (AGENT_HOST, self.agent_port),
+                                            )
+                                        except Exception:
+                                            pass
                                         break
                         except socket.timeout:
                             pass
@@ -309,6 +348,16 @@ class AgentClient:
                                 error = msg.get('error')
                                 if error and output_callback:
                                     output_callback(error.encode('utf-8'), 'stderr')
+                                # M1: ACK so server stops retransmitting.
+                                try:
+                                    self.sock.sendto(
+                                        AgentProtocol.encode_message(
+                                            AgentProtocol.create_stream_ack(seq)
+                                        ),
+                                        (AGENT_HOST, self.agent_port),
+                                    )
+                                except Exception:
+                                    pass
                                 break
 
                 except socket.timeout:

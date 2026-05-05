@@ -5,52 +5,50 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Set, Tuple
 
-
-def _canon_port(port: Optional[str]) -> Optional[str]:
-    if port is None:
-        return None
-    p = str(port).strip()
-    if sys.platform == "win32" or sys.platform.startswith("win"):
-        if p and p.lower().startswith("com"):
-            if p[3:].isdigit():
-                return p.upper()
-    return p
+from replx.utils import canon_port as _canon_port
 
 
 @dataclass
 class Session:
     ppid: int
     foreground: Optional[str] = None
-    backgrounds: Set[str] = field(default_factory=set)
+    # Ordered list (most-recently added last). When the foreground is removed,
+    # the most recent background is promoted, giving deterministic behaviour.
+    backgrounds: List[str] = field(default_factory=list)
     last_access: float = field(default_factory=time.time)
     default_port: Optional[str] = None 
+
+    def _remove_bg(self, port: str) -> bool:
+        try:
+            self.backgrounds.remove(port)
+            return True
+        except ValueError:
+            return False
 
     def add_connection(self, port: str, as_foreground: bool = False):
         port = _canon_port(port)
         if as_foreground:
             if self.foreground and self.foreground != port:
-                self.backgrounds.add(self.foreground)
+                # Demote previous foreground to most-recent background.
+                self._remove_bg(self.foreground)
+                self.backgrounds.append(self.foreground)
             self.foreground = port
-            for bg in list(self.backgrounds):
-                if bg == port:
-                    self.backgrounds.discard(bg)
+            self._remove_bg(port)
         else:
             if not self.foreground or self.foreground != port:
-                self.backgrounds.add(port)
+                # Move-to-end semantics so promoted bg is the most recent.
+                self._remove_bg(port)
+                self.backgrounds.append(port)
         self.last_access = time.time()
 
     def remove_connection(self, port: str) -> bool:
         port = _canon_port(port)
         was_foreground = self.foreground and self.foreground == port
         if was_foreground:
-            self.foreground = None
-            if self.backgrounds:
-                self.foreground = self.backgrounds.pop()
+            # Promote the most recently used background.
+            self.foreground = self.backgrounds.pop() if self.backgrounds else None
         else:
-            for bg in list(self.backgrounds):
-                if bg == port:
-                    self.backgrounds.discard(bg)
-                    break
+            self._remove_bg(port)
         self.last_access = time.time()
         return was_foreground
 
@@ -64,7 +62,7 @@ class Session:
         port = _canon_port(port)
         if self.foreground and self.foreground == port:
             return True
-        return any(bg == port for bg in self.backgrounds)
+        return port in self.backgrounds
 
     def is_empty(self) -> bool:
         return self.foreground is None and not self.backgrounds
@@ -74,20 +72,15 @@ class Session:
         if self.foreground and self.foreground == port:
             return True
 
-        found_bg = None
-        for bg in self.backgrounds:
-            if bg == port:
-                found_bg = bg
-                break
-        
-        if not found_bg:
+        if port not in self.backgrounds:
             return False
 
         if self.foreground:
-            self.backgrounds.add(self.foreground)
+            self._remove_bg(self.foreground)
+            self.backgrounds.append(self.foreground)
 
-        self.backgrounds.discard(found_bg)
-        self.foreground = found_bg
+        self._remove_bg(port)
+        self.foreground = port
         self.last_access = time.time()
 
         return True

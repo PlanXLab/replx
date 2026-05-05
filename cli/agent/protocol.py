@@ -124,6 +124,14 @@ class AgentProtocol:
         return msg
 
     @staticmethod
+    def create_stream_ack(seq: int) -> Dict[str, Any]:
+        """Client → server acknowledgement of a streaming completion message."""
+        return {
+            "seq": seq,
+            "type": "stream_ack",
+        }
+
+    @staticmethod
     def decode_stream_data(msg: Dict[str, Any]) -> bytes:
         data_b64 = msg.get('data', '')
         return base64.b64decode(data_b64) if data_b64 else b''

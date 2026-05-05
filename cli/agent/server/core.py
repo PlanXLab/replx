@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any
 from replx.utils.constants import (
     DEFAULT_AGENT_PORT, AGENT_HOST, MAX_CONNECTIONS, MAX_UDP_SIZE,
     AGENT_SOCKET_TIMEOUT, HEARTBEAT_INTERVAL,
-    ZOMBIE_CHECK_INTERVAL, IDLE_COMMAND_THRESHOLD, GC_THRESHOLD,
+    ZOMBIE_CHECK_INTERVAL, GC_THRESHOLD,
     GC_COLLECT_INTERVAL,
 )
 from replx.utils.exceptions import TransportError
@@ -117,7 +117,6 @@ class AgentServer(
         self._last_seq_lock = threading.Lock()
         self._MAX_LAST_SEQ = 256
 
-        self._last_command_time = time.time()
         self._command_handlers = self._build_command_handlers()
 
         self._fast_executor = ThreadPoolExecutor(
@@ -133,6 +132,22 @@ class AgentServer(
         self._stop_event: asyncio.Event | None = None
         self._datagram_transport: asyncio.DatagramTransport | None = None
         self._send_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Guards _send_socket lifecycle so a concurrent close cannot null the
+        # socket out from under an in-flight sendto in a worker thread (M3 fix).
+        self._send_lock = threading.Lock()
+        # Cache of recently sent responses keyed by (client_addr, seq) so that
+        # a retransmitted request can be answered from cache instead of being
+        # re-executed (m1 fix). LRU-evicted to bound memory.
+        self._response_cache: "Dict[tuple, bytes]" = {}
+        self._response_cache_order: list = []
+        self._response_cache_lock = threading.Lock()
+        self._RESPONSE_CACHE_MAX = 512
+        # Stream completion ACK tracking — M1: handlers that send a final
+        # ``stream`` message wait here for the client to acknowledge so that
+        # a UDP packet loss is recovered by retransmission. Per-key events
+        # support concurrent waiters.
+        self._stream_ack_events: "Dict[tuple, threading.Event]" = {}
+        self._stream_ack_lock = threading.Lock()
         self._cleaned_up: bool = False
     
     @property
@@ -179,6 +194,14 @@ class AgentServer(
     
     def _resolve_connection_for_session(self, ppid: int, explicit_port: str = None) -> Optional[str]:
         return self.session_manager.resolve_port(ppid, explicit_port, self._default_port)
+
+    def _effective_default_port(self, session=None) -> Optional[str]:
+        """Return the effective default port for a session: per-session
+        default takes precedence, falling back to the global default (M4).
+        """
+        if session is not None and getattr(session, 'default_port', None):
+            return session.default_port
+        return self._default_port
     
     def _cleanup_zombie_sessions(self):
         zombie_ppids = self.session_manager.cleanup_zombie_sessions()
@@ -374,40 +397,13 @@ class AgentServer(
             gc.collect()
             gc_counter = 0
 
-        if not all_conns:
-            return zombie_counter, gc_counter
-
-        elapsed = time.time() - self._last_command_time
-        if elapsed < IDLE_COMMAND_THRESHOLD:
-            return zombie_counter, gc_counter
-
-        failed_ports = []
-        for port, conn in all_conns.items():
-            if not self.connection_manager.has_connection(port):
-                continue
-            if conn.repl.active or conn.interactive.active:
-                continue
-            if conn.is_detached() or conn.busy:
-                continue
-            if not conn.acquire_for_command(session_id=0, command='heartbeat'):
-                continue
+        # Reap stuck busy locks so a long-orphaned command (client crashed
+        # mid-flight) cannot block other terminals forever.
+        for conn in all_conns.values():
             try:
-                if not self.connection_manager.has_connection(port):
-                    continue
-                if conn.repl.active or conn.interactive.active:
-                    continue
-                if conn.repl_protocol:
-                    conn.repl_protocol.exec('pass')
+                conn.force_release_if_stale()
             except Exception:
-                failed_ports.append(port)
-            finally:
-                conn.release()
-
-        for port in failed_ports:
-            self.connection_manager.disconnect(port)
-            self.session_manager.remove_connection_from_all_sessions(port)
-
-        self._last_command_time = time.time()
+                pass
 
         return zombie_counter, gc_counter
     
@@ -440,15 +436,72 @@ class AgentServer(
         conn._drain_thread = drain_thread
         drain_thread.start()
     
-    def _stop_drain_thread(self, conn: BoardConnection):
-        conn.stop_detached()
-    
     def _safe_send(self, data: bytes, addr: tuple) -> None:
-        """Send UDP response via dedicated unbound socket. Thread-safe."""
+        """Send UDP response via dedicated unbound socket. Thread-safe.
+
+        Holds ``_send_lock`` so a concurrent ``cleanup`` cannot close the
+        socket between the truthy check and ``sendto``.
+        """
+        with self._send_lock:
+            sock = self._send_socket
+            if sock is None:
+                return
+            try:
+                sock.sendto(data, addr)
+            except Exception:
+                pass
+
+    def _cache_response(self, client_addr: tuple, seq: int, data: bytes) -> None:
+        if data is None:
+            return
+        key = (client_addr, seq)
+        with self._response_cache_lock:
+            if key in self._response_cache:
+                try:
+                    self._response_cache_order.remove(key)
+                except ValueError:
+                    pass
+            else:
+                if len(self._response_cache_order) >= self._RESPONSE_CACHE_MAX:
+                    oldest = self._response_cache_order.pop(0)
+                    self._response_cache.pop(oldest, None)
+            self._response_cache[key] = data
+            self._response_cache_order.append(key)
+
+    def _lookup_response(self, client_addr: tuple, seq: int) -> Optional[bytes]:
+        with self._response_cache_lock:
+            return self._response_cache.get((client_addr, seq))
+
+    def send_completion_with_ack(
+        self,
+        encoded: bytes,
+        client_addr: tuple,
+        seq: int,
+        max_retries: int = 5,
+        interval_s: float = 0.1,
+    ) -> bool:
+        """Send a completion message and wait for ``stream_ack`` from the
+        client, retransmitting up to ``max_retries`` times (M1 fix).
+
+        Returns ``True`` if the client acknowledged, ``False`` otherwise.
+        """
+        key = (client_addr, seq)
+        event = threading.Event()
+        with self._stream_ack_lock:
+            # If somehow a previous waiter still holds an event for the same
+            # key, replace it — only the latest waiter is meaningful.
+            self._stream_ack_events[key] = event
+
         try:
-            self._send_socket.sendto(data, addr)
-        except Exception:
-            pass
+            for _ in range(max(1, max_retries)):
+                self._safe_send(encoded, client_addr)
+                if event.wait(timeout=interval_s):
+                    return True
+            return False
+        finally:
+            with self._stream_ack_lock:
+                if self._stream_ack_events.get(key) is event:
+                    self._stream_ack_events.pop(key, None)
 
     def _check_and_record_seq(self, client_addr: tuple, seq: int) -> bool:
         with self._last_seq_lock:
@@ -491,23 +544,57 @@ class AgentServer(
                 if c.is_detached():
                     self._stop_detached_script(c)
     
+    def _encode_response_safe(self, response: dict) -> bytes:
+        """Encode a response, truncating overly long error/result strings.
+
+        ``encode_message`` raises ``ValueError`` if the JSON payload exceeds
+        ``MAX_PAYLOAD_SIZE``. Long errors (eg. huge tracebacks or recursive
+        listings) would otherwise propagate up and silently swallow the
+        response (M2 fix).
+        """
+        from replx.utils.constants import MAX_PAYLOAD_SIZE
+        try:
+            return AgentProtocol.encode_message(response)
+        except ValueError:
+            seq = response.get('seq', 0) if isinstance(response, dict) else 0
+            if isinstance(response, dict):
+                err = response.get('error') or 'response too large'
+                err_str = str(err)
+                limit = max(256, MAX_PAYLOAD_SIZE - 1024)
+                if len(err_str) > limit:
+                    err_str = err_str[:limit] + '\n... [truncated]'
+            else:
+                err_str = 'response too large'
+            fallback = AgentProtocol.create_response(seq=seq, error=err_str)
+            try:
+                return AgentProtocol.encode_message(fallback)
+            except Exception:
+                return AgentProtocol.encode_message(
+                    AgentProtocol.create_response(seq=seq, error='response too large')
+                )
+
+    def _encode_ack(self, seq: int) -> bytes:
+        return AgentProtocol.encode_message(AgentProtocol.create_ack(seq))
+
+    def _send_duplicate_reply(self, client_addr: tuple, seq: int) -> None:
+        """Reply to a duplicate request: replay cached response if we have
+        one, otherwise just re-ACK so the client doesn't give up while the
+        original handler is still running."""
+        cached = self._lookup_response(client_addr, seq)
+        if cached is not None:
+            self._safe_send(cached, client_addr)
+            return
+        self._safe_send(self._encode_ack(seq), client_addr)
+
     def _handle_direct(self, msg: dict, client_addr: tuple) -> None:
         seq = msg.get('seq', 0)
         command = msg.get('command')
 
         if not self._check_and_record_seq(client_addr, seq):
-            # Duplicate request (same seq from same UDP source): re-ACK so
-            # client retransmits can recover from a previously lost ACK.
-            self._safe_send(
-                AgentProtocol.encode_message(AgentProtocol.create_ack(seq)),
-                client_addr,
-            )
+            self._send_duplicate_reply(client_addr, seq)
             return
 
-        self._safe_send(
-            AgentProtocol.encode_message(AgentProtocol.create_ack(seq)),
-            client_addr,
-        )
+        self._safe_send(self._encode_ack(seq), client_addr)
 
         try:
             ppid = msg.get('ppid')
@@ -526,50 +613,55 @@ class AgentServer(
         except Exception as exc:
             response = AgentProtocol.create_response(seq=seq, error=str(exc))
 
-        self._safe_send(AgentProtocol.encode_message(response), client_addr)
+        encoded = self._encode_response_safe(response)
+        self._cache_response(client_addr, seq, encoded)
+        self._safe_send(encoded, client_addr)
 
     def _handle_request(self, data: bytes, client_addr: tuple):
+        msg = None
         try:
             msg = AgentProtocol.decode_message(data)
             if not msg:
                 print(f"Invalid message from {client_addr}", file=sys.stderr)
                 return
-            
+
             seq = msg.get('seq', 0)
             msg_type = msg.get('type', 'request')
-            
+
             if msg_type == 'input':
                 ppid = msg.get('ppid')
                 port = msg.get('port')
                 self._handle_input(msg, client_addr, ppid, port)
                 return
-            
+
+            if msg_type == 'stream_ack':
+                # Wake any handler waiting on a completion ACK (M1 fix).
+                with self._stream_ack_lock:
+                    event = self._stream_ack_events.pop((client_addr, seq), None)
+                if event is not None:
+                    event.set()
+                return
+
             if msg_type == 'request':
                 if not self._check_and_record_seq(client_addr, seq):
-                    # Duplicate request (same seq from same UDP source):
-                    # send ACK again so the client can proceed.
-                    ack = AgentProtocol.create_ack(seq)
-                    ack_data = AgentProtocol.encode_message(ack)
-                    self._safe_send(ack_data, client_addr)
+                    self._send_duplicate_reply(client_addr, seq)
                     return
-            
-            ack = AgentProtocol.create_ack(seq)
-            ack_data = AgentProtocol.encode_message(ack)
-            self._safe_send(ack_data, client_addr)
-            
+
+            self._safe_send(self._encode_ack(seq), client_addr)
+
             response = self._handle_message(msg, client_addr)
-            
+
             if response is not None:
-                response_data = AgentProtocol.encode_message(response)
+                response_data = self._encode_response_safe(response)
+                self._cache_response(client_addr, seq, response_data)
                 self._safe_send(response_data, client_addr)
-            
+
         except Exception as e:
             try:
-                error_response = AgentProtocol.create_response(
-                    seq=msg.get('seq', 0) if msg else 0,
-                    error=str(e)
-                )
-                error_data = AgentProtocol.encode_message(error_response)
+                seq = msg.get('seq', 0) if isinstance(msg, dict) else 0
+                error_response = AgentProtocol.create_response(seq=seq, error=str(e))
+                error_data = self._encode_response_safe(error_response)
+                self._cache_response(client_addr, seq, error_data)
                 self._safe_send(error_data, client_addr)
             except Exception:
                 pass
@@ -735,7 +827,11 @@ class AgentServer(
                     seq=seq,
                     error=f"Connection {active_conn.port} was disconnected."
                 )
-            if not active_conn.acquire_for_command(ppid, command, client_addr):
+            allow_when_detached = command in CmdGroups.DETACHED_ALLOW
+            if not active_conn.acquire_for_command(
+                ppid, command, client_addr,
+                allow_when_detached=allow_when_detached,
+            ):
                 return AgentProtocol.create_response(
                     seq=seq,
                     error=f"Connection {active_conn.port} is busy. Another command ({active_conn.busy_command}) is currently running. Please wait for it to complete or press Ctrl+C to cancel."
@@ -781,7 +877,6 @@ class AgentServer(
             if command not in NON_REPL_COMMANDS and command not in PERSISTENT_BUSY_COMMANDS and command not in STREAMING_COMMANDS:
                 if active_conn:
                     active_conn.release()
-            self._last_command_time = time.time()
     
     def cleanup(self) -> None:
         self.running = False
@@ -817,13 +912,28 @@ class AgentServer(
                     transport.close()
             except Exception:
                 pass
+
+        # Drain executor work BEFORE closing the send socket so that any
+        # in-flight ``_safe_send`` from a worker doesn't observe a closed/None
+        # socket (M3 fix). ``cancel_futures`` discards queued tasks; the brief
+        # wait handles tasks already running.
         try:
-            self._send_socket.close()
+            self._fast_executor.shutdown(wait=True, cancel_futures=True)
         except Exception:
             pass
-        self._send_socket = None
-        self._fast_executor.shutdown(wait=False, cancel_futures=True)
-        self._slow_executor.shutdown(wait=False, cancel_futures=True)
+        try:
+            self._slow_executor.shutdown(wait=True, cancel_futures=True)
+        except Exception:
+            pass
+
+        with self._send_lock:
+            sock = self._send_socket
+            self._send_socket = None
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
         print('replx agent stopped')
 

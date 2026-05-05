@@ -1,5 +1,4 @@
 import json
-import re
 
 import typer
 from rich.live import Live
@@ -143,7 +142,7 @@ print(json.dumps(result))
         
         if data["active"]:
             if data["connected"]:
-                lines.append(f"[green]● Connected[/green]")
+                lines.append(f"[green]{chr(0xf16be)} Connected[/green]")
                 if data["ssid"]:
                     lines.append(f"  SSID:     [bright_cyan]{data['ssid']}[/bright_cyan]")
                 if data["ifconfig"]:
@@ -158,9 +157,9 @@ print(json.dumps(result))
                     msg, color = WIFI_STATUS_MESSAGES[status]
                     lines.append(f"[{color}]● {msg}[/{color}]")
                 else:
-                    lines.append(f"[yellow]● Active but not connected[/yellow]")
+                    lines.append(f"[yellow]{chr(0xf16b5)} Active but not connected[/yellow]")
         else:
-            lines.append(f"[dim]● WiFi disabled[/dim]")
+            lines.append(f"[dim]{chr(0xf16bc)}  WiFi disabled[/dim]")
         
         OutputHelper.print_panel(
             "\n".join(lines),
@@ -214,63 +213,71 @@ print(json.dumps(result))
         return {"connected": False, "ssid": None, "ifconfig": None, "same_ssid": False}
 
 
-def _wifi_do_connect(client: AgentClient, ssid: str, pw: str, timeout: int = 15) -> dict:
+def _wifi_do_connect(client: AgentClient, ssid: str, pw: str, timeout: int = 15, save_config: bool = False) -> dict:
+    escaped_ssid = ssid.replace('\\', '\\\\').replace('"', '\\"')
+    escaped_pw = pw.replace('\\', '\\\\').replace('"', '\\"')
+
+    # When save_config=True the config is written on the board inside the same
+    # exec, eliminating an extra round-trip before the result is displayed.
+    if save_config:
+        cfg_code = (
+            "\n"
+            "    import binascii, machine\n"
+            "    _key = machine.unique_id()\n"
+            f'    _enc_pw = "{escaped_pw}".encode()\n'
+            "    _enc = bytes(b ^ _key[i % len(_key)] for i, b in enumerate(_enc_pw))\n"
+            "    _pw_enc = binascii.b2a_base64(_enc).decode().strip()\n"
+            "    _f = open('/wifi_config.py', 'w')\n"
+            f'    _f.write(\'WIFI_SSID = "{escaped_ssid}"\\n\')\n'
+            "    _f.write('WIFI_PASS_ENC = \"%s\"\\n' % _pw_enc)\n"
+            "    _f.close()"
+        )
+    else:
+        cfg_code = ""
+
     connect_code = f'''
-import network
-import time
-import json
+import network, time, json
 
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
-
 if wlan.isconnected():
     wlan.disconnect()
-    time.sleep_ms(100)
+    time.sleep_ms(200)
 
-wlan.connect("{ssid}", "{pw}")
+wlan.connect("{escaped_ssid}", "{escaped_pw}")
 
-timeout_ms = {timeout * 1000}
 t0 = time.ticks_ms()
-last_status = None
-error_count = 0
+fail_status = None
+auth_fail_since = None  # tracks when 2/-3 first appeared
 
 while True:
     if wlan.isconnected():
         break
-    
-    elapsed = time.ticks_diff(time.ticks_ms(), t0)
-    if elapsed > timeout_ms:
-        break
-    
     try:
-        status = wlan.status()
-        last_status = status
-        if status in (3, 4, -1, -2):
-            error_count += 1
-            if error_count >= 3:
-                break
-        elif status in (2, -3):
-            error_count += 1
-            if error_count >= 5:
+        s = wlan.status()
+        if s in (3, -2):  # AP not found — reliable, exit immediately
+            fail_status = s
+            break
+        elif s in (2, -3):  # wrong password signal — may be transient on CYW43
+            if auth_fail_since is None:
+                auth_fail_since = time.ticks_ms()
+            elif time.ticks_diff(time.ticks_ms(), auth_fail_since) >= 3000:
+                fail_status = s
                 break
         else:
-            error_count = 0
+            auth_fail_since = None  # status changed — reset transient counter
     except:
         pass
-    
+    if time.ticks_diff(time.ticks_ms(), t0) >= {timeout * 1000}:
+        break
     time.sleep_ms(200)
 
-if not wlan.isconnected():
-    for _ in range(10):
-        time.sleep_ms(200)
-        if wlan.isconnected():
-            break
-
-if wlan.isconnected():
+connected = wlan.isconnected()
+if connected:
     try:
         wlan.config(pm=network.WLAN.PM_NONE)
     except:
-        pass
+        pass{cfg_code}
 
 final_status = None
 try:
@@ -278,20 +285,19 @@ try:
 except:
     pass
 
-result = {{
-    "connected": wlan.isconnected(),
-    "ifconfig": wlan.ifconfig() if wlan.isconnected() else None,
-    "status": final_status if final_status is not None else last_status
-}}
-print(json.dumps(result))
+print(json.dumps({{
+    "connected": connected,
+    "ifconfig": wlan.ifconfig() if connected else None,
+    "status": final_status,
+    "fail_status": fail_status}}))
 '''
     console = OutputHelper.make_console()
     spinner = Spinner("dots", text=Text(f" Connecting to {ssid}...", style="bright_cyan"))
-    
+
     try:
         with Live(spinner, console=console, refresh_per_second=10, transient=True):
             result = client.send_command('exec', code=connect_code, timeout=timeout + 5.0)
-        
+
         output = result.get('output', '').strip()
         data = None
         for line in output.split('\n'):
@@ -303,73 +309,47 @@ print(json.dumps(result))
                         break
                 except json.JSONDecodeError:
                     continue
-        
-        if data is None:
-            data = {"connected": False, "ifconfig": None, "status": None}
-        
-        if not data.get("connected"):
-            import time as pytime
 
-            # Connection status can lag behind final association/auth state,
-            # especially on busy APs. Re-check for a short stabilization window.
-            verify = None
-            for _ in range(8):  # up to ~4s
+        if data is None:
+            data = {"connected": False, "ifconfig": None, "status": None, "fail_status": None}
+
+        if not data.get("connected"):
+            fail_status = data.get("fail_status")
+            # Definitive failure codes — re-checking would just add delay
+            if fail_status in (2, -3, 3, -2):
+                msg, _ = _wifi_get_status_message(fail_status)
+                data["error"] = msg
+                return data
+
+            # Genuine timeout: board may have connected just after the last poll
+            import time as pytime
+            for _ in range(2):  # up to 1 s
                 pytime.sleep(0.5)
                 verify = _wifi_check_current_connection(client, target_ssid=ssid)
-                if not verify.get("connected"):
-                    continue
+                if verify.get("connected") and verify.get("same_ssid"):
+                    return {"connected": True, "ifconfig": verify.get("ifconfig"), "status": 5, "fail_status": None}
 
-                same_ssid = verify.get("same_ssid")
-                current_ssid = verify.get("ssid")
-                # Accept if SSID matches, or if SSID is temporarily unavailable
-                # but interface is already connected.
-                if same_ssid or not current_ssid:
-                    return {
-                        "connected": True,
-                        "ifconfig": verify.get("ifconfig"),
-                        "status": 5
-                    }
-
-            status = data.get("status")
+            status = data.get("status") or fail_status
             if status is not None:
                 msg, _ = _wifi_get_status_message(status)
                 data["error"] = msg
             else:
                 data["error"] = "Connection timeout"
-        
+
         return data
-        
+
     except Exception as e:
         error_str = str(e)
-        json_match = re.search(r'\{[^{}]*"connected":\s*(true|false)[^{}]*\}', error_str)
-        if json_match:
-            try:
-                data = json.loads(json_match.group())
-                if data.get("connected"):
-                    return data
-            except json.JSONDecodeError:
-                pass
-        
         import time as pytime
         try:
-            verify = None
-            for _ in range(8):  # up to ~4s
+            for _ in range(2):
                 pytime.sleep(0.5)
                 verify = _wifi_check_current_connection(client, target_ssid=ssid)
-                if not verify.get("connected"):
-                    continue
-                same_ssid = verify.get("same_ssid")
-                current_ssid = verify.get("ssid")
-                if same_ssid or not current_ssid:
-                    return {
-                        "connected": True,
-                        "ifconfig": verify.get("ifconfig"),
-                        "status": 5
-                    }
+                if verify.get("connected") and verify.get("same_ssid"):
+                    return {"connected": True, "ifconfig": verify.get("ifconfig"), "status": 5, "fail_status": None}
         except Exception:
             pass
-        
-        return {"connected": False, "ifconfig": None, "status": None, "error": error_str}
+        return {"connected": False, "ifconfig": None, "status": None, "fail_status": None, "error": error_str}
 
 
 def _wifi_connect(client: AgentClient, ssid: str, pw: str):
@@ -382,20 +362,18 @@ def _wifi_connect(client: AgentClient, ssid: str, pw: str):
         _wifi_save_config(client, ssid, pw)
         
         OutputHelper.print_panel(
-            f"[green]● Already connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
+            f"[green]{chr(0xf05a9)} Already connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
             f"  IP: [bright_yellow]{ip}[/bright_yellow]",
             title="WiFi Status",
             border_style="green"
         )
         return
     
-    result = _wifi_do_connect(client, ssid, pw)
-    
+    result = _wifi_do_connect(client, ssid, pw, save_config=True)
+
     if result.get("connected"):
         ip = result["ifconfig"][0] if result.get("ifconfig") else "unknown"
-        
-        _wifi_save_config(client, ssid, pw)
-        
+
         OutputHelper.print_panel(
             f"[green]Connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
             f"  IP: [bright_yellow]{ip}[/bright_yellow]\n\n"
@@ -405,7 +383,7 @@ def _wifi_connect(client: AgentClient, ssid: str, pw: str):
         )
     else:
         error = result.get("error", "Unknown error")
-        status = result.get("status")
+        status = result.get("fail_status") or result.get("status")
         
         error_detail = f"[red]{error}[/red]"
         hints = []
@@ -433,31 +411,21 @@ def _wifi_connect(client: AgentClient, ssid: str, pw: str):
 
 
 def _wifi_save_config(client: AgentClient, ssid: str, pw: str):
-    check_code = '''
-import json
-try:
-    from wifi_config import WIFI_SSID, WIFI_PASS
-    print(json.dumps({"ssid": WIFI_SSID, "pw": WIFI_PASS}))
-except:
-    print(json.dumps({"ssid": None, "pw": None}))
-'''
-    try:
-        result = client.send_command('exec', code=check_code)
-        output = result.get('output', '').strip()
-        existing = json.loads(output)
-        
-        if existing.get("ssid") == ssid and existing.get("pw") == pw:
-            return
-    except:
-        pass
-
     escaped_ssid = ssid.replace('\\', '\\\\').replace('"', '\\"')
     escaped_pw = pw.replace('\\', '\\\\').replace('"', '\\"')
-    
+
     save_code = f'''
+import binascii
+import machine
+
+_key = machine.unique_id()
+_pw = "{escaped_pw}".encode()
+_enc = bytes(b ^ _key[i % len(_key)] for i, b in enumerate(_pw))
+_pw_enc = binascii.b2a_base64(_enc).decode().strip()
+
 f = open("/wifi_config.py", "w")
 f.write('WIFI_SSID = "{escaped_ssid}"\\n')
-f.write('WIFI_PASS = "{escaped_pw}"\\n')
+f.write(f'WIFI_PASS_ENC = "{{_pw_enc}}"\\n')
 f.close()
 '''
     client.send_command('exec', code=save_code)
@@ -466,9 +434,20 @@ f.close()
 def _wifi_connect_from_config(client: AgentClient):
     read_config_code = '''
 import json
+import binascii
+import machine
+
 try:
-    from wifi_config import WIFI_SSID, WIFI_PASS
-    print(json.dumps({"ssid": WIFI_SSID, "pw": WIFI_PASS}))
+    from wifi_config import WIFI_SSID
+    try:
+        from wifi_config import WIFI_PASS_ENC
+        _key = machine.unique_id()
+        _raw = binascii.a2b_base64(WIFI_PASS_ENC)
+        pw = bytes(b ^ _key[i % len(_key)] for i, b in enumerate(_raw)).decode()
+    except ImportError:
+        from wifi_config import WIFI_PASS  # legacy plain-text fallback
+        pw = WIFI_PASS
+    print(json.dumps({"ssid": WIFI_SSID, "pw": pw}))
 except ImportError:
     print(json.dumps({"error": "no_config"}))
 '''
@@ -513,7 +492,7 @@ except ImportError:
     if current.get("connected") and current.get("same_ssid"):
         ip = current["ifconfig"][0] if current.get("ifconfig") else "unknown"
         OutputHelper.print_panel(
-            f"[green]● Already connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
+            f"[green]{chr(0xf05a9)} Already connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
             f"  IP: [bright_yellow]{ip}[/bright_yellow]",
             title="WiFi Status",
             border_style="green"
@@ -526,7 +505,7 @@ except ImportError:
         ip = result["ifconfig"][0] if result.get("ifconfig") else "unknown"
         OutputHelper.print_panel(
             f"[green]Connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
-            f"  IP: [bright_yellow]{ip}[/bright_yellow]",
+            f"{chr(0xf16be)}  IP: [bright_yellow]{ip}[/bright_yellow]",
             title="WiFi Connected",
             border_style="green"
         )
@@ -561,8 +540,20 @@ def _wifi_boot_on(client: AgentClient):
     check_code = '''
 import json
 try:
-    from wifi_config import WIFI_SSID, WIFI_PASS
-    print(json.dumps({"exists": True}))
+    from wifi_config import WIFI_SSID
+    has_pass = False
+    try:
+        from wifi_config import WIFI_PASS_ENC
+        has_pass = True
+    except ImportError:
+        pass
+    if not has_pass:
+        try:
+            from wifi_config import WIFI_PASS
+            has_pass = True
+        except ImportError:
+            pass
+    print(json.dumps({"exists": bool(WIFI_SSID and has_pass)}))
 except:
     print(json.dumps({"exists": False}))
 '''
@@ -592,11 +583,20 @@ except:
     wifi_boot_code = '''# --- replx wifi auto-connect ---
 try:
     import network
-    from wifi_config import WIFI_SSID, WIFI_PASS
+    import binascii
+    import machine
+    from wifi_config import WIFI_SSID
+    try:
+        from wifi_config import WIFI_PASS_ENC
+        _key = machine.unique_id()
+        _raw = binascii.a2b_base64(WIFI_PASS_ENC)
+        _pw = bytes(b ^ _key[i % len(_key)] for i, b in enumerate(_raw)).decode()
+    except ImportError:
+        from wifi_config import WIFI_PASS
+        _pw = WIFI_PASS
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
-    wlan.connect(WIFI_SSID, WIFI_PASS)
-    wlan.config(pm=network.WLAN.PM_NONE)
+    wlan.connect(WIFI_SSID, _pw)
 except:
     pass
 # --- end replx wifi ---
@@ -838,30 +838,42 @@ for ap in aps:
     auth_names = ["Open", "WEP", "WPA-PSK", "WPA2-PSK", "WPA/WPA2-PSK", "WPA2-ENT", "WPA3-PSK", "WPA2/WPA3-PSK"]
     auth_str = auth_names[auth] if auth < len(auth_names) else f"Auth{auth}"
     results.append({
-        "ssid": ssid.decode() if ssid else "(hidden)",
+        "ssid": ssid.decode() if ssid else "",
         "rssi": rssi,
         "channel": channel,
         "auth": auth_str,
         "hidden": hidden
     })
 
+current_ssid = None
+if wlan.isconnected():
+    try:
+        current_ssid = wlan.config("essid")
+    except:
+        pass
+
 if not was_active:
     wlan.active(False)
 
 results.sort(key=lambda x: x["rssi"], reverse=True)
-print(json.dumps(results))
+print(json.dumps({"networks": results, "current": current_ssid}))
 '''
     try:
         result = client.send_command('exec', code=code)
         output = result.get('output', '').strip()
         
+        data = []
+        current_ssid = None
         for line in output.split('\n'):
             line = line.strip()
-            if line.startswith('['):
-                data = json.loads(line)
+            if line.startswith('{'):
+                try:
+                    outer = json.loads(line)
+                    data = outer.get("networks", [])
+                    current_ssid = outer.get("current")
+                except json.JSONDecodeError:
+                    pass
                 break
-        else:
-            data = []
         
         if not data:
             OutputHelper.print_panel(
@@ -879,7 +891,17 @@ print(json.dumps(results))
         table.add_column("Security", width=14)
         
         for ap in data:
-            ssid_display = ap["ssid"] if ap["ssid"] else "[dim](hidden)[/dim]"
+            is_hidden = not ap["ssid"]
+            is_current = bool(
+                current_ssid and not is_hidden
+                and ap["ssid"].lower() == current_ssid.lower()
+            )
+            if is_hidden:
+                ssid_display = "[dim](hidden)[/dim]"
+            elif is_current:
+                ssid_display = f"{ap['ssid']} [magenta]{chr(0xf1e6)}[/magenta]"
+            else:
+                ssid_display = ap["ssid"]
             table.add_row(
                 ssid_display,
                 _signal_str(ap["rssi"]),

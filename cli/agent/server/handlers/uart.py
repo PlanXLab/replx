@@ -1,12 +1,4 @@
-import sys
-
 from ..command_dispatcher import CommandContext
-
-
-def _norm_port(port: str) -> str:
-    if port and sys.platform.startswith('win'):
-        return port.upper()
-    return port
 
 
 class UartCommandsMixin:
@@ -14,7 +6,7 @@ class UartCommandsMixin:
         port = self._resolve_connection_for_session(ctx.ppid, ctx.explicit_port)
         if not port:
             raise ValueError("No active connection. Connect to a board first.")
-        return _norm_port(port)
+        return port
 
     def _cmd_uart_bus_set(self, ctx: CommandContext,
                           tx: int, rx, ch: int,

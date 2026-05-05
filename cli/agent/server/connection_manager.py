@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Tuple
 
 from replx.protocol import ReplProtocol, create_storage
-from replx.utils import parse_device_banner
+from replx.utils import parse_device_banner, canon_port as _shared_canon_port
 from replx.utils.constants import CTRL_B, CTRL_C
 from replx.utils.exceptions import TransportError
 
@@ -61,9 +61,7 @@ class InteractiveSessionState:
     input_queue: List[Any] = field(default_factory=list)
     stop_requested: bool = False
     thread: Optional[threading.Thread] = None
-    completed: bool = False
     error: Optional[str] = None
-    detached: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def start(self, ppid: int, seq: int, client_addr: tuple, echo: bool = True):
@@ -75,9 +73,7 @@ class InteractiveSessionState:
             self.echo = echo
             self.input_queue = []
             self.stop_requested = False
-            self.completed = False
             self.error = None
-            self.detached = False
 
     def stop(self):
         thread_to_join = None
@@ -165,31 +161,51 @@ class BoardConnection:
     busy_session: Optional[int] = None
     busy_client: Optional[tuple] = None
     last_command_time: float = field(default_factory=time.time)
+    # Single state lock guards busy_* and detached_running together so that
+    # callers can atomically check "not detached AND not busy" without races.
     _busy_lock: threading.Lock = field(default_factory=threading.Lock)
-    
+
     detached_running: bool = False
-    _detached_lock: threading.Lock = field(default_factory=threading.Lock)
     _drain_thread: Optional[threading.Thread] = field(default=None, repr=False)
 
     interactive: InteractiveSessionState = field(default_factory=InteractiveSessionState)
     repl: ReplSessionState = field(default_factory=ReplSessionState)
 
+    # --- Sentinel session ids -------------------------------------------------
+    # Real client sessions are OS PIDs (>= 1). Negative ids are reserved for
+    # internal callers so they can never alias with a real client.
+    HEARTBEAT_SESSION_ID = -1
+
+    # Force-release a busy that has been held longer than this without any
+    # observable progress. Heartbeat applies this only when no REPL/interactive
+    # session and no detached script holds the connection.
+    BUSY_TIMEOUT_S = 60.0
+
     def is_connected(self) -> bool:
         return self.repl_protocol is not None
     
     def is_detached(self) -> bool:
-        with self._detached_lock:
+        with self._busy_lock:
             return self.detached_running
     
     def set_detached(self, running: bool):
-        with self._detached_lock:
+        with self._busy_lock:
             self.detached_running = running
 
-    def acquire_for_command(self, session_id: int, command: str, client_addr: tuple = None) -> bool:
+    def acquire_for_command(self, session_id: int, command: str,
+                            client_addr: tuple = None,
+                            allow_when_detached: bool = False) -> bool:
+        """Try to mark the board as busy for ``session_id``.
+
+        Concurrent acquires from the same session are rejected so that two
+        in-flight commands cannot believe they each own the board (the previous
+        re-entrant behaviour caused premature release when the inner command
+        finished first). Returns ``True`` only if this call took the lock.
+        """
         with self._busy_lock:
+            if self.detached_running and not allow_when_detached:
+                return False
             if self.busy:
-                if self.busy_session == session_id:
-                    return True
                 return False
             self.busy = True
             self.busy_session = session_id
@@ -204,11 +220,35 @@ class BoardConnection:
             self.busy_session = None
             self.busy_command = None
             self.busy_client = None
-    
+
+    def force_release_if_stale(self, timeout_s: float = None) -> bool:
+        """Forcefully release a busy lock that has been held too long.
+
+        Skips REPL / interactive / detached owners since those have separate
+        lifecycles managed elsewhere. Returns ``True`` if a stale lock was
+        cleared.
+        """
+        if timeout_s is None:
+            timeout_s = self.BUSY_TIMEOUT_S
+        with self._busy_lock:
+            if not self.busy:
+                return False
+            if self.detached_running:
+                return False
+            if self.repl.active or self.interactive.active:
+                return False
+            if time.time() - self.last_command_time < timeout_s:
+                return False
+            self.busy = False
+            self.busy_session = None
+            self.busy_command = None
+            self.busy_client = None
+            return True
+
     def stop_detached(self):
-        with self._detached_lock:
+        with self._busy_lock:
             self.detached_running = False
-        
+
         if self._drain_thread and self._drain_thread.is_alive():
             self._drain_thread.join(timeout=2.0)
         self._drain_thread = None
@@ -236,14 +276,7 @@ class ConnectionManager:
 
     @staticmethod
     def _canon_port(port: Optional[str]) -> Optional[str]:
-        if port is None:
-            return None
-        p = str(port).strip()
-        if not p:
-            return ""
-        if ConnectionManager._is_windows() and re.match(r"(?i)^com\d+$", p):
-            return p.upper()
-        return p
+        return _shared_canon_port(port)
 
     def _resolve_existing_key(self, port: str) -> Optional[str]:
         if port is None:
@@ -251,8 +284,8 @@ class ConnectionManager:
         p = self._canon_port(port)
         if p in self._connections:
             return p
-        if self._is_windows() and re.match(r"(?i)^com\d+$", p or ""):
-            needle = (p or "").lower()
+        if self._is_windows() and p and re.match(r"(?i)^com\d+$", p):
+            needle = p.lower()
             for k in self._connections.keys():
                 if isinstance(k, str) and k.lower() == needle:
                     return k

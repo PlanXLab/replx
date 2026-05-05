@@ -1,5 +1,27 @@
+import re as _re
+import sys as _sys
+from typing import Optional as _Optional
+
+
 def device_name_to_path(device_name: str) -> str:
     return device_name.replace('-', '_')
+
+
+def canon_port(port: _Optional[str]) -> _Optional[str]:
+    """Canonical form of a serial port name.
+
+    Windows: ``COM3``/``com3``/``Com3`` are equivalent — normalise to upper case.
+    POSIX: pass through stripped string. ``None`` and empty input map to themselves.
+    """
+    if port is None:
+        return None
+    p = str(port).strip()
+    if not p:
+        return p
+    if _sys.platform == "win32" or _sys.platform.startswith("win"):
+        if _re.match(r"(?i)^com\d+$", p):
+            return p.upper()
+    return p
 
 
 from .device_info import (
@@ -40,6 +62,7 @@ from .exceptions import (
 
 __all__ = [
     "device_name_to_path",
+    "canon_port",
     "parse_device_banner",
     "get_root_fs_for_core",
     "get_core_profile",
