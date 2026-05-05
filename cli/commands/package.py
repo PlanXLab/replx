@@ -2,9 +2,7 @@ import os
 import glob
 import time
 import threading
-import urllib.request
 import urllib.error
-from urllib.parse import urlparse
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -98,7 +96,6 @@ Package management for MicroPython devices.
     [green]device.all[/green]               Install all device libs for connected board
     [green]core.<file>[/green]              Install one core file (e.g., core.termio.py)
     [green]device.<file>[/green]            Install one device file (e.g., device.termio.py)
-    [green]https://...[/green]              Download from URL and install
 
 [bold cyan]Examples:[/bold cyan]
   replx pkg search                                   [dim]List all libraries[/dim]
@@ -108,7 +105,6 @@ Package management for MicroPython devices.
   replx pkg update device.all                        [dim]Install all device libs[/dim]
   replx pkg update core.termio.py                    [dim]→ /lib/termio.mpy[/dim]
   replx pkg update device.termio.py                  [dim]→ /lib/<device>/termio.mpy[/dim]
-  replx pkg update https://...                       [dim]→ /lib/[/dim]
   replx pkg clean                                    [dim]Remove current core/device[/dim]
 
 [bold cyan]Workflow:[/bold cyan] search → download → update core.all
@@ -116,11 +112,7 @@ Package management for MicroPython devices.
 [bold cyan]Note:[/bold cyan]
   • Device connection required (--port or default)
   • Core/device auto-detected from connected board
-    • Options --owner/--repo/--ref are for search/download/update only
-  • URL format for GitHub: [green]https://GITHUB/OWNER/REPO/BRANCH/path/file.py[/green]
-    [dim]• GITHUB: raw.githubusercontent.com [/dim]
-    [dim]• e.g. OWNER: micropython | REPO: micropython-lib | BRANCH: master[/dim]
-    [dim]• e.g. path: micropython/umqtt.simple/umqtt | file.py: simple.py[/dim]"""
+    • Options --owner/--repo/--ref are for search/download/update only"""
         OutputHelper.print_panel(help_text, title="pkg", border_style="help")
         console.print()
         raise typer.Exit()
@@ -930,8 +922,7 @@ def _pkg_update(args: list[str], owner: str = "PlanXLab", repo: str = "replx_lib
             "  [bright_blue]core.all[/bright_blue]\n"
             "  [bright_blue]device.all[/bright_blue]\n"
             "  [bright_blue]core.<file>[/bright_blue]\n"
-            "  [bright_blue]device.<file>[/bright_blue]\n"
-            "  [bright_blue]https://...[/bright_blue]",
+            "  [bright_blue]device.<file>[/bright_blue]",
             title="Update Error",
             border_style="error"
         )
@@ -1133,48 +1124,13 @@ def _pkg_update(args: list[str], owner: str = "PlanXLab", repo: str = "replx_lib
         )
         raise typer.Exit(1)
 
-    if spec and InstallHelper.is_url(spec):
-        u = urlparse(spec)
-        fname = os.path.basename(u.path)
-        if not fname.endswith(".py"):
-            OutputHelper.print_panel(
-                f"Only single .py file is supported for URL installs.\n\n"
-                f"URL: [yellow]{spec}[/yellow]",
-                title="Update Error",
-                border_style="error"
-            )
-            raise typer.Exit(1)
-        dl_dir = StoreManager.HOME_STAGING / "downloads"
-        dl_dir.mkdir(parents=True, exist_ok=True)
-        dst = str(dl_dir / fname)
-        try:
-            with urllib.request.urlopen(spec, timeout=HTTP_REQUEST_TIMEOUT) as r, open(dst, "wb") as f:
-                f.write(r.read())
-        except Exception as e:
-            OutputHelper.print_panel(
-                f"Download failed: [red]{e}[/red]\n\n"
-                f"URL: [yellow]{spec}[/yellow]",
-                title="Update Error",
-                border_style="error"
-            )
-            raise typer.Exit(1)
-        try:
-            _install_single_file(dst)
-        finally:
-            try:
-                os.remove(dst)
-            except Exception:
-                pass
-        return
-
     if not spec:
         OutputHelper.print_panel(
             "Specify a target:\n\n"
             "  [bright_blue]core.all[/bright_blue]        Install all core libraries\n"
             "  [bright_blue]device.all[/bright_blue]      Install all device libraries\n"
             "  [bright_blue]core.<file>[/bright_blue]     Install one core file\n"
-            "  [bright_blue]device.<file>[/bright_blue]   Install one device file\n"
-            "  [bright_blue]<URL>[/bright_blue]         Download and install from URL\n\n"
+            "  [bright_blue]device.<file>[/bright_blue]   Install one device file\n\n"
             "Examples:\n"
             "  [bright_blue]replx pkg update core.all[/bright_blue]\n"
             "  [bright_blue]replx pkg update core.termio.py[/bright_blue]",
@@ -1192,8 +1148,7 @@ def _pkg_update(args: list[str], owner: str = "PlanXLab", repo: str = "replx_lib
             "  [bright_blue]core.all[/bright_blue]\n"
             "  [bright_blue]device.all[/bright_blue]\n"
             "  [bright_blue]core.<file>[/bright_blue]\n"
-            "  [bright_blue]device.<file>[/bright_blue]\n"
-            "  [bright_blue]https://...[/bright_blue]",
+            "  [bright_blue]device.<file>[/bright_blue]",
             title="Update Error",
             border_style="error"
         )

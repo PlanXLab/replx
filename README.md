@@ -235,6 +235,7 @@ These commands communicate with the board. Except for `setup`, the port can be o
 
 | Command | Description |
 |---|---|
+| `mip` | Search and install MicroPython packages from the official index or GitHub. |
 | `pkg` | Search, download, and update MicroPython packages. |
 | `mpy` | Compile `.py` files to `.mpy` bytecode. |
 
@@ -755,8 +756,62 @@ replx firmware update --force
 
 ### Package / Compile
 
+#### `mip`
+Install MicroPython packages from the official micropython.org index or directly from GitHub. All downloading and compilation happen on the PC — the board does not need a Wi-Fi connection. `.py` source files are compiled to `.mpy` using `mpy-cross` before upload. The target architecture is auto-detected from the connected board via `sys.implementation._mpy`.
+
+For packages in the official index, pre-compiled `.mpy` files are fetched directly from the CDN when available (`hashes` field). For `github:org/repo` specs without a `package.json`, replx automatically queries the board's architecture and fetches pre-built `.mpy` binaries from the repository's GitHub Pages CDN (e.g. `emlearn-micropython`).
+
+Usage:
+```sh
+replx mip SUBCOMMAND [args]
+```
+
+Subcommands:
+
+| Subcommand | Description |
+|---|---|
+| `search [QUERY]` | List all packages or filter by name/description |
+| `search github:org/repo` | Browse a GitHub repo's package structure |
+| `install TARGET[@version]` | Download, compile (if needed), and install to board |
+
+Install Targets:
+```sh
+requests                  # latest version from official index
+requests@0.10.0           # specific version
+github:org/repo           # GitHub repo root (package.json or CDN fallback)
+github:org/repo/path      # GitHub repo sub-path
+https://example.com/f.mpy # direct URL
+```
+
+Install Options:
+- `--device PATH`: board destination path (default: `lib` → `/lib/`)
+- `--no-compile`: upload `.py` files directly without `.mpy` compilation
+- `--index URL`: use a custom package index instead of the default
+
+Examples:
+```sh
+replx mip search
+replx mip search mqtt
+replx mip search github:micropython/micropython-lib
+replx mip install requests
+replx mip install requests@0.10.0
+replx mip install aioble
+replx mip install github:emlearn/emlearn-micropython
+replx mip install github:org/repo/src
+replx mip install --device /lib/ext umqtt.simple
+replx mip install --no-compile logging
+```
+
+Notes:
+- All network I/O happens on the PC — board WiFi is **not** required.
+- `.py` files are compiled to `.mpy` before upload (requires `mpy-cross`).
+- Dependencies declared in `deps` are installed automatically.
+- For packages without `package.json` (e.g. native C modules), replx reads the board's `sys.implementation._mpy` to determine architecture (`armv6m`, `armv7emsp`, `xtensawin`, etc.) and fetches matching pre-built `.mpy` files from GitHub Pages.
+
+---
+
 #### `pkg`
-Manages the package workflow (`search → download → update`) between the GitHub remote registry, local store, and board. `search [QUERY]` shows results scoped to the connected board's core/device. `download` fetches the remote registry to the local store. `update TARGET` installs packages to the board using `core.all`, `device.all`, `core.<file>`, `device.<file>`, or URL format. `clean` removes the current core/device entries from the local store. `--owner/--repo/--ref` specify the GitHub remote and apply to `search/download/update`. `-t/--target` specifies the board destination path for `update`.
+Manages the package workflow (`search → download → update`) between the GitHub remote registry, local store, and board. `search [QUERY]` shows results scoped to the connected board's core/device. `download` fetches the remote registry to the local store. `update TARGET` installs packages to the board using `core.all`, `device.all`, `core.<file>`, or `device.<file>`. `clean` removes the current core/device entries from the local store. `--owner/--repo/--ref` specify the GitHub remote and apply to `search/download/update`.
 
 Usage:
 ```sh
@@ -774,8 +829,6 @@ replx pkg update core.all
 replx pkg update device.all
 replx pkg update core.slip.py
 replx pkg update device.termio.py
-replx pkg update core.termio.py --target lib/ext
-replx pkg update https://raw.githubusercontent.com/.../driver.py --target lib/ext
 replx pkg clean
 ```
 
@@ -1031,6 +1084,10 @@ Options:
 
 | Symptom | Likely Cause | Resolution |
 |---|---|---|
+| `mip install` — package not found | Typo or unofficial package | Try `replx mip search NAME` to confirm exact name |
+| `mip install github:org/repo` — 404 | Repo has no `package.json` | replx falls back to GitHub Pages CDN; if no CDN files exist for your arch, the package does not support your board |
+| `mip install` — arch not supported | Board arch not in package's prebuilt list | Check the repo for supported architectures; use `replx -c "import sys; print(sys.implementation._mpy)"` to confirm |
+| `mip install` — compile error | `mpy-cross` not installed or wrong version | `pip install mpy-cross`, or use `--no-compile` to skip compilation |
 | No `pkg search` results | Outside current board's core/device scope | Check board with `whoami`, switch board and search again |
 | `pkg update` fails | Local store not prepared | Run `replx pkg download` first, then retry `replx pkg update ...` |
 | `mpy` fails | `mpy-cross` not installed | `pip install mpy-cross` |
