@@ -24,6 +24,7 @@ def _preprocess_connection_shortcut():
         'ls', 'cat', 'get', 'put', 'cp', 'mv', 'rm', 'mkdir', 'touch',
         'usage', 'reset', 'format', 'init',
         'install', 'update', 'search', 'i2c', 'gpio', 'adc', 'pwm', 'uart', 'spi',
+        'mip',
     }
     
     commands_without_connection = {
@@ -336,6 +337,7 @@ _COMMAND_MODULES = {
     'reset': 'exec',
     'pkg': 'package',
     'mpy': 'package',
+    'mip': 'mip',
     'version': 'utility',
     'status': 'utility',
     'fg': 'utility',
@@ -427,6 +429,7 @@ def _print_main_help():
         ]),
         ("Package Management", [
             ("pkg", "Manage libraries: search, download, update"),
+            ("mip", "Install MicroPython community packages (micropython.org)"),
             ("mpy", "Compile Python files to .mpy bytecode"),
         ]),
         ("Hardware", [
