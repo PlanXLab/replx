@@ -414,6 +414,61 @@ class DeviceConnection:
         """
         ...
 
+    async def l2cap_connect(
+        self,
+        psm: int,
+        mtu: int,
+        timeout_ms: int = 5000
+    ) -> 'aioble.l2cap.L2CAPChannel':
+        """
+        Open an L2CAP CoC channel to this device (Central role).
+
+        :param psm: Protocol/Service Multiplexer value
+        :param mtu: Our advertised MTU
+        :param timeout_ms: Connection timeout
+
+        :returns: Connected L2CAPChannel
+
+        Example
+        -------
+        ```python
+            >>> import aioble
+            >>> 
+            >>> ch = await conn.l2cap_connect(psm=0x70, mtu=512)
+            >>> await ch.send(b"Hello")
+            >>> await ch.disconnect()
+        ```
+        """
+        ...
+
+    async def l2cap_accept(
+        self,
+        psm: int,
+        mtu: int,
+        timeout_ms: int = None
+    ) -> 'aioble.l2cap.L2CAPChannel':
+        """
+        Accept an incoming L2CAP CoC connection (Peripheral role).
+
+        :param psm: Protocol/Service Multiplexer to listen on
+        :param mtu: Our advertised MTU
+        :param timeout_ms: How long to wait for a connection
+
+        :returns: Connected L2CAPChannel
+
+        Example
+        -------
+        ```python
+            >>> import aioble
+            >>> 
+            >>> conn = await aioble.advertise(250_000, name="L2CAP-Dev")
+            >>> ch = await conn.l2cap_accept(psm=0x70, mtu=512)
+            >>> buf = bytearray(512)
+            >>> n = await ch.recvinto(buf)
+        ```
+        """
+        ...
+
     async def service(self, uuid: UUID, timeout_ms: int = 2000) -> 'ClientService':
         """
         Get remote service.

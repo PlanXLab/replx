@@ -24,7 +24,7 @@ def _preprocess_connection_shortcut():
         'ls', 'cat', 'get', 'put', 'cp', 'mv', 'rm', 'mkdir', 'touch',
         'usage', 'reset', 'format', 'init',
         'install', 'update', 'search', 'i2c', 'gpio', 'adc', 'pwm', 'uart', 'spi',
-        'mip',
+        'mip', 'wifi', 'ble',
     }
     
     commands_without_connection = {
@@ -354,6 +354,7 @@ _COMMAND_MODULES = {
     'uart': 'uart',
     'spi': 'spi',
     'wifi': 'wifi',
+    'ble': 'ble',
 }
 _KNOWN_COMMANDS = set(_COMMAND_MODULES) | {'connect', 'help'}
 _LOADED_COMMAND_MODULES: set[str] = set()
@@ -425,6 +426,7 @@ def _print_main_help():
             ("format", "Format (erase) the filesystem on the connected device"),
             ("init", "Completely reset device: format filesystem and install all libraries"),
             ("wifi", "Configure and manage WiFi settings on the device"),
+            ("ble", "Configure and manage BLE (Bluetooth Low Energy) on the device"),
             ("firmware", "Download and update device firmware (UF2)"),
         ]),
         ("Package Management", [
