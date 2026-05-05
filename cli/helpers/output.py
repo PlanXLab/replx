@@ -68,6 +68,26 @@ _THEME_STYLES = {
 
 _VSCODE_AUTO_THEME = 'vscode-auto'
 
+_SYNTAX_THEME_MAP = {
+    'one-dark-pro': 'one-dark',
+    'atom-one-light': 'default',
+    'github-dark': 'dracula',
+    'github-light': 'friendly',
+}
+
+# Maps panel category names to base color keys in _THEME_STYLES.
+# All print_panel() calls must use one of these category names as border_style.
+_CATEGORY_COLOR_KEYS: dict[str, str] = {
+    'help':    'blue',      # --help and router no-arg subcommand hint panels
+    'success': 'green',     # operation completed successfully
+    'data':    'cyan',      # status / read-only query results
+    'mode':    'magenta',   # interactive mode entry banners (REPL, Shell)
+    'warning': 'yellow',    # warnings / partial failures / caution
+    'neutral': 'dim',       # no-op / already in that state / cancelled
+    'error':   'red',       # errors, invalid input, failures
+}
+
+VALID_PANEL_CATEGORIES: tuple[str, ...] = tuple(_CATEGORY_COLOR_KEYS)
 
 def _load_jsonc(path: str):
     if not path or not os.path.exists(path):
@@ -424,6 +444,17 @@ class OutputHelper:
         return OutputHelper._theme_display_name
 
     @staticmethod
+    def get_syntax_theme() -> str:
+        theme = OutputHelper._theme_name
+        if theme in _SYNTAX_THEME_MAP:
+            return _SYNTAX_THEME_MAP[theme]
+        if theme == _VSCODE_AUTO_THEME:
+            display = OutputHelper._theme_display_name.lower()
+            if any(k in display for k in ('light', 'white', 'solarized light')):
+                return 'friendly'
+        return 'one-dark'
+
+    @staticmethod
     def format_bytes(b: int) -> str:
         if b < 1024:
             return f"{b}B"
@@ -456,20 +487,31 @@ class OutputHelper:
     def print_panel(
         content: str,
         title: str = "",
-        border_style: str = "blue",
+        border_style: str = "data",
         *,
         height: int | None = None,
         **panel_kwargs,
     ):
         width = OutputHelper._get_panel_width()
+        panel_kwargs["title_align"] = "left"
 
-        if "title_align" not in panel_kwargs:
-            panel_kwargs["title_align"] = "left"
+        # Resolve category → color key → theme hex, with per-category user override
+        if border_style not in _CATEGORY_COLOR_KEYS:
+            raise ValueError(
+                f"Unknown panel category: {border_style!r}. "
+                f"Valid: {', '.join(_CATEGORY_COLOR_KEYS)}"
+            )
+        color_key = _CATEGORY_COLOR_KEYS[border_style]
+        panel_colors = AgentPortManager.read_panel_colors()
+        if border_style in panel_colors:
+            resolved_border = panel_colors[border_style]
+        else:
+            resolved_border = OutputHelper._theme_styles[color_key]
 
         panel = Panel(
             content,
             title=title,
-            border_style=border_style,
+            border_style=resolved_border,
             box=get_panel_box(),
             expand=True,
             width=width,
@@ -478,7 +520,16 @@ class OutputHelper:
         )
 
         OutputHelper._console.print(panel)
-    
+
+    @staticmethod
+    def _resolve_category_color(category: str) -> str:
+        """Resolve a panel category to its final hex/color string."""
+        color_key = _CATEGORY_COLOR_KEYS[category]
+        panel_colors = AgentPortManager.read_panel_colors()
+        if category in panel_colors:
+            return panel_colors[category]
+        return OutputHelper._theme_styles[color_key]
+
     @staticmethod
     def create_progress_panel(current: int, total: int, title: str = "Progress", message: str = "", counter_text: str = None):
         pct = 0 if total == 0 else min(1.0, current / total)
@@ -499,8 +550,10 @@ class OutputHelper:
         content_lines.append(f"[{bar}] {percent}% {counter_text}")
         
         width = OutputHelper._get_panel_width()
-        return Panel("\n".join(content_lines), title=title, title_align="left", border_style="green", box=get_panel_box(), expand=True, width=width)
-    
+        return Panel("\n".join(content_lines), title=title, title_align="left",
+                     border_style=OutputHelper._resolve_category_color('success'),
+                     box=get_panel_box(), expand=True, width=width)
+
     @staticmethod
     def create_spinner_panel(message: str, title: str = "Processing", spinner_frames: list = None, frame_idx: int = 0):
         if spinner_frames is None:
@@ -509,7 +562,9 @@ class OutputHelper:
         spinner = spinner_frames[frame_idx % len(spinner_frames)]
         content = f"{spinner}  {message}"
         width = OutputHelper._get_panel_width()
-        return Panel(content, title=title, title_align="left", border_style="yellow", box=get_panel_box(), expand=True, width=width)
+        return Panel(content, title=title, title_align="left",
+                     border_style=OutputHelper._resolve_category_color('warning'),
+                     box=get_panel_box(), expand=True, width=width)
     
     @staticmethod
     def format_error_output(out, local_file):
@@ -574,7 +629,7 @@ class OutputHelper:
                 OutputHelper.print_panel(
                     message,
                     title="REPL Active",
-                    border_style="yellow"
+                    border_style="warning"
                 )
                 return True
             
@@ -589,7 +644,7 @@ class OutputHelper:
                 OutputHelper.print_panel(
                     message,
                     title="Script Running",
-                    border_style="yellow"
+                    border_style="warning"
                 )
                 return True
             
@@ -611,7 +666,7 @@ class OutputHelper:
             OutputHelper.print_panel(
                 message,
                 title="Connection Busy",
-                border_style="yellow"
+                border_style="warning"
             )
             return True
         elif 'Not connected' in error_msg:
@@ -619,7 +674,7 @@ class OutputHelper:
                 "No active connection.\n\n"
                 "Run [bright_blue]replx --port PORT setup[/bright_blue] first.",
                 title="Not Connected",
-                border_style="red"
+                border_style="error"
             )
             return True
         

@@ -918,7 +918,7 @@ GPIO monitor/read/write/sequence command for a single pin.
   • [yellow]gpio read[/yellow] supports [yellow]--timeout[/yellow] and [yellow]--expr[/yellow].
   • [yellow]seq[/yellow] requires at least one write token.
   • [yellow]seq --repeat[/yellow] runs the full seq+read loop on-board; no round-trip per iteration."""
-    OutputHelper.print_panel(help_text, title="gpio", border_style="dim")
+    OutputHelper.print_panel(help_text, title="gpio", border_style="help")
 
 
 def _subcmd_monitor(client, pos_args: list[str], interval_ms: int) -> None:
@@ -972,7 +972,7 @@ def _read_panel(pin_name: str, action: str, data: Optional[dict], expr: Optional
     return Panel(
         grid,
         title=title,
-        border_style="green",
+        border_style=OutputHelper._resolve_category_color('data'),
         box=get_panel_box(),
         expand=True,
         width=CONSOLE_WIDTH,
@@ -1018,7 +1018,7 @@ def _seq_repeat_panel(
     return Panel(
         grid,
         title=title,
-        border_style="green",
+        border_style="success",
         box=get_panel_box(),
         expand=True,
         width=CONSOLE_WIDTH,
@@ -1083,7 +1083,7 @@ def _subcmd_write(client, pos_args: list[str]) -> None:
     OutputHelper.print_panel(
         f"[bright_green]{pin_name}[/bright_green] <= [bright_cyan]{int(data.get('value', value))}[/bright_cyan]",
         title="GPIO Write",
-        border_style="green",
+        border_style="success",
     )
 
 
@@ -1125,7 +1125,7 @@ def _subcmd_seq(client, pos_args: list[str], expr: Optional[str], timeout_ms: in
             result = _eval_expr(expr, data)
             lines.append(f"Expr: [magenta]{expr}[/magenta] = [bright_cyan]{result}[/bright_cyan]")
 
-        OutputHelper.print_panel('\n'.join(lines), title="GPIO Seq", border_style="green")
+        OutputHelper.print_panel('\n'.join(lines), title="GPIO Seq", border_style="success")
         return
 
     seq_str = _format_seq_ops(ops)
@@ -1169,7 +1169,7 @@ def gpio_cmd(
             "  [bright_green]replx PORT gpio monitor GP1[/bright_green]\n\n"
             "Use [bright_blue]replx gpio --help[/bright_blue] for details.",
             title="GPIO",
-            border_style="yellow",
+            border_style="help",
         )
         raise typer.Exit(1)
 
@@ -1181,7 +1181,7 @@ def gpio_cmd(
             f"Unknown subcommand: {subcmd!r}\n\n"
             "Valid subcommands: monitor  read  write  seq",
             title="GPIO Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -1189,7 +1189,7 @@ def gpio_cmd(
         OutputHelper.print_panel(
             "--interval is supported only for gpio monitor (render rate) and gpio seq --repeat (inter-iteration delay)",
             title="GPIO Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -1197,7 +1197,7 @@ def gpio_cmd(
         OutputHelper.print_panel(
             "--interval requires --repeat N (N > 1 or 0) for gpio seq",
             title="GPIO Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -1205,7 +1205,7 @@ def gpio_cmd(
         OutputHelper.print_panel(
             "--expr is supported only for gpio read and gpio seq",
             title="GPIO Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -1213,7 +1213,7 @@ def gpio_cmd(
         OutputHelper.print_panel(
             "--timeout is supported only for gpio seq",
             title="GPIO Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -1221,7 +1221,7 @@ def gpio_cmd(
         OutputHelper.print_panel(
             "--repeat is supported only for gpio read and gpio seq",
             title="GPIO Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -1238,5 +1238,5 @@ def gpio_cmd(
             elif subcmd == 'seq':
                 _subcmd_seq(client, pos_args, expr, timeout, repeat, interval if repeat != 1 else 0)
     except ValueError as e:
-        OutputHelper.print_panel(str(e), title="GPIO Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="GPIO Error", border_style="error")
         raise typer.Exit(1)

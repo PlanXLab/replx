@@ -58,7 +58,7 @@ Download files or directories from the device to your computer.
 
 [bold cyan]Related:[/bold cyan]
   replx put local /remote   [dim]# Upload files instead[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="get", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -71,7 +71,7 @@ Download files or directories from the device to your computer.
             "[bold cyan]Usage:[/bold cyan] replx get [yellow]REMOTE... LOCAL[/yellow]\n\n"
             "At least 2 arguments required: remote file(s) and local destination.",
             title="Download Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -118,14 +118,14 @@ Download files or directories from the device to your computer.
                 OutputHelper.print_panel(
                     f"Download failed: [red]{e}[/red]",
                     title="Download Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 continue
             except Exception:
                 OutputHelper.print_panel(
                     f"[red]{remote_pattern}[/red] - pattern did not match any files.",
                     title="Download Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 continue
         else:
@@ -143,7 +143,7 @@ Download files or directories from the device to your computer.
                 OutputHelper.print_panel(
                     f"Download failed: [red]{e}[/red]",
                     title="Download Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 continue
             except Exception:
@@ -151,7 +151,7 @@ Download files or directories from the device to your computer.
                 OutputHelper.print_panel(
                     f"[red]{display_remote}[/red] does not exist.",
                     title="Download Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 continue
     
@@ -159,7 +159,7 @@ Download files or directories from the device to your computer.
         OutputHelper.print_panel(
             "No files to download.",
             title="Download",
-            border_style="yellow"
+            border_style="warning"
         )
         raise typer.Exit(1)
     
@@ -239,13 +239,13 @@ Download files or directories from the device to your computer.
             OutputHelper.print_panel(
                 f"Downloaded [bright_blue]{display_remote}[/bright_blue]\nto [green]{local_path}[/green]",
                 title="Download Complete",
-                border_style="green"
+                border_style="success"
             )
         except Exception as e:
             OutputHelper.print_panel(
                 f"Download failed: [red]{str(e)}[/red]",
                 title="Download Failed",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
     else:
@@ -255,7 +255,7 @@ Download files or directories from the device to your computer.
             OutputHelper.print_panel(
                 f"Destination [red]{local}[/red] must be a directory when downloading multiple files.",
                 title="Download Failed",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         
@@ -285,7 +285,7 @@ Download files or directories from the device to your computer.
         OutputHelper.print_panel(
             f"Downloaded [green]{success_count}[/green] out of {total_files} file(s)\nto [green]{local}[/green]",
             title="Download Complete",
-            border_style="green" if success_count == total_files else "yellow"
+            border_style="success" if success_count == total_files else "warning"
         )
 
 
@@ -330,12 +330,18 @@ Text files show as-is; binary files show in hex format.
 
 [bold cyan]Related:[/bold cyan]
   replx get file ./       [dim]# Download to local machine[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="cat", border_style="help")
         console.print()
         raise typer.Exit()
     
     if not remote:
-        typer.echo("Error: Missing required argument 'REMOTE'.", err=True)
+        OutputHelper.print_panel(
+            "Missing required argument.\n\n"
+            "[bold cyan]Usage:[/bold cyan] replx cat [yellow]FILE[/yellow]\n\n"
+            "Use [bright_blue]replx cat --help[/bright_blue] for details.",
+            title="Cat Error",
+            border_style="error"
+        )
         raise typer.Exit(1)
     
     _ensure_connected()
@@ -360,13 +366,13 @@ Text files show as-is; binary files show in hex format.
             OutputHelper.print_panel(
                 f"[red]{display_remote}[/red] is a directory, not a file.",
                 title="Read Failed",
-                border_style="red"
+                border_style="error"
             )
         else:
             OutputHelper.print_panel(
                 f"[red]{display_remote}[/red] does not exist.",
                 title="Read Failed",
-                border_style="red"
+                border_style="error"
             )
         raise typer.Exit(1)
     
@@ -402,7 +408,7 @@ Text files show as-is; binary files show in hex format.
                 OutputHelper.print_panel(
                     f"Invalid byte range format: [red]{lines}[/red]\nFor binary files, use N:M (byte range)",
                     title="Invalid Option",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
         
@@ -452,7 +458,7 @@ Text files show as-is; binary files show in hex format.
         OutputHelper.print_panel(
             hex_output,
             title=title,
-            border_style="blue"
+            border_style="data"
         )
         return 
     else:
@@ -512,7 +518,7 @@ Text files show as-is; binary files show in hex format.
         syntax = Syntax(
             display_content if not number else '\n'.join(display_lines),
             language,
-            theme="dracula", #monokai, dracula, one-dark
+            theme=OutputHelper.get_syntax_theme(),
             line_numbers=number,
             start_line=start_line if number else 1,
             word_wrap=False
@@ -521,13 +527,13 @@ Text files show as-is; binary files show in hex format.
         OutputHelper.print_panel(
             syntax,
             title=title,
-            border_style="blue"
+            border_style="data"
         )
     else:
         OutputHelper.print_panel(
             display_content,
             title=title,
-            border_style="blue"
+            border_style="data"
         )
 
 
@@ -560,14 +566,20 @@ Create directories on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx rm -r /dir          [dim]# Remove directory[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="mkdir", border_style="help")
         console.print()
         raise typer.Exit()
     
     _ensure_connected()
     
     if not remotes:
-        typer.echo("Error: Missing required arguments.", err=True)
+        OutputHelper.print_panel(
+            "Missing required arguments.\n\n"
+            "[bold cyan]Usage:[/bold cyan] replx mkdir [yellow]DIR...[/yellow]\n\n"
+            "Use [bright_blue]replx mkdir --help[/bright_blue] for details.",
+            title="Create Directory Error",
+            border_style="error"
+        )
         raise typer.Exit(1)
     
     success_count = 0
@@ -585,7 +597,7 @@ Create directories on the connected device.
                     OutputHelper.print_panel(
                         f"Directory [bright_blue]{remote}[/bright_blue] created successfully.",
                         title="Create Directory",
-                        border_style="green"
+                        border_style="success"
                     )
             except Exception as e:
                 error_msg = str(e)
@@ -595,7 +607,7 @@ Create directories on the connected device.
                         OutputHelper.print_panel(
                             f"Directory [bright_blue]{remote}[/bright_blue] already exists.",
                             title="Create Directory",
-                            border_style="yellow"
+                            border_style="warning"
                         )
                 else:
                     already_exist.append(remote)
@@ -603,7 +615,7 @@ Create directories on the connected device.
                         OutputHelper.print_panel(
                             f"Failed to create [bright_blue]{remote}[/bright_blue]: {error_msg}",
                             title="Create Directory",
-                            border_style="red"
+                            border_style="error"
                         )
     
     if len(remotes) > 1:
@@ -611,13 +623,13 @@ Create directories on the connected device.
             OutputHelper.print_panel(
                 f"Created [green]{success_count}[/green] director{'y' if success_count == 1 else 'ies'}.\nAlready exist: {', '.join(already_exist)}",
                 title="Create Directories",
-                border_style="yellow" if success_count > 0 else "green"
+                border_style="warning" if success_count > 0 else "success"
             )
         else:
             OutputHelper.print_panel(
                 f"Created [green]{success_count}[/green] director{'y' if success_count == 1 else 'ies'} successfully.",
                 title="Create Directories",
-                border_style="green"
+                border_style="success"
             )
 
 
@@ -667,7 +679,7 @@ Delete files or directories from the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx get file ./         [dim]# Backup before deleting[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="rm", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -689,7 +701,13 @@ Delete files or directories from the connected device.
             args = raw_args
     
     if not args:
-        typer.echo("Error: Missing required arguments.", err=True)
+        OutputHelper.print_panel(
+            "Missing required arguments.\n\n"
+            "[bold cyan]Usage:[/bold cyan] replx rm [yellow]FILE...[/yellow]\n\n"
+            "Use [bright_blue]replx rm --help[/bright_blue] for details.",
+            title="Remove Error",
+            border_style="error"
+        )
         raise typer.Exit(1)
     
     client = _create_agent_client()
@@ -732,7 +750,11 @@ Delete files or directories from the connected device.
         if has_wildcard:
             resolved_files = resolve_patterns(args)
             if not resolved_files:
-                typer.echo("No matching files found.")
+                OutputHelper.print_panel(
+                    "No files matched the given pattern.",
+                    title="Remove",
+                    border_style="neutral"
+                )
                 raise typer.Exit(0)
             
             MAX_SHOW = 5
@@ -758,14 +780,14 @@ Delete files or directories from the connected device.
                     OutputHelper.print_panel(
                         f"rm: [red]{not_found_files[0]}[/red] does not exist.",
                         title="Remove Failed",
-                        border_style="red"
+                        border_style="error"
                     )
                 else:
                     files_str = ', '.join(not_found_files)
                     OutputHelper.print_panel(
                         f"rm: Files not found: [red]{files_str}[/red]",
                         title="Remove Failed",
-                        border_style="red"
+                        border_style="error"
                     )
                 raise typer.Exit(1)
             
@@ -847,7 +869,7 @@ Delete files or directories from the connected device.
                     OutputHelper.print_panel(
                         f"{item_type} [bright_blue]{display_path}[/bright_blue] removed successfully.",
                         title="Remove",
-                        border_style="green"
+                        border_style="success"
                     )
             except RuntimeError as e:
                 if OutputHelper.handle_error(e, "rm"):
@@ -863,7 +885,7 @@ Delete files or directories from the connected device.
                 "Use [cyan]-r[/cyan] option to remove directories recursively:\n"
                 f"  replx rm -r {dir_without_r[0]}",
                 title="Remove Failed",
-                border_style="red"
+                border_style="error"
             )
         else:
             dirs_str = "\n".join(f"  - {d}" for d in dir_without_r)
@@ -871,7 +893,7 @@ Delete files or directories from the connected device.
                 f"rm: cannot remove directories (use [cyan]-r[/cyan] option):\n{dirs_str}\n\n"
                 "Example: replx rm -r <directory>",
                 title="Remove Failed",
-                border_style="red"
+                border_style="error"
             )
         if not success_count and not failed_items:
             raise typer.Exit(1)
@@ -882,20 +904,20 @@ Delete files or directories from the connected device.
             OutputHelper.print_panel(
                 f"Removed [green]{success_count}[/green] item(s).\nFailed: {', '.join(failed_items)}",
                 title="Remove Complete",
-                border_style="yellow"
+                border_style="warning"
             )
         else:
             OutputHelper.print_panel(
                 f"Removed [green]{success_count}[/green] item(s) successfully.",
                 title="Remove Complete",
-                border_style="green"
+                border_style="success"
             )
     elif failed_items and not dir_without_r:
         remote_display = args[0].replace(device_root_fs, "", 1) if args[0].startswith(device_root_fs) else args[0]
         OutputHelper.print_panel(
             f"rm: [red]{remote_display}[/red] does not exist.",
             title="Remove Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     elif failed_items:
@@ -903,7 +925,7 @@ Delete files or directories from the connected device.
         OutputHelper.print_panel(
             f"[red]{remote_display}[/red] does not exist.",
             title="Remove",
-            border_style="red"
+            border_style="error"
         )
 
 
@@ -953,7 +975,7 @@ Copy files or directories on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx mv src dest       [dim]# Move instead of copy[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="cp", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -965,7 +987,7 @@ Copy files or directories on the connected device.
             "[bold cyan]Usage:[/bold cyan] replx cp [yellow]SOURCE... DEST[/yellow]\n\n"
             "At least 2 arguments required: source file(s) and destination.",
             title="Copy Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1000,25 +1022,25 @@ Copy files or directories on the connected device.
                     OutputHelper.print_panel(
                         f"Copied empty directory [bright_blue]{display_source}[/bright_blue]\nto [green]{display_dest}[/green]",
                         title="Copy Complete",
-                        border_style="green"
+                        border_style="success"
                     )
                 elif total_files == 1:
                     OutputHelper.print_panel(
                         f"Copied [bright_blue]{display_source}[/bright_blue]\nto [green]{display_dest}[/green]",
                         title="Copy Complete",
-                        border_style="green"
+                        border_style="success"
                     )
                 else:
                     OutputHelper.print_panel(
                         f"Copied [green]{success_count}[/green] file(s)\nfrom [bright_blue]{display_source}[/bright_blue]\nto [green]{display_dest}[/green]",
                         title="Copy Complete",
-                        border_style="green"
+                        border_style="success"
                     )
             else:
                 OutputHelper.print_panel(
                     "Source directory is empty or no files to copy.",
                     title="Copy",
-                    border_style="yellow"
+                    border_style="warning"
                 )
         except RuntimeError as e:
             error = str(e)
@@ -1027,7 +1049,7 @@ Copy files or directories on the connected device.
                 OutputHelper.print_panel(
                     f"[red]{source}[/red] does not exist.",
                     title="Copy Failed",
-                    border_style="red"
+                    border_style="error"
                 )
             elif 'is a directory' in error.lower() or 'EISDIR' in error:
                 OutputHelper.print_panel(
@@ -1035,13 +1057,13 @@ Copy files or directories on the connected device.
                     "Use [cyan]-r[/cyan] option to copy directories recursively:\n"
                     f"  replx cp -r {source} <destination>",
                     title="Copy Failed",
-                    border_style="red"
+                    border_style="error"
                 )
             else:
                 OutputHelper.print_panel(
                     f"Copy failed: [red]{error}[/red]",
                     title="Copy Failed",
-                    border_style="red"
+                    border_style="error"
                 )
             raise typer.Exit(1)
         return
@@ -1073,7 +1095,7 @@ Copy files or directories on the connected device.
                     OutputHelper.print_panel(
                         f"No files matching: [red]{source_pattern}[/red]",
                         title="Copy Failed",
-                        border_style="red"
+                        border_style="error"
                     )
                     raise typer.Exit(1)
             except typer.Exit:
@@ -1082,7 +1104,7 @@ Copy files or directories on the connected device.
                 OutputHelper.print_panel(
                     f"Error processing pattern '{source_pattern}': {e}",
                     title="Copy Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
         else:
@@ -1093,7 +1115,7 @@ Copy files or directories on the connected device.
                 OutputHelper.print_panel(
                     f"cp: [red]{source_pattern}[/red] does not exist.",
                     title="Copy Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
             
@@ -1104,7 +1126,7 @@ Copy files or directories on the connected device.
                     f"cp: [red]{source_pattern}[/red] is a directory.\n"
                     f"Use [yellow]-r[/yellow] option to copy directories.",
                     title="Copy Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
             files_to_copy.append((source_pattern, basename, is_dir))
@@ -1113,7 +1135,7 @@ Copy files or directories on the connected device.
         OutputHelper.print_panel(
             "No files to copy.",
             title="Copy",
-            border_style="yellow"
+            border_style="warning"
         )
         raise typer.Exit(1)
     
@@ -1128,7 +1150,7 @@ Copy files or directories on the connected device.
             f"When copying multiple files, destination must be a directory.\n"
             f"Destination [red]{dest}[/red] is not a directory.",
             title="Copy Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1146,13 +1168,13 @@ Copy files or directories on the connected device.
             OutputHelper.print_panel(
                 f"Failed to copy [red]{source_path}[/red]: {e}",
                 title="Copy Failed",
-                border_style="red"
+                border_style="error"
             )
             if success_count > 0:
                 OutputHelper.print_panel(
                     f"Copied {success_count} of {len(files_to_copy)} file(s) before error.",
                     title="Partial Copy",
-                    border_style="yellow"
+                    border_style="warning"
                 )
             raise typer.Exit(1)
     
@@ -1161,13 +1183,13 @@ Copy files or directories on the connected device.
         OutputHelper.print_panel(
             f"Copied [bright_blue]{source_path}[/bright_blue]\nto [green]{dest}[/green]",
             title="Copy Complete",
-            border_style="green"
+            border_style="success"
         )
     else:
         OutputHelper.print_panel(
             f"Copied [green]{success_count}[/green] file(s) to [green]{dest}[/green]",
             title="Copy Complete",
-            border_style="green"
+            border_style="success"
         )
 
 
@@ -1218,7 +1240,7 @@ Move or rename files and directories on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx cp src dest       [dim]# Copy instead of move[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="mv", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1230,7 +1252,7 @@ Move or rename files and directories on the connected device.
             "[bold cyan]Usage:[/bold cyan] replx mv [yellow]SOURCE... DEST[/yellow]\n\n"
             "At least 2 arguments required: source file(s) and destination.",
             title="Move Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1259,7 +1281,7 @@ Move or rename files and directories on the connected device.
             OutputHelper.print_panel(
                 f"Moved [bright_blue]{display_source}[/bright_blue]\nto [green]{display_dest}[/green]",
                 title="Move Complete",
-                border_style="green"
+                border_style="success"
             )
         except Exception as e:
             error = str(e)
@@ -1268,20 +1290,20 @@ Move or rename files and directories on the connected device.
                 OutputHelper.print_panel(
                     f"mv: [red]{source}[/red] does not exist.",
                     title="Move Failed",
-                    border_style="red"
+                    border_style="error"
                 )
             elif 'is a directory' in error.lower():
                 OutputHelper.print_panel(
                     f"mv: [red]{source}[/red] is a directory.\n"
                     f"Use [yellow]-r[/yellow] option to move directories.",
                     title="Move Failed",
-                    border_style="red"
+                    border_style="error"
                 )
             else:
                 OutputHelper.print_panel(
                     f"Move failed: {error}",
                     title="Move Failed",
-                    border_style="red"
+                    border_style="error"
                 )
             raise typer.Exit(1)
         return
@@ -1313,7 +1335,7 @@ Move or rename files and directories on the connected device.
                     OutputHelper.print_panel(
                         f"No files matching: [red]{source_pattern}[/red]",
                         title="Move Failed",
-                        border_style="red"
+                        border_style="error"
                     )
                     raise typer.Exit(1)
             except typer.Exit:
@@ -1322,7 +1344,7 @@ Move or rename files and directories on the connected device.
                 OutputHelper.print_panel(
                     f"Error processing pattern '{source_pattern}': {e}",
                     title="Move Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
         else:
@@ -1333,7 +1355,7 @@ Move or rename files and directories on the connected device.
                 OutputHelper.print_panel(
                     f"mv: [red]{source_pattern}[/red] does not exist.",
                     title="Move Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
             
@@ -1344,7 +1366,7 @@ Move or rename files and directories on the connected device.
                     f"mv: [red]{source_pattern}[/red] is a directory.\n"
                     f"Use [yellow]-r[/yellow] option to move directories.",
                     title="Move Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
             files_to_move.append((source_pattern, basename, is_dir))
@@ -1353,7 +1375,7 @@ Move or rename files and directories on the connected device.
         OutputHelper.print_panel(
             "No files to move.",
             title="Move",
-            border_style="yellow"
+            border_style="warning"
         )
         raise typer.Exit(1)
     
@@ -1368,7 +1390,7 @@ Move or rename files and directories on the connected device.
             f"When moving multiple files, destination must be a directory.\n"
             f"Destination [red]{dest}[/red] is not a directory.",
             title="Move Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1394,7 +1416,7 @@ Move or rename files and directories on the connected device.
         OutputHelper.print_panel(
             f"Moved [bright_blue]{source}[/bright_blue]\nto [green]{display_dest}[/green]",
             title=f"Move Complete ({item_type})",
-            border_style="green"
+            border_style="success"
         )
     elif success_count > 0:
         if failed_items:
@@ -1404,20 +1426,20 @@ Move or rename files and directories on the connected device.
                 f"to [green]{dest}[/green]\n\n"
                 f"Failed:\n{fail_list}",
                 title="Move Partially Complete",
-                border_style="yellow"
+                border_style="warning"
             )
         else:
             OutputHelper.print_panel(
                 f"Moved [green]{success_count}[/green] file(s)\nto [green]{dest}[/green]",
                 title="Move Complete",
-                border_style="green"
+                border_style="success"
             )
     else:
         fail_list = "\n".join([f"  • {src}: {err}" for src, err in failed_items])
         OutputHelper.print_panel(
             f"Failed to move files:\n{fail_list}",
             title="Move Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -1456,14 +1478,20 @@ Create empty files on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx put file /        [dim]# Upload file with content[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="touch", border_style="help")
         console.print()
         raise typer.Exit()
     
     _ensure_connected()
     
     if not remotes:
-        typer.echo("Error: Missing required arguments.", err=True)
+        OutputHelper.print_panel(
+            "Missing required arguments.\n\n"
+            "[bold cyan]Usage:[/bold cyan] replx touch [yellow]FILE...[/yellow]\n\n"
+            "Use [bright_blue]replx touch --help[/bright_blue] for details.",
+            title="Touch Error",
+            border_style="error"
+        )
         raise typer.Exit(1)
     
     client = _create_agent_client()
@@ -1480,7 +1508,7 @@ Create empty files on the connected device.
                 OutputHelper.print_panel(
                     f"File [bright_blue]{display_path}[/bright_blue] created successfully.",
                     title="Touch File",
-                    border_style="green"
+                    border_style="success"
                 )
         except Exception as e:
             failed_items.append(remote)
@@ -1488,7 +1516,7 @@ Create empty files on the connected device.
                 OutputHelper.print_panel(
                     f"Touch failed: {e}",
                     title="Touch Failed",
-                    border_style="red"
+                    border_style="error"
                 )
     
     if len(remotes) > 1:
@@ -1496,13 +1524,13 @@ Create empty files on the connected device.
             OutputHelper.print_panel(
                 f"Created [green]{success_count}[/green] file(s).\nFailed: {', '.join(failed_items)}",
                 title="Touch Files",
-                border_style="yellow"
+                border_style="warning"
             )
         else:
             OutputHelper.print_panel(
                 f"Created [green]{success_count}[/green] file(s) successfully.",
                 title="Touch Files",
-                border_style="green"
+                border_style="success"
             )
 
 
@@ -1542,7 +1570,7 @@ List files and directories on the connected device.
 [bold cyan]Related:[/bold cyan]
   replx cat file.py     [dim]# View file contents[/dim]
   replx get file ./     [dim]# Download file[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="ls", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1561,7 +1589,7 @@ List files and directories on the connected device.
             OutputHelper.print_panel(
                 "Directory is empty.",
                 title=f"Directory Listing: {path}",
-                border_style="dim"
+                border_style="neutral"
             )
             return
         
@@ -1631,7 +1659,7 @@ List files and directories on the connected device.
                     "  • Path mismatch between client and device\n\n"
                     "[dim]Try using 'replx ls' (non-recursive) to see direct children.[/dim]",
                     title=f"Directory Tree: {path}",
-                    border_style="yellow"
+                    border_style="warning"
                 )
                 return
             
@@ -1640,7 +1668,7 @@ List files and directories on the connected device.
             OutputHelper.print_panel(
                 "\n".join(lines),
                 title=f"Directory Tree: {path}",
-                border_style="blue"
+                border_style="data"
             )
         else:
             display_items = []
@@ -1664,21 +1692,21 @@ List files and directories on the connected device.
                 OutputHelper.print_panel(
                     "\n".join(lines),
                     title=title,
-                    border_style="blue"
+                    border_style="data"
                 )
 
     except ProtocolError:
         OutputHelper.print_panel(
             f"[red]{path[1:]}[/red] does not exist.",
             title=f"Directory Listing: {path}",
-            border_style="red"
+            border_style="error"
         )
     except RuntimeError as e:
         if not OutputHelper.handle_error(e, f"Directory Listing: {path}"):
             OutputHelper.print_panel(
                 f"[red]{str(e)}[/red]",
-                title="Error",
-                border_style="red"
+                title="Listing Error",
+                border_style="error"
             )
 
 
@@ -1727,7 +1755,7 @@ Upload files or directories from your computer to the device.
 [bold cyan]Related:[/bold cyan]
   replx get remote local    [dim]# Download files instead[/dim]
     replx mpy local.py        [dim]# Compile local Python to .mpy[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="put", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1740,7 +1768,7 @@ Upload files or directories from your computer to the device.
             "[bold cyan]Usage:[/bold cyan] replx put [yellow]LOCAL... REMOTE[/yellow]\n\n"
             "At least 2 arguments required: local file(s) and remote destination.",
             title="Upload Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1770,7 +1798,7 @@ Upload files or directories from your computer to the device.
                 OutputHelper.print_panel(
                     f"[red]{local_pattern}[/red] - pattern did not match any files.",
                     title="Upload Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 continue
             for matched in matched_files:
@@ -1782,7 +1810,7 @@ Upload files or directories from your computer to the device.
                 OutputHelper.print_panel(
                     f"[red]{local_pattern}[/red] does not exist.",
                     title="Upload Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 continue
             files_to_upload.append(local_pattern)
@@ -1793,7 +1821,7 @@ Upload files or directories from your computer to the device.
         OutputHelper.print_panel(
             "No files to upload.",
             title="Upload",
-            border_style="yellow"
+            border_style="warning"
         )
         raise typer.Exit(1)
     
@@ -1805,7 +1833,7 @@ Upload files or directories from your computer to the device.
         OutputHelper.print_panel(
             f"Upload failed: [red]{error}[/red]",
             title="Upload Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -1924,7 +1952,7 @@ Upload files or directories from your computer to the device.
             OutputHelper.print_panel(
                 f"Uploaded [green]{local}[/green]\nto [bright_blue]{display_remote}[/bright_blue]",
                 title="Upload Complete",
-                border_style="green"
+                border_style="success"
             )
         except Exception as e:
             if isinstance(e, RuntimeError):
@@ -1932,7 +1960,7 @@ Upload files or directories from your computer to the device.
             OutputHelper.print_panel(
                 f"Upload failed: [red]{str(e)}[/red]",
                 title="Upload Failed",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
     else:
@@ -1940,7 +1968,7 @@ Upload files or directories from your computer to the device.
             OutputHelper.print_panel(
                 f"Destination [red]{remote}[/red] must be a directory when uploading multiple files.",
                 title="Upload Failed",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
 
@@ -2095,5 +2123,5 @@ Upload files or directories from your computer to the device.
         OutputHelper.print_panel(
             f"Uploaded [green]{success_count}[/green] out of {total_files} item(s) ([green]{OutputHelper.format_bytes(uploaded_bytes[0])}[/green])\nto [bright_blue]{display_remote}[/bright_blue]",
             title="Upload Complete",
-            border_style="green" if success_count == total_files else "yellow"
+            border_style="success" if success_count == total_files else "warning"
         )

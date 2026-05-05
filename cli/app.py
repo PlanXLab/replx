@@ -28,7 +28,7 @@ def _preprocess_connection_shortcut():
     
     commands_without_connection = {
         'scan', 'status', 'whoami', 'shutdown',
-        'version', 'help',
+        'version', 'help', 'theme',
     }
     
     known_commands = commands_with_connection | commands_without_connection | {'connect'}
@@ -261,7 +261,7 @@ def _custom_usage_error_show(self, output_file=None):
     console.print(Panel(
         "\n".join(error_lines),
         title="Error",
-        border_style="red",
+        border_style=OutputHelper._resolve_category_color('error'),
         box=get_panel_box(),
         width=CONSOLE_WIDTH
     ))
@@ -297,7 +297,7 @@ def _handle_usage_error(e):
     console.print(Panel(
         "\n".join(error_lines),
         title="Error",
-        border_style="red",
+        border_style=OutputHelper._resolve_category_color('error'),
         box=get_panel_box(),
         width=CONSOLE_WIDTH
     ))
@@ -328,6 +328,7 @@ _COMMAND_MODULES = {
     'setup': 'device',
     'usage': 'device',
     'scan': 'device',
+    'theme': 'device',
     'exec': 'exec',
     'run': 'exec',
     'repl': 'exec',
@@ -395,6 +396,7 @@ def _print_main_help():
             ("whoami", "Show which board your commands are currently talking to"),
             ("disconnect", "Close a board connection"),
             ("shutdown", "Completely stop the replx agent and release all connections"),
+            ("theme", "Show or configure the UI theme, panel colors, and box style"),
         ]),
         ("Interactive", [
             ("repl", "Enter interactive MicroPython mode on the connected board"),
@@ -449,7 +451,7 @@ def _print_main_help():
     OutputHelper.print_panel(
         "\n".join(lines),
         title="replx",
-        border_style="bright_blue"
+        border_style="help"
     )
 
 
@@ -492,7 +494,7 @@ def main():
         OutputHelper.print_panel(
             "Use [bright_blue]replx --help[/bright_blue] to see available commands.",
             title="Replx",
-            border_style="green"
+            border_style="success"
         )
         raise SystemExit()
     
@@ -500,7 +502,7 @@ def main():
         OutputHelper.print_panel(
             f"[bright_blue]replx[/bright_blue] version [bright_green]{__version__}[/bright_green]",
             title="Version",
-            border_style="green"
+            border_style="success"
         )
         sys.exit(0)
     
@@ -513,7 +515,7 @@ def main():
                 "[bold cyan]Examples:[/bold cyan]\n"
                 "  replx -c \"print('hello')\"",
                 title="Command Required",
-                border_style="red"
+                border_style="error"
             )
             sys.exit(1)
         
@@ -536,7 +538,7 @@ def main():
                 OutputHelper.print_panel(
                     "Not connected to any device.\n\nRun [bright_green]replx connect --port COM3[/bright_green] first.",
                     title="Connection Required",
-                    border_style="red"
+                    border_style="error"
                 )
             else:
                 typer.echo(f"Error: {error_msg}", err=True)

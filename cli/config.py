@@ -317,6 +317,8 @@ class AgentPortManager:
     _THEME_KEY = 'THEME'
     _THEME_MODE_KEY = 'THEME_MODE'
     _VSCODE_ROOT_KEY = 'VSCODE_ROOT'
+    _PANEL_BOX_KEY = 'PANEL_BOX'
+    _PANEL_COLORS_KEY = 'PANEL_COLORS'
 
     @staticmethod
     def _kill_agent_process_by_port(port: int) -> bool:
@@ -588,6 +590,44 @@ class AgentPortManager:
 
         entries = AgentPortManager._read_agent_config()
         entries[AgentPortManager._VSCODE_ROOT_KEY] = normalized
+        AgentPortManager._write_agent_config(entries)
+
+    @staticmethod
+    def read_panel_box() -> str:
+        """Return 'rounded' or 'horizontals'."""
+        entries = AgentPortManager._read_agent_config()
+        val = entries.get(AgentPortManager._PANEL_BOX_KEY, '').strip().lower()
+        return val if val in ('rounded', 'horizontals') else 'rounded'
+
+    @staticmethod
+    def write_panel_box(style: str) -> None:
+        style = style.strip().lower()
+        if style not in ('rounded', 'horizontals'):
+            raise ValueError(f"Invalid panel box style: {style!r}. Use 'rounded' or 'horizontals'.")
+        entries = AgentPortManager._read_agent_config()
+        entries[AgentPortManager._PANEL_BOX_KEY] = style
+        AgentPortManager._write_agent_config(entries)
+
+    @staticmethod
+    def read_panel_colors() -> dict[str, str]:
+        """Return category color overrides: {'help': '#ff8800', ...}"""
+        entries = AgentPortManager._read_agent_config()
+        raw = entries.get(AgentPortManager._PANEL_COLORS_KEY, '').strip()
+        if not raw:
+            return {}
+        try:
+            result = json.loads(raw)
+            return result if isinstance(result, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def write_panel_colors(colors: dict[str, str]) -> None:
+        entries = AgentPortManager._read_agent_config()
+        if colors:
+            entries[AgentPortManager._PANEL_COLORS_KEY] = json.dumps(colors, separators=(',', ':'))
+        else:
+            entries.pop(AgentPortManager._PANEL_COLORS_KEY, None)
         AgentPortManager._write_agent_config(entries)
 
     @staticmethod

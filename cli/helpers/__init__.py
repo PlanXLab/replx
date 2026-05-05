@@ -1,11 +1,24 @@
 from rich.box import ROUNDED, HORIZONTALS
 
-PANEL_BOX_STYLE = "rounded"
 CONSOLE_WIDTH = 100
+
+_panel_box_cache: str | None = None
 
 
 def get_panel_box():
-    return HORIZONTALS if PANEL_BOX_STYLE == "horizontals" else ROUNDED
+    global _panel_box_cache
+    if _panel_box_cache is None:
+        try:
+            from replx.cli.config import AgentPortManager
+            _panel_box_cache = AgentPortManager.read_panel_box()
+        except Exception:
+            _panel_box_cache = 'rounded'
+    return HORIZONTALS if _panel_box_cache == 'horizontals' else ROUNDED
+
+
+def invalidate_panel_box_cache():
+    global _panel_box_cache
+    _panel_box_cache = None
 
 
 import threading
@@ -32,16 +45,16 @@ def get_global_context():
         return _core, _device, _version, _device_root_fs, _device_path
 
 
-from .output import OutputHelper
+from .output import OutputHelper, VALID_PANEL_CATEGORIES
 from replx.utils import (
     SUPPORT_CORE_DEVICE_TYPES, CORE_ROOT_FS, DEFAULT_ROOT_FS,
     get_root_fs_for_core, parse_device_banner,
 )
 
 __all__ = [
-    'PANEL_BOX_STYLE', 'CONSOLE_WIDTH', 'get_panel_box',
+    'CONSOLE_WIDTH', 'get_panel_box', 'invalidate_panel_box_cache',
     'set_global_context', 'get_global_context',
-    'OutputHelper',
+    'OutputHelper', 'VALID_PANEL_CATEGORIES',
     'DeviceScanner',
     'parse_device_banner', 'get_root_fs_for_core',
     'SUPPORT_CORE_DEVICE_TYPES', 'CORE_ROOT_FS', 'DEFAULT_ROOT_FS',

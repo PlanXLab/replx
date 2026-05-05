@@ -214,7 +214,7 @@ Quick way to execute code without creating a file.
 [bold cyan]Related:[/bold cyan]
   replx run script.py     [dim]# Run script file instead[/dim]
   replx repl              [dim]# Interactive MicroPython prompt[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="exec", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -223,8 +223,8 @@ Quick way to execute code without creating a file.
             "Missing required argument.\n\n"
             "[bold cyan]Usage:[/bold cyan] replx exec [yellow]COMMAND[/yellow]\n"
             "       replx -c [yellow]COMMAND[/yellow]",
-            title="Exec Error",
-            border_style="red"
+            title="Execution Error",
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -238,7 +238,7 @@ Quick way to execute code without creating a file.
             prefix = "ProtocolError: "
             if error_msg.startswith(prefix):
                 error_msg = error_msg[len(prefix):]
-            OutputHelper.print_panel(error_msg, title="Execution Error", border_style="red")
+            OutputHelper.print_panel(error_msg, title="Execution Error", border_style="error")
             raise typer.Exit(1)
         if result.get('output'):
             print(result['output'], end='')
@@ -270,7 +270,7 @@ def _display_execution_error(stderr_data: bytearray, local_file: str | None) -> 
         return match.group(0)
 
     linked_text = re.sub(r'File "([^"]+)", line (\d+)', _make_link, stderr_text)
-    OutputHelper.print_panel(linked_text, title="Execution Error", border_style="red")
+    OutputHelper.print_panel(linked_text, title="Execution Error", border_style="error")
 
 
 def _run_line_mode(client, device_exec_code: str | None, local_file: str | None, hex_mode: bool) -> None:
@@ -592,19 +592,19 @@ def _run_interactive_mode(client, device_exec_code: str | None, local_file: str 
             OutputHelper.print_panel(
                 "Not connected to any device.\n\nRun [bright_green]replx --port COM3 setup[/bright_green] first.",
                 title="Connection Required",
-                border_style="red"
+                border_style="error"
             )
         elif 'busy' in error_msg.lower():
             OutputHelper.print_panel(
                 f"{error_msg}",
                 title="Device Busy",
-                border_style="yellow"
+                border_style="warning"
             )
         else:
             OutputHelper.print_panel(
                 f"Error: {str(e)}",
                 title="Execution Failed",
-                border_style="red"
+                border_style="error"
             )
         raise typer.Exit(1)
     finally:
@@ -694,25 +694,25 @@ By default, runs a file from your computer. Use -d to run from device.
 [bold cyan]Related:[/bold cyan]
   replx -c "code"         [dim]# Run single command instead[/dim]
   replx repl              [dim]# Interactive mode[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="run", border_style="help")
         console.print()
         raise typer.Exit()
     
     if not script_file:
         OutputHelper.print_panel(
             "Missing required argument 'SCRIPT_FILE'.",
-            title="Error",
+            title="Run Error",
             title_align="left",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
     if non_interactive and echo:
         OutputHelper.print_panel(
             "--non-interactive and --echo cannot be used together.",
-            title="Error",
+            title="Run Error",
             title_align="left",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -722,17 +722,17 @@ By default, runs a file from your computer. Use -d to run from device.
         if non_interactive:
             OutputHelper.print_panel(
                 "--text/--hex cannot be used with --non-interactive.",
-                title="Error",
+                title="Run Error",
                 title_align="left",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         if echo:
             OutputHelper.print_panel(
                 "--text/--hex cannot be used with --echo.",
-                title="Error",
+                title="Run Error",
                 title_align="left",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
 
@@ -767,7 +767,7 @@ By default, runs a file from your computer. Use -d to run from device.
             OutputHelper.print_panel(
                 f"File not found on device: [red]{remote_path}[/red]",
                 title="File Not Found",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         
@@ -786,7 +786,7 @@ By default, runs a file from your computer. Use -d to run from device.
                 "Check the file path on your PC.\n"
                 "To run from device storage: [bright_blue]replx run -d /path/file.py[/bright_blue]",
                 title="File Not Found",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         local_file = os.path.abspath(script_file)
@@ -975,7 +975,7 @@ By default, runs a file from your computer. Use -d to run from device.
                         OutputHelper.print_panel(
                             linked_text,
                             title="Execution Error",
-                            border_style="red"
+                            border_style="error"
                         )
                 return
 
@@ -1166,7 +1166,7 @@ By default, runs a file from your computer. Use -d to run from device.
                         OutputHelper.print_panel(
                             linked_text,
                             title="Execution Error",
-                            border_style="red"
+                            border_style="error"
                         )
                 
             except KeyboardInterrupt:
@@ -1182,19 +1182,19 @@ By default, runs a file from your computer. Use -d to run from device.
                     OutputHelper.print_panel(
                         "Not connected to any device.\n\nRun [bright_green]replx --port COM3 setup[/bright_green] first.",
                         title="Connection Required",
-                        border_style="red"
+                        border_style="error"
                     )
                 elif 'busy' in error_msg.lower():
                     OutputHelper.print_panel(
                         f"{error_msg}",
                         title="Device Busy",
-                        border_style="yellow"
+                        border_style="warning"
                     )
                 else:
                     OutputHelper.print_panel(
                         f"Error: {str(e)}",
                         title="Execution Failed",
-                        border_style="red"
+                        border_style="error"
                     )
                 raise typer.Exit(1)
             finally:
@@ -1221,7 +1221,7 @@ By default, runs a file from your computer. Use -d to run from device.
             "[yellow]⚠ Detached mode:[/yellow] Device may still be executing.\n"
             "Other commands may fail until script completes.",
             title="Script Sent",
-            border_style="green"
+            border_style="success"
         )
     except typer.Exit:
         raise
@@ -1231,7 +1231,7 @@ By default, runs a file from your computer. Use -d to run from device.
             OutputHelper.print_panel(
                 "Not connected to any device.\n\nRun [bright_green]replx --port COM3 setup[/bright_green] first.",
                 title="Connection Required",
-                border_style="red"
+                border_style="error"
             )
         else:
             OutputHelper.format_error_output(error_msg.strip().split('\n'), local_file if local_file else script_file)
@@ -1290,7 +1290,7 @@ Start a live MicroPython session where you can type code line by line.
 [bold cyan]Related:[/bold cyan]
   replx shell             [dim]# Interactive file management[/dim]
   replx -c "code"         [dim]# Single command instead[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="repl", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1301,7 +1301,7 @@ Start a live MicroPython session where you can type code line by line.
         OutputHelper.print_panel(
             "Could not determine port from agent status.",
             title="REPL Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1313,7 +1313,7 @@ Start a live MicroPython session where you can type code line by line.
                 OutputHelper.print_panel(
                     "Failed to enter Friendly REPL.\nNo response from agent.",
                     title="REPL Error",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
             if result.get('error'):
@@ -1321,14 +1321,14 @@ Start a live MicroPython session where you can type code line by line.
                 OutputHelper.print_panel(
                     f"Failed to enter Friendly REPL.\n{error_msg}",
                     title="REPL Error",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
             if not result.get('entered'):
                 OutputHelper.print_panel(
                     "Failed to enter Friendly REPL.\nNo prompt received from device.",
                     title="REPL Error",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
             initial_output = result.get('output', '')
@@ -1338,7 +1338,7 @@ Start a live MicroPython session where you can type code line by line.
         OutputHelper.print_panel(
             f"Failed to enter Friendly REPL.\nError: {e}",
             title="REPL Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1346,7 +1346,7 @@ Start a live MicroPython session where you can type code line by line.
         f"Connected to [bright_yellow]{STATE.device}[/bright_yellow] on [bright_green]{STATE.core}[/bright_green]\n"
         f"Type [cyan]exit()[/cyan] and press Enter to exit REPL mode.",
         title="REPL Mode",
-        border_style="magenta"
+        border_style="mode"
     )
     
     YELLOW = "\033[33m"
@@ -1629,7 +1629,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
 
 [bold cyan]Related:[/bold cyan]
   replx repl             [dim]# Interactive MicroPython instead[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="shell", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1735,7 +1735,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
         shell_only_help["?"] = shell_only_help["help"]
         
         if cmd in shell_only_help:
-            shell_console.print(Panel(shell_only_help[cmd], border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+            shell_console.print(Panel(shell_only_help[cmd], border_style=OutputHelper._resolve_category_color('neutral'), box=get_panel_box(), width=CONSOLE_WIDTH))
             return
         
         try:
@@ -1777,7 +1777,7 @@ In shell mode, 'run' always runs from device (equivalent to 'replx run -d').
 
 [bold yellow]Note:[/bold yellow]
   In shell mode, -e and -n options are not available.
-  Use 'replx run' directly for those options.""", border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+  Use 'replx run' directly for those options.""", border_style=OutputHelper._resolve_category_color('neutral'), box=get_panel_box(), width=CONSOLE_WIDTH))
             elif cmd == "wifi":
                 shell_console.print(Panel("""\
 Manage WiFi connection.
@@ -1791,7 +1791,7 @@ Manage WiFi connection.
 [bold cyan]Examples:[/bold cyan]
   wifi                          [dim]# Check status[/dim]
   wifi MyNetwork secret123      [dim]# Connect[/dim]
-  wifi scan                     [dim]# Find networks[/dim]""", border_style="dim", box=get_panel_box(), width=CONSOLE_WIDTH))
+  wifi scan                     [dim]# Find networks[/dim]""", border_style=OutputHelper._resolve_category_color('neutral'), box=get_panel_box(), width=CONSOLE_WIDTH))
             else:
                 shell_console.print(f"No help available for '{cmd}'")
         except typer.Exit:
@@ -1809,7 +1809,7 @@ Manage WiFi connection.
             OutputHelper.print_panel(
                 f"[yellow]'{cmd}'[/yellow] is not available in shell mode.",
                 title="Command Not Available",
-                border_style="yellow"
+                border_style="warning"
             )
             return
         
@@ -1817,7 +1817,7 @@ Manage WiFi connection.
             OutputHelper.print_panel(
                 f"[red]'{cmd}'[/red] is not a valid command.\n\nType [bright_blue]help[/bright_blue] or [bright_blue]?[/bright_blue] to see available commands.",
                 title="Unknown Command",
-                border_style="red"
+                border_style="error"
             )
             return
 
@@ -1848,7 +1848,7 @@ Manage WiFi connection.
   [yellow]exit[/yellow]                Exit shell
 
 [dim]Type 'help <command>' for detailed help on a specific command.[/dim]"""
-                    shell_console.print(Panel(help_text, title="Available Commands", title_align="left", border_style="cyan", box=get_panel_box(), width=CONSOLE_WIDTH))
+                    shell_console.print(Panel(help_text, title="Available Commands", title_align="left", border_style=OutputHelper._resolve_category_color('data'), box=get_panel_box(), width=CONSOLE_WIDTH))
                 return
                 
             elif cmd == "exit":
@@ -2214,7 +2214,7 @@ Manage WiFi connection.
     OutputHelper.print_panel(
         header_content,
         title="Interactive Shell",
-        border_style="cyan"
+        border_style="mode"
     )
 
     shell_running = True
@@ -2246,7 +2246,7 @@ Manage WiFi connection.
         OutputHelper.print_panel(
             "Shell session ended.",
             title="Exit Shell",
-            border_style="cyan"
+            border_style="mode"
         )
 
 
@@ -2287,7 +2287,7 @@ Reset the connected MicroPython device.
   
 [bold cyan]Note:[/bold cyan]
   Both resets run boot.py → main.py sequence after restart."""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="reset", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -2295,7 +2295,7 @@ Reset the connected MicroPython device.
         OutputHelper.print_panel(
             "Cannot use both [yellow]--hard[/yellow] and [yellow]--soft[/yellow] at the same time.",
             title="Reset Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -2325,7 +2325,7 @@ def _reset_soft(device: str, status: dict):
         OutputHelper.print_panel(
             f"Device [bright_yellow]{device}[/bright_yellow] has been soft reset.",
             title="Soft Reset",
-            border_style="blue"
+            border_style="success"
         )
     except Exception as e:
         error_msg = str(e)
@@ -2335,13 +2335,13 @@ def _reset_soft(device: str, status: dict):
                 "[yellow]Tip:[/yellow] If code catches KeyboardInterrupt, soft reset cannot work.\n"
                 "Try [bright_blue]replx reset hard[/bright_blue] instead.",
                 title="Reset Error",
-                border_style="red"
+                border_style="error"
             )
         else:
             OutputHelper.print_panel(
                 f"Soft reset failed: {error_msg}",
                 title="Reset Error",
-                border_style="red"
+                border_style="error"
             )
         raise typer.Exit(1)
 
@@ -2408,19 +2408,19 @@ def _reset_hard(device: str, status: dict):
             OutputHelper.print_panel(
                 f"Device [bright_yellow]{device}[/bright_yellow] has been hard reset and reconnected.",
                 title="Hard Reset",
-                border_style="green"
+                border_style="success"
             )
         else:
             OutputHelper.print_panel(
                 f"Device [bright_yellow]{device}[/bright_yellow] was reset but auto-reconnect failed.\n\n"
                 f"Please reconnect manually with [bright_blue]replx --port {port} setup[/bright_blue]",
                 title="Hard Reset",
-                border_style="yellow"
+                border_style="warning"
             )
     except Exception as e:
         OutputHelper.print_panel(
             f"Hard reset failed: {str(e)}",
             title="Reset Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)

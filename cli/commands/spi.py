@@ -192,7 +192,7 @@ def _display_bus(bus: dict) -> None:
             f"MISO: [bright_green]{miso_str}[/bright_green]\n"
             f"Buffer: [bright_cyan]{bus.get('buf_size', 8192)}[/bright_cyan] bytes",
             title="SPI Bus",
-            border_style="yellow",
+            border_style="data",
         )
         return
     miso_str = f"GP{bus['miso']}" if bus.get('miso') is not None else "[dim]none[/dim]"
@@ -207,7 +207,7 @@ def _display_bus(bus: dict) -> None:
         f"Bits: [bright_cyan]{bus.get('bits', 8)}[/bright_cyan]  "
         f"LSB-first: {lsb}",
         title="SPI Bus",
-        border_style="cyan",
+        border_style="data",
     )
 
 
@@ -218,7 +218,7 @@ def _get_bus(client) -> dict:
             "No SPI bus config. Open first:\n\n"
             "  replx PORT spi open --sck [yellow]GP<num>[/yellow] --mosi [yellow]GP<num>[/yellow]",
             title="SPI Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
     return bus
@@ -231,7 +231,7 @@ def _require_miso(bus: dict, subcmd: str) -> None:
             "Re-open with --miso GP<num>:\n\n"
             "  replx PORT spi open --sck GP<num> --mosi GP<num> --miso [yellow]GP<num>[/yellow]",
             title="SPI Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -294,7 +294,7 @@ def _subcmd_open(client, port: str, core: str,
                 f"[red]SPI slave mode requires RP2350.[/red]\n"
                 f"Detected core: [yellow]{core}[/yellow]\n\n"
                 "Slave mode uses PIO + DMA which is only supported on RP2350.",
-                title="SPI Error", border_style="red",
+                title="SPI Error", border_style="error",
             )
             raise typer.Exit(1)
         if sck is None:
@@ -313,7 +313,7 @@ def _subcmd_open(client, port: str, core: str,
                     f"MOSI (GP{mosi_no}) must equal SCK+1 (GP{sck_no + 1}) for slave mode."
                 )
         except ValueError as e:
-            OutputHelper.print_panel(str(e), title="SPI Error", border_style="red")
+            OutputHelper.print_panel(str(e), title="SPI Error", border_style="error")
             raise typer.Exit(1)
         cfg = dict(sck=sck_no, mosi=mosi_no, cs=cs_no, miso=miso_no,
                    buf_size=slave_buf, slave=True)
@@ -323,7 +323,7 @@ def _subcmd_open(client, port: str, core: str,
         try:
             _parse_json_strict(raw)
         except RuntimeError as e:
-            OutputHelper.print_panel(str(e), title="SPI Error", border_style="red")
+            OutputHelper.print_panel(str(e), title="SPI Error", border_style="error")
             raise typer.Exit(1)
         client.send_command('spi_bus_set', **cfg)
         _display_bus(cfg)
@@ -344,7 +344,7 @@ def _subcmd_open(client, port: str, core: str,
             raise ValueError("--bits must be 8 or 16")
         ch = _resolve_spi_ch(core, sck_no)
     except ValueError as e:
-        OutputHelper.print_panel(str(e), title="SPI Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="SPI Error", border_style="error")
         raise typer.Exit(1)
 
     cfg = dict(
@@ -356,7 +356,7 @@ def _subcmd_open(client, port: str, core: str,
     try:
         _parse_json_strict(raw)
     except RuntimeError as e:
-        OutputHelper.print_panel(str(e), title="SPI Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="SPI Error", border_style="error")
         raise typer.Exit(1)
 
     client.send_command('spi_bus_set',
@@ -372,7 +372,7 @@ def _subcmd_bus(client) -> None:
             "[dim]No SPI bus config saved.[/dim]\n"
             "Run: replx PORT spi open --sck [yellow]GP<num>[/yellow] --mosi [yellow]GP<num>[/yellow]",
             title="SPI Bus",
-            border_style="cyan",
+            border_style="data",
         )
         return
     _display_bus(bus)
@@ -399,7 +399,7 @@ def _subcmd_write(client, pos_args: list[str], cs_str: Optional[str], text_mode:
             f"MISO pre-loaded: [bright_cyan]{len(data)}[/bright_cyan] bytes  [dim]({mode_label})[/dim]\n"
             f"Data: [dim]{display}[/dim]",
             title="SPI Slave Write",
-            border_style="yellow",
+            border_style="data",
         )
         return
     cs_no = _parse_cs(cs_str)
@@ -410,7 +410,7 @@ def _subcmd_write(client, pos_args: list[str], cs_str: Optional[str], text_mode:
         f"Written: [bright_cyan]{len(data)}[/bright_cyan] bytes  [dim]({mode_label})[/dim]{cs_label}\n"
         f"Data: [dim]{display}[/dim]",
         title="SPI Write",
-        border_style="green",
+        border_style="success",
     )
 
 
@@ -427,7 +427,7 @@ def _subcmd_read(client, pos_args: list[str], fill: str,
             OutputHelper.print_panel(
                 f"[dim]No data received (timeout {timeout_ms}ms)[/dim]",
                 title="SPI Slave Read",
-                border_style="yellow",
+                border_style="neutral",
             )
             return
         data = bytes.fromhex(hex_str)
@@ -435,7 +435,7 @@ def _subcmd_read(client, pos_args: list[str], fill: str,
             f"Received: [bright_cyan]{length}[/bright_cyan] bytes\n"
             + _render_hex_dump(data),
             title="SPI Slave Read",
-            border_style="blue",
+            border_style="data",
         )
         return
     if not pos_args:
@@ -463,7 +463,7 @@ def _subcmd_read(client, pos_args: list[str], fill: str,
         OutputHelper.print_panel(
             f"[dim]No data received[/dim]{cs_label}",
             title="SPI Read",
-            border_style="yellow",
+            border_style="neutral",
         )
         return
     data = bytes.fromhex(hex_str)
@@ -471,7 +471,7 @@ def _subcmd_read(client, pos_args: list[str], fill: str,
         f"Received: [bright_cyan]{length}[/bright_cyan] bytes{cs_label}\n"
         + _render_hex_dump(data),
         title="SPI Read",
-        border_style="blue",
+        border_style="data",
     )
 
 
@@ -507,7 +507,7 @@ def _subcmd_xfer(client, pos_args: list[str], cs_str: Optional[str],
             f"RX (MOSI): [bright_cyan]{length}[/bright_cyan] bytes"
             + rx_section,
             title="SPI Slave Xfer",
-            border_style="blue",
+            border_style="data",
         )
         return
     cs_no = _parse_cs(cs_str)
@@ -528,7 +528,7 @@ def _subcmd_xfer(client, pos_args: list[str], cs_str: Optional[str],
         f"RX: [bright_cyan]{length}[/bright_cyan] bytes{cs_label}"
         + rx_section,
         title="SPI Xfer",
-        border_style="blue",
+        border_style="data",
     )
 
 
@@ -538,7 +538,7 @@ def _subcmd_close(client) -> None:
         OutputHelper.print_panel(
             "[dim]No SPI bus config to close.[/dim]",
             title="SPI Close",
-            border_style="yellow",
+            border_style="neutral",
         )
         return
     if bus.get('slave'):
@@ -550,7 +550,7 @@ def _subcmd_close(client) -> None:
         OutputHelper.print_panel(
             "SPI Slave stopped.",
             title="SPI Close",
-            border_style="green",
+            border_style="success",
         )
         return
     init = _make_spi_init(bus)
@@ -563,7 +563,7 @@ def _subcmd_close(client) -> None:
     OutputHelper.print_panel(
         f"SPI CH{bus['ch']} closed.",
         title="SPI Close",
-        border_style="green",
+        border_style="success",
     )
 
 
@@ -633,7 +633,7 @@ SPI open/write/read/xfer/close command.
   replx COM2 spi open --slave --sck GP2 --mosi GP3 --cs GP5 --miso GP4
   replx COM2 spi write AA BB CC
   replx COM2 spi xfer AA BB CC --timeout 10000"""
-    OutputHelper.print_panel(help_text, title="spi", border_style="dim")
+    OutputHelper.print_panel(help_text, title="spi", border_style="help")
 
 
 @app.command(name="spi", rich_help_panel="Hardware")
@@ -665,7 +665,7 @@ def spi_cmd(
             "  [bright_green]replx PORT spi read 4[/bright_green]\n\n"
             "Use [bright_blue]replx spi --help[/bright_blue] for details.",
             title="SPI",
-            border_style="yellow",
+            border_style="help",
         )
         raise typer.Exit(1)
 
@@ -678,7 +678,7 @@ def spi_cmd(
             f"Unknown subcommand: {subcmd!r}\n\n"
             "Valid subcommands: " + "  ".join(valid_subcmds),
             title="SPI Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -710,8 +710,8 @@ def spi_cmd(
                 _subcmd_xfer(client, pos_args, cs, text_mode, timeout_ms)
 
     except ValueError as e:
-        OutputHelper.print_panel(str(e), title="SPI Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="SPI Error", border_style="error")
         raise typer.Exit(1)
     except RuntimeError as e:
-        OutputHelper.print_panel(str(e), title="SPI Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="SPI Error", border_style="error")
         raise typer.Exit(1)

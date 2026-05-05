@@ -959,7 +959,7 @@ ADC read/scope command for board analog inputs.
   • [green]scope[/green] requires [yellow]termviz[/yellow] and [yellow]ufilter[/yellow] on the board.
   • Scope sampling runs internally at high rate; [yellow]SAMP[/yellow] controls render refresh.
   • Multi-channel scope normalizes each channel to its own 0..Vref range."""
-    OutputHelper.print_panel(help_text, title="adc", border_style="dim")
+    OutputHelper.print_panel(help_text, title="adc", border_style="help")
 
 
 _ADC_D   = '\033[38;2;150;150;150m'
@@ -1044,7 +1044,7 @@ def _subcmd_read(client, pos_args: list[str], repeat: int, interval: int, vref: 
         raw = _exec(client, _adc_read_code(pins, 1, 0), timeout=3.0)
         samples = [_parse_json_strict(raw)]
         body = _format_read_rows(pins, samples, vref)
-        OutputHelper.print_panel(body, title="ADC Read", border_style="green")
+        OutputHelper.print_panel(body, title="ADC Read", border_style="data")
         return
 
     code = _adc_read_code(pins, repeat, interval)
@@ -1110,7 +1110,7 @@ def _subcmd_scope(client, pos_args: list[str], sample: int, vref: float) -> None
         "Channels: " + ', '.join(f"GP{pin}" for pin in pins) + "\n"
         "Controls: 1/2/3 select channel, LEFT/RIGHT change, ENTER edit, ESC back, Ctrl+C exit",
         title="ADC Scope",
-        border_style="green",
+        border_style="mode",
     )
 
     from .exec import _run_interactive_mode
@@ -1136,7 +1136,7 @@ def adc_cmd(
             "  [bright_green]replx PORT adc scope GP26 GP27 GP28[/bright_green]\n\n"
             "Use [bright_blue]replx adc --help[/bright_blue] for details.",
             title="ADC",
-            border_style="yellow",
+            border_style="help",
         )
         raise typer.Exit(1)
 
@@ -1147,7 +1147,7 @@ def adc_cmd(
         OutputHelper.print_panel(
             f"Unknown subcommand: {subcmd!r}\n\nValid subcommands: read  scope",
             title="ADC Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -1159,8 +1159,8 @@ def adc_cmd(
             else:
                 _subcmd_scope(client, pos_args, sample, vref)
     except ValueError as e:
-        OutputHelper.print_panel(str(e), title="ADC Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="ADC Error", border_style="error")
         raise typer.Exit(1)
     except RuntimeError as e:
-        OutputHelper.print_panel(str(e), title="ADC Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="ADC Error", border_style="error")
         raise typer.Exit(1)

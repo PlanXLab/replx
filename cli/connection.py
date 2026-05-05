@@ -22,7 +22,7 @@ def _print_auto_connect_info(port: str, version: str, core: str, device: str, ma
     OutputHelper.print_panel(
         f"[bright_green]{port_disp}[/bright_green]  {version}  {core}  [bright_green]{device}[/bright_green]  [dim]{manufacturer}[/dim]",
         title="Auto-connected",
-        border_style="dim"
+        border_style="neutral"
     )
 
 
@@ -78,7 +78,7 @@ def _handle_connection_error(e: Exception, port: str = None, stop_agent: bool = 
     OutputHelper.print_panel(
         error_msg,
         title="Connection Error",
-        border_style="red"
+        border_style="error"
     )
 
 
@@ -115,7 +115,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                     "  [bright_green]replx --port COM3 setup[/bright_green]\n"
                     "  [bright_green]replx --port /dev/ttyACM0 setup[/bright_green]",
                     title="Setup Required",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
             
@@ -128,7 +128,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 "No connection configuration found.\n\n"
                 "Run [bright_blue]replx --port PORT setup[/bright_blue] first.",
                 title="Setup Required",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         
@@ -139,7 +139,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 with AgentClient(port=agent_port) as client:
                     client.send_command('set_default', port=default_conn, timeout=1.0)
         except Exception as e:
-            OutputHelper.print_panel(f"Failed to start agent: {str(e)}", title="Agent Error", title_align="left", border_style="red")
+            OutputHelper.print_panel(f"Failed to start agent: {str(e)}", title="Agent Error", title_align="left", border_style="error")
             raise typer.Exit(1)
         
         try:
@@ -160,7 +160,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 OutputHelper.print_panel(
                     f"Auto-disconnected [yellow]{result['switched_from']}[/yellow] (same board)",
                     title="Connection Switched",
-                    border_style="dim"
+                    border_style="neutral"
                 )
             
             STATE.core = result.get('core', conn.get('core', ''))
@@ -229,7 +229,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         "Run [bright_blue]replx --port PORT setup[/bright_blue] first,\n"
                         "or specify a port with [bright_blue]--port PORT[/bright_blue].",
                         title="No Connection",
-                        border_style="red"
+                        border_style="error"
                     )
                     raise typer.Exit(1)
                 
@@ -239,7 +239,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         "No connection available.\n\n"
                         "Run [bright_blue]replx --port PORT setup[/bright_blue] first.",
                         title="Setup Required",
-                        border_style="red"
+                        border_style="error"
                     )
                     raise typer.Exit(1)
                 
@@ -260,7 +260,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                     OutputHelper.print_panel(
                         f"Auto-disconnected [yellow]{result['switched_from']}[/yellow] (same board)",
                         title="Connection Switched",
-                        border_style="dim"
+                        border_style="neutral"
                     )
                 
                 _print_auto_connect_info(
@@ -281,7 +281,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         "No connection configuration found.\n\n"
                         "Run [bright_blue]replx --port PORT setup[/bright_blue] first.",
                         title="Setup Required",
-                        border_style="red"
+                        border_style="error"
                     )
                     raise typer.Exit(1)
                 
@@ -302,7 +302,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                     OutputHelper.print_panel(
                         f"Auto-disconnected [yellow]{result['switched_from']}[/yellow] (same board)",
                         title="Connection Switched",
-                        border_style="dim"
+                        border_style="neutral"
                     )
                 
                 if fg_conn.get('source') == 'global':
@@ -377,7 +377,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                             OutputHelper.print_panel(
                                 f"Auto-disconnected [yellow]{bg_result['switched_from']}[/yellow] (same board)",
                                 title="Connection Switched",
-                                border_style="dim"
+                                border_style="neutral"
                             )
                         
                         if not env_path:
@@ -422,10 +422,10 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                 "Please check the board is powered and connected, then try again.\n\n"
                 "[dim]The next command will restart the agent and reconnect.[/dim]",
                 title="Connection Lost",
-                border_style="red"
+                border_style="error"
             )
         else:
-            OutputHelper.print_panel(f"Agent error: {str(e)}", title="Error", border_style="red")
+            OutputHelper.print_panel(f"Agent error: {str(e)}", title="Error", border_style="error")
         raise typer.Exit(1)
 
 

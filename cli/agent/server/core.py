@@ -821,21 +821,31 @@ class AgentServer(
                         error=f"Connection {active_conn.port} is busy. REPL session is active from another terminal. Exit REPL first with exit() or Ctrl+D."
                     )
 
+        _acquired = False
         if command not in NON_REPL_COMMANDS and active_conn:
             if not active_conn.is_connected():
                 return AgentProtocol.create_response(
                     seq=seq,
                     error=f"Connection {active_conn.port} was disconnected."
                 )
-            allow_when_detached = command in CmdGroups.DETACHED_ALLOW
-            if not active_conn.acquire_for_command(
-                ppid, command, client_addr,
-                allow_when_detached=allow_when_detached,
-            ):
-                return AgentProtocol.create_response(
-                    seq=seq,
-                    error=f"Connection {active_conn.port} is busy. Another command ({active_conn.busy_command}) is currently running. Please wait for it to complete or press Ctrl+C to cancel."
-                )
+            # REPL sub-commands (write/read/exit) bypass the busy-lock.
+            # repl_enter already holds it; ownership is enforced inside each handler.
+            _is_repl_subcmd = command in ('repl_write', 'repl_read', 'repl_exit')
+            if _is_repl_subcmd and active_conn.repl.active and active_conn.repl.is_owner(ppid):
+                pass  # bypass acquire — repl_enter holds the lock
+            else:
+                allow_when_detached = command in CmdGroups.DETACHED_ALLOW
+                if not active_conn.acquire_for_command(
+                    ppid, command, client_addr,
+                    allow_when_detached=allow_when_detached,
+                ):
+                    return AgentProtocol.create_response(
+                        seq=seq,
+                        error=f"Connection {active_conn.port} is busy. Another command ({active_conn.busy_command}) is currently running. Please wait for it to complete or press Ctrl+C to cancel."
+                    )
+                # Track acquisition only for commands that should auto-release in finally.
+                if command not in PERSISTENT_BUSY_COMMANDS and command not in STREAMING_COMMANDS:
+                    _acquired = True
         
         try:
             if command == 'connect':
@@ -874,9 +884,8 @@ class AgentServer(
             return AgentProtocol.create_response(seq=seq, error=str(e))
         
         finally:
-            if command not in NON_REPL_COMMANDS and command not in PERSISTENT_BUSY_COMMANDS and command not in STREAMING_COMMANDS:
-                if active_conn:
-                    active_conn.release()
+            if _acquired and active_conn:
+                active_conn.release()
     
     def cleanup(self) -> None:
         self.running = False

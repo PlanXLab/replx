@@ -679,7 +679,7 @@ def _setup_seq_screen(pin_name: str, freq_str: str, mode: str, seq_label: str, w
         f"Num:"
     )
     panel = Panel(
-        content, title="PWM Seq", border_style="green",
+        content, title="PWM Seq", border_style=OutputHelper._resolve_category_color('success'),
         box=get_panel_box(), expand=True, width=CONSOLE_WIDTH, title_align="left",
     )
     buf = io.StringIO()
@@ -789,7 +789,7 @@ PWM write/sequence/stop command for a single pin.
   • [yellow]monitor[/yellow] on RP2350/RP2040: Use PIO state machine 0. 
                               [dim]Cannot coexist with other PIO programs using the same SM.[/dim]
   • [yellow]monitor[/yellow] on other boards: [cyan]time_pulse_us()[/cyan] 사용."""
-    OutputHelper.print_panel(help_text, title="pwm", border_style="dim")
+    OutputHelper.print_panel(help_text, title="pwm", border_style="help")
 
 
 def _subcmd_write(client, pos_args: list[str], freq: Optional[float], duty_percent: Optional[float], duty_u16: Optional[int], pulse_us: Optional[float]) -> None:
@@ -818,7 +818,7 @@ def _subcmd_write(client, pos_args: list[str], freq: Optional[float], duty_perce
         f"Pulse: [bright_cyan]{_format_number(actual_pulse_us)} us[/bright_cyan]\n"
         f"Active: [bright_cyan]{bool(data.get('active', True))}[/bright_cyan]",
         title="PWM Write",
-        border_style="green",
+        border_style="success",
     )
 
 
@@ -851,7 +851,7 @@ def _subcmd_seq(client, pos_args: list[str], freq: Optional[float], duty_mode: O
             OutputHelper.print_panel(
                 f"Done: {repeat} cycles, {writes_total} writes",
                 title="PWM Seq",
-                border_style="green",
+                border_style="success",
             )
         return
 
@@ -879,7 +879,7 @@ def _subcmd_seq(client, pos_args: list[str], freq: Optional[float], duty_mode: O
         f"Final pulse: [bright_cyan]{_format_number(final_pulse_us)} us[/bright_cyan]\n"
         f"Active: [bright_cyan]{bool(data.get('active', True))}[/bright_cyan]",
         title="PWM Seq",
-        border_style="green",
+        border_style="success",
     )
 
 
@@ -896,7 +896,7 @@ def _subcmd_stop(client, pos_args: list[str]) -> None:
         f"Stopped: [bright_cyan]{bool(data.get('stopped', True))}[/bright_cyan]\n"
         f"Level: [bright_cyan]{int(data.get('value', 0))}[/bright_cyan]",
         title="PWM Stop",
-        border_style="green",
+        border_style="success",
     )
 
 
@@ -925,7 +925,7 @@ def pwm_cmd(
             "  [bright_green]replx PORT pwm stop GP15[/bright_green]\n\n"
             "Use [bright_blue]replx pwm --help[/bright_blue] for details.",
             title="PWM",
-            border_style="yellow",
+            border_style="help",
         )
         raise typer.Exit(1)
 
@@ -938,7 +938,7 @@ def pwm_cmd(
             f"Unknown subcommand: {subcmd!r}\n\n"
             "Valid subcommands: write  seq  stop  monitor",
             title="PWM Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -946,7 +946,7 @@ def pwm_cmd(
         OutputHelper.print_panel(
             "--duty is supported only for pwm seq",
             title="PWM Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -954,7 +954,7 @@ def pwm_cmd(
         OutputHelper.print_panel(
             "--duty-percent, --duty-u16, and --pulse-us are supported only for pwm write",
             title="PWM Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -962,7 +962,7 @@ def pwm_cmd(
         OutputHelper.print_panel(
             "--timeout is supported only for pwm monitor",
             title="PWM Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -970,7 +970,7 @@ def pwm_cmd(
         OutputHelper.print_panel(
             "--repeat is supported only for pwm seq",
             title="PWM Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -978,7 +978,7 @@ def pwm_cmd(
         OutputHelper.print_panel(
             "--repeat must be >= 0 (0=infinite, 1=default)",
             title="PWM Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -986,7 +986,7 @@ def pwm_cmd(
         OutputHelper.print_panel(
             "--freq is not used for pwm stop",
             title="PWM Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -1003,5 +1003,5 @@ def pwm_cmd(
             elif subcmd == 'monitor':
                 _subcmd_monitor(client, pos_args, timeout_ms)
     except (ValueError, RuntimeError) as e:
-        OutputHelper.print_panel(str(e), title="PWM Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="PWM Error", border_style="error")
         raise typer.Exit(1)

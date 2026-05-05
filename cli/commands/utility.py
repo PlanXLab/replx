@@ -97,14 +97,14 @@ Show replx version information.
 [bold cyan]Examples:[/bold cyan]
   replx version           [dim]# Show version[/dim]
   replx -v                [dim]# Same as above[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="version", border_style="help")
         console.print()
         raise typer.Exit()
     
     OutputHelper.print_panel(
         f"replx [green]{__version__}[/green]",
         title="Version",
-        border_style="cyan"
+        border_style="data"
     )
 
 
@@ -232,7 +232,7 @@ def _handle_session_list_error(error: Optional[str], *, no_server_title: str, no
         OutputHelper.print_panel(
             no_server_message,
             title=no_server_title,
-            border_style="dim"
+            border_style="neutral"
         )
         return True
 
@@ -240,7 +240,7 @@ def _handle_session_list_error(error: Optional[str], *, no_server_title: str, no
         OutputHelper.print_panel(
             no_sessions_message,
             title=no_sessions_title,
-            border_style="dim"
+            border_style="neutral"
         )
         return True
 
@@ -249,7 +249,7 @@ def _handle_session_list_error(error: Optional[str], *, no_server_title: str, no
         OutputHelper.print_panel(
             f"Failed to query agent sessions.\n\n{detail}",
             title="Session Error",
-            border_style="red"
+            border_style="error"
         )
         return True
 
@@ -358,7 +358,7 @@ def _print_session_list_interactive(sessions_data, current_ppid):
     OutputHelper.print_panel(
         "\n".join(content_lines),
         title="Sessions",
-        border_style="cyan"
+        border_style="data"
     )
     
     if not selectable_map:
@@ -507,7 +507,7 @@ def _print_session_list_status(sessions_data, current_ppid):
         text_content,
         title="Sessions",
         title_align="left",
-        border_style="cyan"
+        border_style="data"
     )
 
 
@@ -552,7 +552,7 @@ Displays a table of all terminal sessions with their connected boards.
 [bold cyan]Related:[/bold cyan]
   replx fg COM3         [dim]# Switch FG to different board[/dim]
   replx disconnect      [dim]# Release current FG connection[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="status", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -613,7 +613,7 @@ When you have multiple boards connected, use this to switch between them.
 
 [bold cyan]Related:[/bold cyan]
   replx status                [dim]# See all active connections[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="fg", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -643,21 +643,21 @@ When you have multiple boards connected, use this to switch between them.
                 OutputHelper.print_panel(
                     f"Switched foreground to [bright_green]{OutputHelper.format_port(switch_target)}[/bright_green]",
                     title="Foreground Switched",
-                    border_style="green"
+                    border_style="success"
                 )
             else:
                 OutputHelper.print_panel(
                     f"Failed to switch foreground: {(result or {}).get('error', 'No response from agent')}",
                     title="Error",
                     title_align="left",
-                    border_style="red"
+                    border_style="error"
                 )
         except Exception as e:
             OutputHelper.print_panel(
                 f"Failed to switch foreground: {str(e)}",
                 title="Error",
                 title_align="left",
-                border_style="red"
+                border_style="error"
             )
         return
     
@@ -684,21 +684,21 @@ When you have multiple boards connected, use this to switch between them.
                 OutputHelper.print_panel(
                     f"Switched foreground to [bright_green]{OutputHelper.format_port(selected_port)}[/bright_green]",
                     title="Foreground Switched",
-                    border_style="green"
+                    border_style="success"
                 )
             else:
                 OutputHelper.print_panel(
                     f"Failed to switch foreground: {(result or {}).get('error', 'No response from agent')}",
                     title="Error",
                     title_align="left",
-                    border_style="red"
+                    border_style="error"
                 )
         except Exception as e:
             OutputHelper.print_panel(
                 f"Failed to switch foreground: {str(e)}",
                 title="Error",
                 title_align="left",
-                border_style="red"
+                border_style="error"
             )
 
 
@@ -732,7 +732,7 @@ Quickly check your active foreground connection.
 
 [bold cyan]Related:[/bold cyan]
   replx status            [dim]# See all active connections[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="whoami", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -757,7 +757,7 @@ Quickly check your active foreground connection.
         OutputHelper.print_panel(
             "No foreground connection in current session.",
             title="No Foreground",
-            border_style="dim"
+            border_style="neutral"
         )
         raise typer.Exit()
     
@@ -772,7 +772,7 @@ Quickly check your active foreground connection.
     OutputHelper.print_panel(
         f"[green]󱓥[/green]  [bright_cyan]{OutputHelper.format_port(fg_port)}[/bright_cyan]  {version}  [bright_green]{core}[/bright_green]  [bright_yellow]{device}[/bright_yellow]  [dim]{manufacturer}[/dim]",
         title="Foreground",
-        border_style="green"
+        border_style="success"
     )
 
 
@@ -808,7 +808,7 @@ The connection is closed and removed from ALL sessions that reference it.
 
 [bold cyan]Related:[/bold cyan]
   replx shutdown                [dim]# Stop ALL connections and agent[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="disconnect", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -833,7 +833,7 @@ The connection is closed and removed from ALL sessions that reference it.
             OutputHelper.print_panel(
                 "Not connected to any device.",
                 title="No Connection",
-                border_style="dim"
+                border_style="neutral"
             )
             raise typer.Exit()
         
@@ -848,7 +848,7 @@ The connection is closed and removed from ALL sessions that reference it.
         OutputHelper.print_panel(
             "No foreground connection to disconnect.",
             title="No Connection",
-            border_style="dim"
+            border_style="neutral"
         )
         raise typer.Exit()
 
@@ -863,21 +863,21 @@ The connection is closed and removed from ALL sessions that reference it.
             OutputHelper.print_panel(
                 f"Disconnected [bright_blue]{OutputHelper.format_port(port)}[/bright_blue]",
                 title="Disconnected",
-                border_style="blue"
+                border_style="success"
             )
         else:
             OutputHelper.print_panel(
                 f"Failed to disconnect: {result.get('error', 'Unknown error')}",
                 title="Error",
                 title_align="left",
-                border_style="red"
+                border_style="error"
             )
     except Exception as e:
         OutputHelper.print_panel(
             f"Failed to disconnect: {str(e)}",
             title="Error",
             title_align="left",
-            border_style="red"
+            border_style="error"
         )
 
 
@@ -917,27 +917,27 @@ def _do_shutdown():
                 f"Stopped all connections and agents.\n{detail}\n"
                 "[dim]Run any replx command to reconnect.[/dim]",
                 title="Shutdown Complete",
-                border_style="blue"
+                border_style="success"
             )
         elif not agent_ports:
             OutputHelper.print_panel(
                 "Agent is already stopped.\n"
                 "[dim]Run any replx command to start and reconnect.[/dim]",
                 title="Already Shutdown",
-                border_style="dim"
+                border_style="neutral"
             )
         else:
             OutputHelper.print_panel(
                 "Failed to stop agent cleanly.\n"
                 f"[dim]Ports still active: {', '.join(str(p) for p in failed_ports)}[/dim]",
                 title="Shutdown Failed",
-                border_style="red"
+                border_style="error"
             )
     except Exception as e:
         OutputHelper.print_panel(
             f"Failed to shutdown agent: {str(e)}",
             title="Shutdown Failed",
-            border_style="red"
+            border_style="error"
         )
 
 
@@ -974,7 +974,7 @@ This is the "full cleanup" command - stops everything.
 
 [bold cyan]Related:[/bold cyan]
   replx disconnect        [dim]# Release only one connection[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="shutdown", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1019,7 +1019,7 @@ Format (erase) the filesystem on the connected device.
 
 [bold cyan]Related:[/bold cyan]
   replx init              [dim]# Format AND install libraries[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="format", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1070,7 +1070,7 @@ Format (erase) the filesystem on the connected device.
         OutputHelper.print_panel(
             "Format operation cancelled by user.",
             title="Format Cancelled",
-            border_style="red"
+            border_style="error"
         )
         return False
     
@@ -1078,7 +1078,7 @@ Format (erase) the filesystem on the connected device.
         OutputHelper.print_panel(
             f"Format failed: [red]{error}[/red]",
             title="Format Failed",
-            border_style="red"
+            border_style="error"
         )
         return False
     
@@ -1096,13 +1096,13 @@ Format (erase) the filesystem on the connected device.
         OutputHelper.print_panel(
             f"File system on [bright_yellow]{STATE.device}[/bright_yellow] has been formatted successfully.",
             title="Format Complete",
-            border_style="green"
+            border_style="success"
         )
     else:
         OutputHelper.print_panel(
             f"Device [red]{STATE.device}[/red] does not support formatting.",
             title="Format Failed",
-            border_style="red"
+            border_style="error"
         )
     return ret
 
@@ -1149,7 +1149,7 @@ Completely reset device: format filesystem and install all libraries.
   replx format                [dim]# Just erase (no install)[/dim]
   replx pkg update core.all   [dim]# Just install core (no format)[/dim]
   replx pkg update device.all [dim]# Just install device (no format)[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="init", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1165,7 +1165,7 @@ Completely reset device: format filesystem and install all libraries.
             "  [cyan]replx pkg download[/cyan]\n\n"
             "This will download the required libraries to local store.",
             title="Initialization Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1177,7 +1177,7 @@ Completely reset device: format filesystem and install all libraries.
             "  [cyan]replx pkg download[/cyan]\n\n"
             "This will download the required libraries to local store.",
             title="Initialization Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1185,7 +1185,7 @@ Completely reset device: format filesystem and install all libraries.
     
     def make_format_panel(message: str, title: str = "Formatting") -> Panel:
         spinner = Spinner("dots", text=f" {message}")
-        return Panel(spinner, title=title, title_align="left", border_style="cyan", 
+        return Panel(spinner, title=title, title_align="left", border_style=OutputHelper._resolve_category_color('data'),
                      box=get_panel_box(), width=CONSOLE_WIDTH)
     
     try:
@@ -1200,7 +1200,7 @@ Completely reset device: format filesystem and install all libraries.
                 OutputHelper.print_panel(
                     "Initialization failed: Format operation was unsuccessful.",
                     title="Initialization Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 return False
             
@@ -1273,8 +1273,8 @@ Completely reset device: format filesystem and install all libraries.
                     raise last_error or RuntimeError("Reconnect failed after 3 attempts")
             
             live.update(Panel(
-                f"[green]✓[/green] File system on [bright_yellow]{STATE.device}[/bright_yellow] formatted successfully.",
-                title="Format Complete", title_align="left", border_style="green", 
+                f"[green]\u2713[/green] File system on [bright_yellow]{STATE.device}[/bright_yellow] formatted successfully.",
+                title="Format Complete", title_align="left", border_style=OutputHelper._resolve_category_color('success'),
                 box=get_panel_box(), width=CONSOLE_WIDTH
             ))
     
@@ -1282,7 +1282,7 @@ Completely reset device: format filesystem and install all libraries.
         OutputHelper.print_panel(
             f"Format failed: [red]{e}[/red]",
             title="Format Failed",
-            border_style="red"
+            border_style="error"
         )
         return False
     
@@ -1300,7 +1300,7 @@ Completely reset device: format filesystem and install all libraries.
         from rich.panel import Panel as RichPanel
         initial_panel = RichPanel(
             "Preparing installation...",
-            title="Installing", title_align="left", border_style="cyan",
+            title="Installing", title_align="left", border_style=OutputHelper._resolve_category_color('data'),
             box=get_panel_box(), width=CONSOLE_WIDTH
         )
         
@@ -1319,7 +1319,7 @@ Completely reset device: format filesystem and install all libraries.
             summary_line = "    ".join(summary_parts)
             live.update(RichPanel(
                 summary_line,
-                title="Installation Complete", title_align="left", border_style="green",
+                title="Installation Complete", title_align="left", border_style=OutputHelper._resolve_category_color('success'),
                 box=get_panel_box(), width=CONSOLE_WIDTH
             ))
         
@@ -1327,7 +1327,7 @@ Completely reset device: format filesystem and install all libraries.
         OutputHelper.print_panel(
             f"Initialization failed during install: [red]{e}[/red]",
             title="Initialization Failed",
-            border_style="red"
+            border_style="error"
         )
         return False
     
@@ -1335,7 +1335,7 @@ Completely reset device: format filesystem and install all libraries.
         f"Device [bright_yellow]{STATE.device}[/bright_yellow] has been initialized successfully.\n"
         "The device is now ready to use.",
         title="Complete",
-        border_style="green"
+        border_style="success"
     )
     return True
 

@@ -159,7 +159,7 @@ def _download_firmware(device: str, version: str, url: str, target_path: Path,
             OutputHelper.print_panel(
                 f"Download failed: HTTP {e.code}\n\nURL: {url}",
                 title="Download Error",
-                border_style="red"
+                border_style="error"
             )
         return False
     except Exception as e:
@@ -167,7 +167,7 @@ def _download_firmware(device: str, version: str, url: str, target_path: Path,
             OutputHelper.print_panel(
                 f"Download failed: {str(e)}",
                 title="Download Error",
-                border_style="red"
+                border_style="error"
             )
         return False
 
@@ -283,18 +283,18 @@ Firmware management for RP2350-based ticle devices.
   • Supported: ticle-lite, ticle-sensor, ticle-autocon, etc.
   • USB connection required (RP2350 devices only)
   • Old versions auto-cleaned, keeps only latest"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="firmware", border_style="help")
         OutputHelper._console.print()
         raise typer.Exit()
     
     if not args:
         OutputHelper.print_panel(
-            "Specify a command: [bright_blue]download[/bright_blue] or [bright_blue]update[/bright_blue]\n\n"
-            "Usage:\n"
+            "Subcommands: [bright_blue]download[/bright_blue]  [bright_blue]update[/bright_blue]\n\n"
             "  [bright_green]replx firmware download[/bright_green]  [dim]# Download only[/dim]\n"
-            "  [bright_green]replx firmware update[/bright_green]    [dim]# Download and install[/dim]",
+            "  [bright_green]replx firmware update[/bright_green]    [dim]# Download and install[/dim]\n\n"
+            "Use [bright_blue]replx firmware --help[/bright_blue] for details.",
             title="Firmware",
-            border_style="yellow"
+            border_style="help"
         )
         raise typer.Exit(1)
     
@@ -309,7 +309,7 @@ Firmware management for RP2350-based ticle devices.
             f"Unknown command: [red]{cmd}[/red]\n\n"
             "Use: [bright_blue]replx firmware download[/bright_blue] or [bright_blue]replx firmware update[/bright_blue]",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -322,7 +322,7 @@ def _firmware_download():
         OutputHelper.print_panel(
             "Could not determine device type from connected board.",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -331,7 +331,7 @@ def _firmware_download():
             f"Device [yellow]{device}[/yellow] is not supported for firmware management.\n\n"
             f"Supported devices: {', '.join(sorted(SUPPORTED_FIRMWARE_DEVICES))}",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -347,7 +347,7 @@ def _firmware_download():
         OutputHelper.print_panel(
             f"Failed to check firmware repository.\n\n{e}",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -355,7 +355,7 @@ def _firmware_download():
         OutputHelper.print_panel(
             f"Could not find firmware for [yellow]{device}[/yellow] in remote repository.",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -375,7 +375,7 @@ def _firmware_download():
             f"  Remote:      v{remote_version}\n\n"
             f"  File: [dim]{firmware_path}[/dim]",
             title="Firmware Up to Date",
-            border_style="green"
+            border_style="success"
         )
         return
     
@@ -392,7 +392,7 @@ def _firmware_download():
             f"  Current:     [dim]v{current_version}[/dim]\n\n"
             "To install, run: [bright_blue]replx firmware update[/bright_blue]",
             title="Firmware Downloaded",
-            border_style="green"
+            border_style="success"
         )
     else:
         raise typer.Exit(1)
@@ -409,7 +409,7 @@ def _firmware_update(force: bool = False):
         OutputHelper.print_panel(
             "Could not determine device type from connected board.",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -418,7 +418,7 @@ def _firmware_update(force: bool = False):
             f"Device [yellow]{device}[/yellow] is not supported for firmware management.\n\n"
             f"Supported devices: {', '.join(sorted(SUPPORTED_FIRMWARE_DEVICES))}",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -427,7 +427,7 @@ def _firmware_update(force: bool = False):
             f"Device core [yellow]{core}[/yellow] does not support UF2 firmware updates.\n\n"
             "UF2 updates are only supported for RP2040/RP2350 devices.",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -441,7 +441,7 @@ def _firmware_update(force: bool = False):
         OutputHelper.print_panel(
             f"Failed to check firmware repository.\n\n{e}",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -449,7 +449,7 @@ def _firmware_update(force: bool = False):
         OutputHelper.print_panel(
             f"Could not find firmware for [yellow]{device}[/yellow] in remote repository.",
             title="Firmware Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -481,7 +481,7 @@ def _firmware_update(force: bool = False):
             f"  Available:   v{target_version}\n\n"
             "Use [bright_blue]--force[/bright_blue] to reinstall anyway.",
             title="No Update Needed",
-            border_style="green"
+            border_style="success"
         )
         return
     
@@ -543,20 +543,20 @@ def _firmware_update(force: bool = False):
             step_table.add_row(spinner, Text(step, style="default"))
             
             content = Group(info_text, separator, step_table)
-            border_style = "cyan"
+            border_style = "data"
         else:
             step_text = Text()
             step_text.append(f"  ")
             step_text.append("●", style="bright_cyan")
             step_text.append(f" {step}")
             content = Group(info_text, separator, step_text)
-            border_style = "cyan"
+            border_style = "data"
         
         return Panel(
             content,
             title="Firmware Update",
             title_align="left",
-            border_style=border_style,
+            border_style=OutputHelper._resolve_category_color(border_style),
             box=get_panel_box(),
             width=CONSOLE_WIDTH
         )
@@ -603,7 +603,7 @@ def _firmware_update(force: bool = False):
                 "  2. Copy the UF2 file to the drive\n\n"
                 f"  File: [dim]{firmware_path}[/dim]",
                 title="Manual Installation Required",
-                border_style="yellow"
+                border_style="warning"
             )
             raise typer.Exit(1)
         
@@ -653,7 +653,7 @@ def _firmware_update(force: bool = False):
                 f"  From: [dim]{firmware_path}[/dim]\n"
                 f"  To:   [dim]{uf2_drive}[/dim]",
                 title="Copy Failed",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         

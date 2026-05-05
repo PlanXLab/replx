@@ -78,7 +78,6 @@ def pkg(
     owner: str = typer.Option("PlanXLab", help="GitHub repo owner (for search/download)"),
     repo: str = typer.Option("replx_libs", help="GitHub repo name (for search/download)"),
     ref: str = typer.Option("main", help="Git reference (for search/download)"),
-    device: Optional[str] = typer.Option(None, "--device", "-d", help="Board target path for update (e.g., lib/ticle)"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
 ):
     if show_help:
@@ -101,10 +100,6 @@ Package management for MicroPython devices.
     [green]device.<file>[/green]            Install one device file (e.g., device.termio.py)
     [green]https://...[/green]              Download from URL and install
 
-[bold cyan]Update Options:[/bold cyan]
-    [green]--device[/green] [dim]PATH[/dim]           Specify board target path (e.g., lib/ticle, /lib/ticle)
-                            [dim]Applies to core/device targets and URL target[/dim]
-
 [bold cyan]Examples:[/bold cyan]
   replx pkg search                                   [dim]List all libraries[/dim]
   replx pkg search audio                             [dim]Search by name[/dim]
@@ -113,8 +108,7 @@ Package management for MicroPython devices.
   replx pkg update device.all                        [dim]Install all device libs[/dim]
   replx pkg update core.termio.py                    [dim]→ /lib/termio.mpy[/dim]
   replx pkg update device.termio.py                  [dim]→ /lib/<device>/termio.mpy[/dim]
-  replx pkg update core.termio.py --device lib/ext   [dim]→ /lib/ext/termio.mpy[/dim]
-  replx pkg update https://... --device lib/ext      [dim]→ /lib/ext/[/dim]
+  replx pkg update https://...                       [dim]→ /lib/[/dim]
   replx pkg clean                                    [dim]Remove current core/device[/dim]
 
 [bold cyan]Workflow:[/bold cyan] search → download → update core.all
@@ -127,35 +121,32 @@ Package management for MicroPython devices.
     [dim]• GITHUB: raw.githubusercontent.com [/dim]
     [dim]• e.g. OWNER: micropython | REPO: micropython-lib | BRANCH: master[/dim]
     [dim]• e.g. path: micropython/umqtt.simple/umqtt | file.py: simple.py[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="pkg", border_style="help")
         console.print()
         raise typer.Exit()
     
     if not args:
         OutputHelper.print_panel(
-            "Specify a command: [bright_blue]search[/bright_blue], [bright_blue]download[/bright_blue], [bright_blue]update[/bright_blue], or [bright_blue]clean[/bright_blue]\n\n"
-            "Usage:\n"
+            "Subcommands: [bright_blue]search[/bright_blue]  [bright_blue]download[/bright_blue]  [bright_blue]update[/bright_blue]  [bright_blue]clean[/bright_blue]\n\n"
             "  [bright_green]replx pkg search[/bright_green]      [dim]# List available libraries[/dim]\n"
             "  [bright_green]replx pkg download[/bright_green]    [dim]# Download to local store[/dim]\n"
             "  [bright_green]replx pkg update[/bright_green]      [dim]# Install to device[/dim]\n"
             "  [bright_green]replx pkg clean[/bright_green]       [dim]# Remove current core/device[/dim]\n\n"
             "Use [bright_blue]replx pkg --help[/bright_blue] for details.",
             title="Package Management",
-            border_style="yellow"
+            border_style="help"
         )
         raise typer.Exit(1)
     
     cmd = args[0].lower()
     cmd_args = args[1:] if len(args) > 1 else []
     
-    target_path = device.lstrip("/").rstrip("/") if device else None
-    
     if cmd == "search":
         _pkg_search(cmd_args, owner, repo, ref)
     elif cmd == "download":
         _pkg_download(cmd_args, owner, repo, ref)
     elif cmd == "update":
-        _pkg_update(cmd_args, target_path, owner, repo, ref)
+        _pkg_update(cmd_args, owner, repo, ref)
     elif cmd == "clean":
         _pkg_clean(cmd_args)
     else:
@@ -163,7 +154,7 @@ Package management for MicroPython devices.
             f"Unknown command: [red]{cmd}[/red]\n\n"
             "Available commands: [bright_blue]search[/bright_blue], [bright_blue]download[/bright_blue], [bright_blue]update[/bright_blue], [bright_blue]clean[/bright_blue]",
             title="Package Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -291,7 +282,7 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
         OutputHelper.print_panel(
             "No results found.",
             title=f"Search Results [{owner}/{repo}@{ref}]",
-            border_style="yellow"
+            border_style="warning"
         )
         return
 
@@ -359,7 +350,7 @@ def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
     OutputHelper.print_panel(
         "\n".join(lines),
         title=f"Search Results [{owner}/{repo}@{ref}]",
-        border_style="magenta",
+        border_style="mode",
     )
 
 
@@ -376,7 +367,7 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
         OutputHelper.print_panel(
             "Device not connected.",
             title="Download Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -387,7 +378,7 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
         OutputHelper.print_panel(
             "Failed to get device info from connected board.",
             title="Download Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -411,7 +402,7 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
         OutputHelper.print_panel(
             f"Core [yellow]{core}[/yellow] not found in remote registry.",
             title="Notice",
-            border_style="yellow"
+            border_style="warning"
         )
         raise typer.Exit(0)
 
@@ -739,7 +730,7 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
     OutputHelper.print_panel(
         message,
         title="Download Complete",
-        border_style="green"
+        border_style="success"
     )
 
 
@@ -755,7 +746,7 @@ SPEC can be:
 """
 
 
-def _install_spec_internal(spec: str, live=None, update_callback=None, target_path: Optional[str] = None):
+def _install_spec_internal(spec: str, live=None, update_callback=None):
     if spec.startswith("core.") or spec.startswith("device."):
         scope, rest = InstallHelper.resolve_spec(spec)
         base, local_list = InstallHelper.list_local_py_targets(scope, rest)
@@ -768,7 +759,7 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
             from rich.spinner import Spinner
             temp_panel = Panel(
                 Spinner("dots", text=f" Preparing {total} files for installation..."),
-                title="Compiling", title_align="left", border_style="cyan",
+                title="Compiling", title_align="left", border_style=OutputHelper._resolve_category_color('data'),
                 box=get_panel_box(), width=CONSOLE_WIDTH
             )
             temp_live = Live(temp_panel, console=OutputHelper._console, refresh_per_second=10)
@@ -787,10 +778,7 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
                 parts = rel.split("/")
                 if len(parts) >= 3:
                     rel_dir = "ext"
-                    if target_path:
-                        remote_dir = target_path.rstrip("/") + "/"
-                    else:
-                        remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
+                    remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
                     
                     if is_python:
                         CompilerHelper.compile_to_staging(abs_file, base)
@@ -804,10 +792,7 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
                     unique_dirs.add(remote_dir)
                     continue
             
-            if target_path:
-                remote_dir = target_path.rstrip("/") + ("/" + rel_dir + "/" if rel_dir else "/")
-            else:
-                remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
+            remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
             
             if is_python:
                 CompilerHelper.compile_to_staging(abs_file, base)
@@ -932,8 +917,7 @@ def _install_spec_internal(spec: str, live=None, update_callback=None, target_pa
         raise typer.BadParameter(f"Invalid spec format: {spec}")
 
 
-def _pkg_update(args: list[str], target_path: Optional[str] = None,
-                owner: str = "PlanXLab", repo: str = "replx_libs", ref: str = "main"):
+def _pkg_update(args: list[str], owner: str = "PlanXLab", repo: str = "replx_libs", ref: str = "main"):
     _ensure_connected()
 
     StoreManager.ensure_home_store()
@@ -949,11 +933,11 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
             "  [bright_blue]device.<file>[/bright_blue]\n"
             "  [bright_blue]https://...[/bright_blue]",
             title="Update Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
-    def _install_local_folder(abs_dir: str, target_path: Optional[str] = None):
+    def _install_local_folder(abs_dir: str):
         py_files = []
         other_files = []
         for dp, _, fns in os.walk(abs_dir):
@@ -969,17 +953,13 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
             OutputHelper.print_panel(
                 f"No files found in [yellow]{abs_dir}[/yellow]",
                 title="Update",
-                border_style="yellow"
+                border_style="warning"
             )
             return 0
         
         base = abs_dir
         folder_name = os.path.basename(abs_dir)
-        
-        if target_path:
-            base_target = f"{target_path}/{folder_name}"
-        else:
-            base_target = f"lib/{folder_name}"
+        base_target = f"lib/{folder_name}"
         
         upload_files = []
         total_size = 0
@@ -1068,18 +1048,14 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
         OutputHelper.print_panel(
             f"[green]{total_files}[/green] file(s) ([cyan]{OutputHelper.format_bytes(total_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
             title="Update Complete",
-            border_style="green"
+            border_style="success"
         )
         return total_files
 
-    def _install_single_file(abs_file: str, target_path: Optional[str] = None):
+    def _install_single_file(abs_file: str):
         base = os.path.dirname(abs_file)
         name = os.path.basename(abs_file)
-        
-        if target_path:
-            target_dir = target_path
-        else:
-            target_dir = "lib"
+        target_dir = "lib"
         
         
         if abs_file.endswith('.py'):
@@ -1131,16 +1107,16 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                 OutputHelper.print_panel(
                     f"Upload failed: [red]{resp.get('error', 'Unknown error')}[/red]",
                     title="Update Failed",
-                    border_style="red"
+                    border_style="error"
                 )
                 return 0
             live.update(OutputHelper.create_progress_panel(file_size, file_size, title=f"Updating {name} to {STATE.device}", message="Complete", counter_text=f"{OutputHelper.format_bytes(file_size)}/{OutputHelper.format_bytes(file_size)}"))
         
-        target_display = f"/{target_dir}/" if target_path else "/lib/"
+        target_display = "/lib/"
         OutputHelper.print_panel(
             f"[green]1[/green] file ([cyan]{OutputHelper.format_bytes(file_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
             title="Update Complete",
-            border_style="green"
+            border_style="success"
         )
         return 1
 
@@ -1153,7 +1129,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
             "  [bright_blue]core.<file>[/bright_blue]\n"
             "  [bright_blue]device.<file>[/bright_blue]",
             title="Update Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -1165,7 +1141,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                 f"Only single .py file is supported for URL installs.\n\n"
                 f"URL: [yellow]{spec}[/yellow]",
                 title="Update Error",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         dl_dir = StoreManager.HOME_STAGING / "downloads"
@@ -1179,11 +1155,11 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                 f"Download failed: [red]{e}[/red]\n\n"
                 f"URL: [yellow]{spec}[/yellow]",
                 title="Update Error",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         try:
-            _install_single_file(dst, target_path)
+            _install_single_file(dst)
         finally:
             try:
                 os.remove(dst)
@@ -1199,13 +1175,11 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
             "  [bright_blue]core.<file>[/bright_blue]     Install one core file\n"
             "  [bright_blue]device.<file>[/bright_blue]   Install one device file\n"
             "  [bright_blue]<URL>[/bright_blue]         Download and install from URL\n\n"
-            "Options:\n"
-            "  [bright_blue]--device PATH[/bright_blue] Specify board target path\n\n"
             "Examples:\n"
             "  [bright_blue]replx pkg update core.all[/bright_blue]\n"
             "  [bright_blue]replx pkg update core.termio.py[/bright_blue]",
             title="Update Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -1221,7 +1195,7 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
             "  [bright_blue]device.<file>[/bright_blue]\n"
             "  [bright_blue]https://...[/bright_blue]",
             title="Update Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -1238,11 +1212,11 @@ def _pkg_update(args: list[str], target_path: Optional[str] = None,
                 f"Target file not found in local store: [red]{spec}[/red]\n\n"
                 "Run [bright_blue]replx pkg search[/bright_blue] to inspect available modules.",
                 title="Update Error",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
 
-    _install_spec_internal(spec, target_path=target_path)
+    _install_spec_internal(spec)
     return
 
 
@@ -1264,7 +1238,7 @@ def _pkg_clean(args: list[str]):
         OutputHelper.print_panel(
             f"No libraries for [yellow]{STATE.core}/{STATE.device}[/yellow] found in local store.",
             title="Clean",
-            border_style="yellow"
+            border_style="warning"
         )
         return
     
@@ -1332,14 +1306,14 @@ def _pkg_clean(args: list[str]):
                 f"Removed from local store:\n{items_text}\n\n"
                 f"Total freed: [bright_yellow]{OutputHelper.format_bytes(total_size)}[/bright_yellow]",
                 title="Clean Complete",
-                border_style="green"
+                border_style="success"
             )
         
     except Exception as e:
         OutputHelper.print_panel(
             f"Failed to clean local store: [red]{e}[/red]",
             title="Clean Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -1378,7 +1352,7 @@ Compile Python files to MicroPython bytecode (.mpy).
 [bold cyan]Note:[/bold cyan]
   • Requires board connection (architecture auto-detected)
   • Compiled .mpy files are smaller and use less RAM"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="mpy", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -1390,7 +1364,7 @@ Compile Python files to MicroPython bytecode (.mpy).
             "  [bright_green]replx mpy src/[/bright_green]             [dim]# Folder[/dim]\n\n"
             "Use [bright_blue]replx mpy --help[/bright_blue] for details.",
             title="MPY Compiler",
-            border_style="yellow"
+            border_style="help"
         )
         raise typer.Exit(1)
     
@@ -1402,7 +1376,7 @@ Compile Python files to MicroPython bytecode (.mpy).
             "Could not determine board architecture.\n\n"
             "Please reconnect the board and try again.",
             title="Architecture Unknown",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1425,14 +1399,14 @@ Compile Python files to MicroPython bytecode (.mpy).
                 OutputHelper.print_panel(
                     f"Not a Python file: [red]{pattern}[/red]",
                     title="Invalid File",
-                    border_style="red"
+                    border_style="error"
                 )
                 raise typer.Exit(1)
         else:
             OutputHelper.print_panel(
                 f"File not found: [red]{pattern}[/red]",
                 title="File Not Found",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
     
@@ -1440,7 +1414,7 @@ Compile Python files to MicroPython bytecode (.mpy).
         OutputHelper.print_panel(
             "No Python files found to compile.",
             title="No Files",
-            border_style="yellow"
+            border_style="warning"
         )
         raise typer.Exit(1)
     
@@ -1448,7 +1422,7 @@ Compile Python files to MicroPython bytecode (.mpy).
         OutputHelper.print_panel(
             "The [yellow]-o/--output[/yellow] option can only be used with a single file.",
             title="Invalid Option",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1467,7 +1441,7 @@ Compile Python files to MicroPython bytecode (.mpy).
             "mpy-cross is not installed.\n\n"
             "Install it with: [bright_green]pip install mpy-cross[/bright_green]",
             title="Missing Dependency",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -1498,7 +1472,7 @@ Compile Python files to MicroPython bytecode (.mpy).
                 f"  Output: [cyan]{OutputHelper.format_bytes(mpy_size)}[/cyan] [dim]({ratio:.0f}% smaller)[/dim]\n"
                 f"  Arch:   [yellow]{target_arch}[/yellow]",
                 title="Compiled",
-                border_style="green"
+                border_style="success"
             )
         else:
             lines = []
@@ -1513,7 +1487,7 @@ Compile Python files to MicroPython bytecode (.mpy).
             OutputHelper.print_panel(
                 "\n".join(lines),
                 title=f"Compiled {len(compiled)} files",
-                border_style="green"
+                border_style="success"
             )
     
     if device and compiled:
@@ -1577,7 +1551,7 @@ Compile Python files to MicroPython bytecode (.mpy).
                     f"[green]✓[/green] {name} → [cyan]{rpath}[/cyan]\n\n"
                     f"  Size: [cyan]{OutputHelper.format_bytes(size)}[/cyan]",
                     title=f"Installed to {STATE.device}",
-                    border_style="green"
+                    border_style="success"
                 )
             else:
                 lines = [f"[green]✓[/green] {name} → [cyan]{rpath}[/cyan] ({OutputHelper.format_bytes(size)})" for name, rpath, size in upload_ok]
@@ -1587,7 +1561,7 @@ Compile Python files to MicroPython bytecode (.mpy).
                 OutputHelper.print_panel(
                     "\n".join(lines),
                     title=f"Installed {len(upload_ok)} files to {STATE.device}",
-                    border_style="green"
+                    border_style="success"
                 )
 
         if upload_failed:
@@ -1595,7 +1569,7 @@ Compile Python files to MicroPython bytecode (.mpy).
             OutputHelper.print_panel(
                 "\n".join(lines),
                 title="Upload Failed",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
 
@@ -1604,6 +1578,6 @@ Compile Python files to MicroPython bytecode (.mpy).
         OutputHelper.print_panel(
             "\n".join(lines),
             title=f"Failed ({len(failed)} files)",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)

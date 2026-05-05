@@ -478,7 +478,7 @@ def _display_bus(bus: dict) -> None:
         f"Parity: [bright_cyan]{parity}[/bright_cyan]  "
         f"Stop: [bright_cyan]{bus['stop']}[/bright_cyan]",
         title="UART Bus",
-        border_style="cyan",
+        border_style="data",
     )
 
 
@@ -489,7 +489,7 @@ def _get_bus(client) -> dict:
             "No UART bus config. Open first:\n\n"
             "  replx PORT uart open --tx [yellow]GP<num>[/yellow] [--rx [yellow]GP<num>[/yellow]] [--baud N]",
             title="UART Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
     return bus
@@ -502,7 +502,7 @@ def _require_rx(bus: dict, subcmd: str) -> None:
             "Re-open with --rx GP<num>:\n\n"
             "  replx PORT uart open --tx GP<num> --rx [yellow]GP<num>[/yellow]",
             title="UART Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -522,7 +522,7 @@ def _subcmd_open(client, port: str, core: str,
             raise ValueError(f"--stop must be 1 or 2")
         ch = _resolve_uart_ch(core, tx_no)
     except ValueError as e:
-        OutputHelper.print_panel(str(e), title="UART Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="UART Error", border_style="error")
         raise typer.Exit(1)
 
     cfg = dict(
@@ -535,7 +535,7 @@ def _subcmd_open(client, port: str, core: str,
     try:
         _parse_json_strict(raw)
     except RuntimeError as e:
-        OutputHelper.print_panel(str(e), title="UART Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="UART Error", border_style="error")
         raise typer.Exit(1)
 
     client.send_command('uart_bus_set',
@@ -552,7 +552,7 @@ def _subcmd_bus(client) -> None:
             "[dim]No UART bus config saved.[/dim]\n"
             "Run: replx PORT uart open --tx [yellow]GP<num>[/yellow]",
             title="UART Bus",
-            border_style="cyan",
+            border_style="data",
         )
         return
     _display_bus(bus)
@@ -634,7 +634,7 @@ def _subcmd_write(client, pos_args: list[str], hex_mode: bool) -> None:
     OutputHelper.print_panel(
         f"Written: [bright_cyan]{result.get('written', len(data))}[/bright_cyan] bytes  [dim]({mode_label})[/dim]",
         title="UART Write",
-        border_style="green",
+        border_style="success",
     )
     OutputHelper._console.print(_render_hex_dump(bytes(data)))
 
@@ -670,7 +670,7 @@ def _subcmd_read(client, pos_args: list[str], timeout_ms: int, any_mode: bool) -
         OutputHelper.print_panel(
             f"[dim]No data received[/dim]  [dim]({mode_label})[/dim]",
             title="UART Read",
-            border_style="yellow",
+            border_style="neutral",
         )
         return
 
@@ -679,7 +679,7 @@ def _subcmd_read(client, pos_args: list[str], timeout_ms: int, any_mode: bool) -
         f"Received: [bright_cyan]{length}[/bright_cyan] bytes\n\n"
         + _render_hex_dump(data),
         title="UART Read",
-        border_style="blue",
+        border_style="data",
     )
 
 
@@ -731,7 +731,7 @@ def _subcmd_xfer(client, pos_args: list[str], count_n: Optional[int], timeout_ms
         f"RX: [bright_cyan]{length}[/bright_cyan] bytes  [dim]({rx_mode_label})[/dim]"
         + rx_section,
         title="UART Xfer",
-        border_style="blue",
+        border_style="data",
     )
 
 
@@ -753,7 +753,7 @@ def _subcmd_monitor(client, width: int, idle_ms: int, text_mode: bool, chunk_mod
         f"Mode: [magenta]{mode_label}[/magenta]{idle_label}\n"
         f"Press [bold]Ctrl+C[/bold] to stop.",
         title="UART Monitor",
-        border_style="green",
+        border_style="mode",
     )
     _run_monitor_session(client, code, width, idle_ms, text_mode, chunk_mode)
 
@@ -764,7 +764,7 @@ def _subcmd_close(client) -> None:
         OutputHelper.print_panel(
             "[dim]No UART bus config to close.[/dim]",
             title="UART Close",
-            border_style="yellow",
+            border_style="neutral",
         )
         return
 
@@ -778,7 +778,7 @@ def _subcmd_close(client) -> None:
     OutputHelper.print_panel(
         f"UART CH{bus['ch']} closed.",
         title="UART Close",
-        border_style="green",
+        border_style="success",
     )
 
 
@@ -866,7 +866,7 @@ UART open/write/read/xfer/monitor/close command.
   replx COM3 uart monitor --chunk
   replx COM3 uart monitor --text --chunk
   replx COM3 uart close"""
-    OutputHelper.print_panel(help_text, title="uart", border_style="dim")
+    OutputHelper.print_panel(help_text, title="uart", border_style="help")
 
 
 @app.command(name="uart", rich_help_panel="Hardware")
@@ -899,7 +899,7 @@ def uart_cmd(
             "  [bright_green]replx PORT uart read 8[/bright_green]\n\n"
             "Use [bright_blue]replx uart --help[/bright_blue] for details.",
             title="UART",
-            border_style="yellow",
+            border_style="help",
         )
         raise typer.Exit(1)
 
@@ -912,12 +912,12 @@ def uart_cmd(
             f"Unknown subcommand: {subcmd!r}\n\n"
             "Valid subcommands: " + "  ".join(valid_subcmds),
             title="UART Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
     if width not in (8, 16):
-        OutputHelper.print_panel("--width must be 8 or 16", title="UART Error", border_style="red")
+        OutputHelper.print_panel("--width must be 8 or 16", title="UART Error", border_style="error")
         raise typer.Exit(1)
 
     if subcmd == 'open' and timeout_ms is not None:
@@ -925,7 +925,7 @@ def uart_cmd(
             "--timeout is not valid for [bold]uart open[/bold].\n"
             "UART hardware timeout is fixed at 1000 ms internally.",
             title="UART Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -934,7 +934,7 @@ def uart_cmd(
             "--timeout is not valid for [bold]uart monitor[/bold].\n"
             "Monitor runs until Ctrl+C. Use [bold]--idle MS[/bold] to insert separators on silence.",
             title="UART Error",
-            border_style="red",
+            border_style="error",
         )
         raise typer.Exit(1)
 
@@ -969,8 +969,8 @@ def uart_cmd(
                 _subcmd_monitor(client, width, idle_ms, text_mode, chunk_mode)
 
     except ValueError as e:
-        OutputHelper.print_panel(str(e), title="UART Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="UART Error", border_style="error")
         raise typer.Exit(1)
     except RuntimeError as e:
-        OutputHelper.print_panel(str(e), title="UART Error", border_style="red")
+        OutputHelper.print_panel(str(e), title="UART Error", border_style="error")
         raise typer.Exit(1)

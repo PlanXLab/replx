@@ -51,7 +51,7 @@ Manage WiFi connection on the connected device.
 [bold cyan]Note:[/bold cyan]
   • Credentials saved to /wifi_config.py on device
   • boot on: Non-blocking (no boot delay)"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="wifi", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -80,14 +80,14 @@ Manage WiFi connection on the connected device.
             OutputHelper.print_panel(
                 "Usage: [bright_blue]replx wifi boot on[/bright_blue] or [bright_blue]replx wifi boot off[/bright_blue]",
                 title="WiFi Error",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
     else:
         OutputHelper.print_panel(
             "Invalid arguments.\n\nUse [bright_blue]replx wifi --help[/bright_blue] for usage.",
             title="WiFi Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -164,13 +164,13 @@ print(json.dumps(result))
         OutputHelper.print_panel(
             "\n".join(lines),
             title="WiFi Status",
-            border_style="cyan"
+            border_style="data"
         )
     except Exception as e:
         OutputHelper.print_panel(
             f"Failed to get WiFi status: {e}",
             title="WiFi Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -365,7 +365,7 @@ def _wifi_connect(client: AgentClient, ssid: str, pw: str):
             f"[green]{chr(0xf05a9)} Already connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
             f"  IP: [bright_yellow]{ip}[/bright_yellow]",
             title="WiFi Status",
-            border_style="green"
+            border_style="success"
         )
         return
     
@@ -379,7 +379,7 @@ def _wifi_connect(client: AgentClient, ssid: str, pw: str):
             f"  IP: [bright_yellow]{ip}[/bright_yellow]\n\n"
             f"[dim]Config saved to /wifi_config.py[/dim]",
             title="WiFi Connected",
-            border_style="green"
+            border_style="success"
         )
     else:
         error = result.get("error", "Unknown error")
@@ -405,7 +405,7 @@ def _wifi_connect(client: AgentClient, ssid: str, pw: str):
             f"  Error: {error_detail}\n\n"
             f"[dim]{hint_text}[/dim]",
             title="WiFi Connection Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -461,7 +461,7 @@ except ImportError:
                 "No saved credentials found.\n\n"
                 "Use: [bright_blue]replx wifi connect <SSID> <PASSWORD>[/bright_blue]",
                 title="WiFi Error",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         
@@ -473,7 +473,7 @@ except ImportError:
                 "Invalid wifi_config.py (missing SSID).\n\n"
                 "Use: [bright_blue]replx wifi connect <SSID> <PASSWORD>[/bright_blue]",
                 title="WiFi Error",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
             
@@ -483,7 +483,7 @@ except ImportError:
         OutputHelper.print_panel(
             f"Failed to read wifi_config.py: {e}",
             title="WiFi Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -495,7 +495,7 @@ except ImportError:
             f"[green]{chr(0xf05a9)} Already connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
             f"  IP: [bright_yellow]{ip}[/bright_yellow]",
             title="WiFi Status",
-            border_style="green"
+            border_style="success"
         )
         return
 
@@ -507,7 +507,7 @@ except ImportError:
             f"[green]Connected to [bright_cyan]{ssid}[/bright_cyan][/green]\n\n"
             f"{chr(0xf16be)}  IP: [bright_yellow]{ip}[/bright_yellow]",
             title="WiFi Connected",
-            border_style="green"
+            border_style="success"
         )
     else:
         error = result.get("error", "Unknown error")
@@ -531,7 +531,7 @@ except ImportError:
             f"  Error: {error_detail}\n\n"
             f"[dim]{hint_text}[/dim]",
             title="WiFi Connection Failed",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -567,7 +567,7 @@ except:
                 "No wifi_config.py found.\n\n"
                 "First connect to WiFi: [bright_blue]replx wifi connect <SSID> <PW>[/bright_blue]",
                 title="WiFi Error",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
     except typer.Exit:
@@ -576,7 +576,7 @@ except:
         OutputHelper.print_panel(
             f"Failed to check config: {e}",
             title="WiFi Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -649,7 +649,7 @@ except OSError:
             OutputHelper.print_panel(
                 "WiFi auto-connect is already enabled in boot.py",
                 title="WiFi Boot",
-                border_style="cyan"
+                border_style="data"
             )
         elif status == "created":
             OutputHelper.print_panel(
@@ -657,7 +657,7 @@ except OSError:
                 "Created /boot.py with WiFi auto-connect.\n"
                 "[dim]WiFi will connect automatically on reboot (non-blocking).[/dim]",
                 title="WiFi Boot On",
-                border_style="green"
+                border_style="success"
             )
         else:
             OutputHelper.print_panel(
@@ -665,7 +665,7 @@ except OSError:
                 "Added WiFi auto-connect to /boot.py.\n"
                 "[dim]WiFi will connect automatically on reboot (non-blocking).[/dim]",
                 title="WiFi Boot On",
-                border_style="green"
+                border_style="success"
             )
     except typer.Exit:
         raise
@@ -673,7 +673,7 @@ except OSError:
         OutputHelper.print_panel(
             f"Failed to update boot.py: {e}",
             title="WiFi Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -745,27 +745,27 @@ except OSError:
             OutputHelper.print_panel(
                 "No boot.py found. Nothing to disable.",
                 title="WiFi Boot",
-                border_style="dim"
+                border_style="neutral"
             )
         elif status == "not_found":
             OutputHelper.print_panel(
                 "WiFi auto-connect not found in boot.py",
                 title="WiFi Boot",
-                border_style="dim"
+                border_style="neutral"
             )
         elif status == "deleted":
             OutputHelper.print_panel(
                 "[green]WiFi auto-connect disabled[/green]\n\n"
                 "Removed /boot.py (was empty after removal).",
                 title="WiFi Boot Off",
-                border_style="green"
+                border_style="success"
             )
         else:  # removed
             OutputHelper.print_panel(
                 "[green]WiFi auto-connect disabled[/green]\n\n"
                 "Removed WiFi auto-connect from /boot.py.",
                 title="WiFi Boot Off",
-                border_style="green"
+                border_style="success"
             )
     except typer.Exit:
         raise
@@ -773,7 +773,7 @@ except OSError:
         OutputHelper.print_panel(
             f"Failed to update boot.py: {e}",
             title="WiFi Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -792,13 +792,13 @@ print("WiFi disabled")
         OutputHelper.print_panel(
             "WiFi interface disabled.",
             title="WiFi Off",
-            border_style="dim"
+            border_style="neutral"
         )
     except Exception as e:
         OutputHelper.print_panel(
             f"Failed to disable WiFi: {e}",
             title="WiFi Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -879,7 +879,7 @@ print(json.dumps({"networks": results, "current": current_ssid}))
             OutputHelper.print_panel(
                 "No networks found.",
                 title="WiFi Scan",
-                border_style="dim"
+                border_style="neutral"
             )
             return
         
@@ -914,7 +914,8 @@ print(json.dumps({"networks": results, "current": current_ssid}))
         console.print(Panel(
             table,
             title=f"WiFi Networks ({len(data)} found)",
-            border_style="cyan",
+            title_align="left",
+            border_style=OutputHelper._resolve_category_color('data'),
             box=get_panel_box(),
             width=CONSOLE_WIDTH
         ))
@@ -922,7 +923,7 @@ print(json.dumps({"networks": results, "current": current_ssid}))
         OutputHelper.print_panel(
             f"Failed to scan: {e}",
             title="WiFi Scan Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 

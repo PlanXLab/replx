@@ -92,7 +92,8 @@ class AgentClient:
         except Exception:
             pass
 
-    def send_command(self, command: str, timeout: float = None, max_retries: int = None, **args) -> Dict[str, Any]:
+    def send_command(self, command: str, timeout: float = None, max_retries: int = None,
+                     wait_on_busy: float = 30.0, **args) -> Dict[str, Any]:
         if not self.sock:
             self.connect()
 
@@ -104,63 +105,73 @@ class AgentClient:
             if param in args and args[param]:
                 args[param] = os.path.abspath(args[param])
 
-        request = AgentProtocol.create_request(
-            command,
-            ppid=self._ppid,
-            port=port_to_use,
-            **args
-        )
-        seq = request['seq']
-        request_data = AgentProtocol.encode_message(request)
-
-        response = None
-
         if max_retries is not None:
             max_attempts = max(1, max_retries)
         else:
             max_attempts = 1 if effective_timeout < 1.0 else self.MAX_RETRIES
 
-        for attempt in range(max_attempts):
-            try:
-                self.sock.sendto(request_data, (AGENT_HOST, self.agent_port))
+        busy_deadline = time.time() + wait_on_busy
 
-                start_time = time.time()
-                while time.time() - start_time < effective_timeout:
-                    try:
-                        data, addr = self.sock.recvfrom(MAX_UDP_SIZE)
+        while True:  # outer loop: retry on transient busy
+            request = AgentProtocol.create_request(
+                command,
+                ppid=self._ppid,
+                port=port_to_use,
+                **args
+            )
+            seq = request['seq']
+            request_data = AgentProtocol.encode_message(request)
 
-                        msg = AgentProtocol.decode_message(data)
-                        if not msg or msg.get('seq') != seq:
-                            continue
+            response = None
 
-                        if msg.get('type') == 'ack':
-                            continue
+            for attempt in range(max_attempts):
+                try:
+                    self.sock.sendto(request_data, (AGENT_HOST, self.agent_port))
 
-                        if msg.get('type') == 'response':
-                            response = msg
+                    start_time = time.time()
+                    while time.time() - start_time < effective_timeout:
+                        try:
+                            data, addr = self.sock.recvfrom(MAX_UDP_SIZE)
+
+                            msg = AgentProtocol.decode_message(data)
+                            if not msg or msg.get('seq') != seq:
+                                continue
+
+                            if msg.get('type') == 'ack':
+                                continue
+
+                            if msg.get('type') == 'response':
+                                response = msg
+                                break
+
+                        except socket.timeout:
                             break
 
-                    except socket.timeout:
+                    if response:
                         break
 
-                if response:
-                    break
+                    if attempt < max_attempts - 1 and effective_timeout >= 1.0:
+                        time.sleep(0.1 * (attempt + 1))
 
-                if attempt < max_attempts - 1 and effective_timeout >= 1.0:
-                    time.sleep(0.1 * (attempt + 1))
+                except socket.timeout:
+                    if attempt < max_attempts - 1:
+                        continue
+                    raise RuntimeError(f"Agent timeout after {max_attempts} attempts")
 
-            except socket.timeout:
-                if attempt < max_attempts - 1:
-                    continue
-                raise RuntimeError(f"Agent timeout after {max_attempts} attempts")
+            if not response:
+                raise RuntimeError("No response from agent")
 
-        if not response:
-            raise RuntimeError("No response from agent")
+            error = response.get('error', '')
 
-        if response.get('error'):
-            raise RuntimeError(response['error'])
+            # Retry only for transient "Another command" busy — not REPL/detached.
+            if error and 'is busy. Another command' in error and time.time() < busy_deadline:
+                time.sleep(1.0)
+                continue  # retry with a fresh seq (server rejected; never executed)
 
-        return response.get('result', {})
+            if error:
+                raise RuntimeError(error)
+
+            return response.get('result', {})
 
     def run_interactive(self, script_path: str = None, script_content: str = None,
                         echo: bool = False,

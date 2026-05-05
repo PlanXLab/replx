@@ -16,7 +16,7 @@ from ..agent.client import AgentClient
 from ..helpers import (
     OutputHelper, DeviceScanner,
     StoreManager,
-    CONSOLE_WIDTH
+    CONSOLE_WIDTH, get_panel_box,
 )
 from ..config import (
     STATE,
@@ -372,7 +372,7 @@ Run this once per project folder to set up your workspace.
 [bold cyan]Note:[/bold cyan]
   Connection is remembered. After setup, just use [green]replx ls[/green] without port.
   To switch boards, run setup again with the new port."""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="setup", border_style="help")
         console.print()
         raise typer.Exit()
 
@@ -392,7 +392,7 @@ Run this once per project folder to set up your workspace.
         OutputHelper.print_panel(
             f"{str(e)}",
             title="Invalid Theme",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -409,7 +409,7 @@ Run this once per project folder to set up your workspace.
                 "[yellow]--clean[/yellow] does not take a PORT argument.\n\n"
                 "Usage: [bright_green]replx setup --clean[/bright_green]",
                 title="Invalid Usage",
-                border_style="red"
+                border_style="error"
             )
             raise typer.Exit(1)
         import shutil
@@ -433,13 +433,13 @@ Run this once per project folder to set up your workspace.
             OutputHelper.print_panel(
                 "All settings have been removed.",
                 title="Clean Complete",
-                border_style="green"
+                border_style="success"
             )
         else:
             OutputHelper.print_panel(
                 "No [yellow].vscode[/yellow] folder found in current project.",
                 title="Nothing to Clean",
-                border_style="dim"
+                border_style="neutral"
             )
         raise typer.Exit()
 
@@ -455,7 +455,7 @@ Run this once per project folder to set up your workspace.
             "  [bright_green]replx --port COM3 setup[/bright_green]\n"
             "  [bright_green]replx --port /dev/ttyACM0 setup[/bright_green]",
             title="Connection Required",
-            border_style="yellow"
+            border_style="warning"
         )
         raise typer.Exit(1)
     
@@ -538,7 +538,7 @@ Run this once per project folder to set up your workspace.
                     OutputHelper.print_panel(
                         content,
                         title="Setup Complete",
-                        border_style="green"
+                        border_style="success"
                     )
                     raise typer.Exit()
                 else:
@@ -589,7 +589,7 @@ Run this once per project folder to set up your workspace.
                         OutputHelper.print_panel(
                             content,
                             title="Connection Added",
-                            border_style="green"
+                            border_style="success"
                         )
                         raise typer.Exit()
                     except typer.Exit:
@@ -598,7 +598,7 @@ Run this once per project folder to set up your workspace.
                         OutputHelper.print_panel(
                             f"Failed to add connection: {str(e)}\nRestarting agent...",
                             title="Reconnecting",
-                            border_style="yellow"
+                            border_style="warning"
                         )
                         try:
                             AgentClient.stop_agent(port=agent_port)
@@ -627,7 +627,7 @@ Run this once per project folder to set up your workspace.
         OutputHelper.print_panel(
             f"Failed to start agent: {str(e)}",
             title="Agent Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
     
@@ -658,7 +658,7 @@ Run this once per project folder to set up your workspace.
             "  • Serial cable is properly attached\n\n"
             "[dim]Run 'replx --port PORT setup' to reconfigure if needed.[/dim]",
             title="Connection Error",
-            border_style="red"
+            border_style="error"
         )
         raise typer.Exit(1)
 
@@ -730,7 +730,7 @@ Run this once per project folder to set up your workspace.
     OutputHelper.print_panel(
         content,
         title="Setup Complete",
-        border_style="green"
+        border_style="success"
     )
 
 
@@ -768,7 +768,7 @@ Show memory and storage usage of the connected device.
 [bold cyan]Related:[/bold cyan]
   replx whoami              [dim]# See connected device info[/dim]
   replx ls -r               [dim]# See what's using storage[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="usage", border_style="help")
         console.print()
         raise typer.Exit()
     
@@ -816,10 +816,10 @@ Show memory and storage usage of the connected device.
         else:
             lines.append("[bold cyan][#D98C53]󰋊[/#D98C53] Storage[/bold cyan]  [dim]unavailable[/dim]")
         
-        OutputHelper.print_panel("\n".join(lines), title="Usage", border_style="bright_blue")
+        OutputHelper.print_panel("\n".join(lines), title="Usage", border_style="data")
         
     except Exception as e:
-        OutputHelper.print_panel(f"Error: {str(e)}", title="Error", border_style="red")
+        OutputHelper.print_panel(f"Error: {str(e)}", title="Usage Error", border_style="error")
         raise typer.Exit(1)
 
 
@@ -864,7 +864,7 @@ Scans all serial ports to detect MicroPython devices.
 
 [bold cyan]Related:[/bold cyan]
   replx COM3 setup        [dim]# Connect to a scanned board[/dim]"""
-        OutputHelper.print_panel(help_text, border_style="dim")
+        OutputHelper.print_panel(help_text, title="scan", border_style="help")
         console.print()
         raise typer.Exit()
 
@@ -1067,7 +1067,319 @@ Scans all serial ports to detect MicroPython devices.
     OutputHelper.print_panel(
         text_content,
         title="MicroPython Devices",
-        border_style="cyan",
+        border_style="data",
         title_align="left"
+    )
+
+
+from ..helpers.output import VALID_PANEL_CATEGORIES, _CATEGORY_COLOR_KEYS
+
+_VALID_BOX_STYLES = ('rounded', 'horizontals')
+
+
+@app.command(rich_help_panel="Configuration")
+def theme(
+    args: list[str] = typer.Argument(None, help="theme subcommand"),
+    show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
+):
+    """Show or configure the UI theme, panel colors, and panel box style."""
+    if show_help:
+        _theme_print_help()
+        return
+
+    if not args:
+        _theme_show()
+        return
+
+    sub = args[0].lower()
+
+    if sub == "color":
+        if len(args) == 3:
+            _theme_set_color(args[1], args[2])
+        elif len(args) == 2:
+            _theme_show_color(args[1])
+        else:
+            OutputHelper.print_panel(
+                "Usage:\n"
+                "  [bright_blue]replx theme color[/bright_blue] [yellow]CATEGORY HEX[/yellow]   [dim]# override panel color[/dim]\n"
+                "  [bright_blue]replx theme color[/bright_blue] [yellow]CATEGORY[/yellow]        [dim]# show current value[/dim]\n\n"
+                f"Valid categories: {', '.join(VALID_PANEL_CATEGORIES)}",
+                title="Theme Error",
+                border_style="error",
+            )
+            raise typer.Exit(1)
+
+    elif sub == "box":
+        if len(args) == 2:
+            _theme_set_box(args[1])
+        elif len(args) == 1:
+            _theme_show_box()
+        else:
+            OutputHelper.print_panel(
+                "Usage:\n"
+                "  [bright_blue]replx theme box[/bright_blue] [yellow]STYLE[/yellow]   [dim]# set panel box style[/dim]\n"
+                "  [bright_blue]replx theme box[/bright_blue]           [dim]# show current style[/dim]\n\n"
+                f"Valid styles: {', '.join(_VALID_BOX_STYLES)}",
+                title="Theme Error",
+                border_style="error",
+            )
+            raise typer.Exit(1)
+
+    elif sub == "reset":
+        if len(args) == 2:
+            _theme_reset_color(args[1])
+        else:
+            _theme_reset_all()
+
+    else:
+        OutputHelper.print_panel(
+            f"Unknown subcommand: [red]{sub}[/red]\n\n"
+            "  [bright_blue]replx theme[/bright_blue]                        [dim]# show theme + colors[/dim]\n"
+            "  [bright_blue]replx theme color[/bright_blue] [yellow]CATEGORY HEX[/yellow]      [dim]# override panel color[/dim]\n"
+            "  [bright_blue]replx theme color[/bright_blue] [yellow]CATEGORY[/yellow]           [dim]# show one category[/dim]\n"
+            "  [bright_blue]replx theme box[/bright_blue] [yellow]STYLE[/yellow]               [dim]# set panel box style[/dim]\n"
+            "  [bright_blue]replx theme reset[/bright_blue] [yellow][CATEGORY][/yellow]         [dim]# remove override(s)[/dim]",
+            title="Theme Error",
+            border_style="error",
+        )
+        raise typer.Exit(1)
+
+
+def _theme_print_help():
+    help_text = """\
+Configure the TUI theme, panel border colors, and panel box style.
+
+[bold cyan]Usage:[/bold cyan]
+  replx theme
+  replx theme color [yellow]CATEGORY[/yellow] [[yellow]HEX[/yellow]]
+  replx theme box [[yellow]STYLE[/yellow]]
+  replx theme reset [[yellow]CATEGORY[/yellow]]
+
+[bold cyan]Subcommands:[/bold cyan]
+  [bright_blue]replx theme[/bright_blue]                         [dim]# Show current theme and all panel colors[/dim]
+  [bright_blue]replx theme color[/bright_blue] [yellow]CATEGORY HEX[/yellow]       [dim]# Override a panel category color[/dim]
+  [bright_blue]replx theme color[/bright_blue] [yellow]CATEGORY[/yellow]            [dim]# Show current color for a category[/dim]
+  [bright_blue]replx theme box[/bright_blue] [yellow]STYLE[/yellow]                [dim]# Set the global panel box style[/dim]
+  [bright_blue]replx theme box[/bright_blue]                     [dim]# Show current box style[/dim]
+  [bright_blue]replx theme reset[/bright_blue] [yellow]CATEGORY[/yellow]            [dim]# Remove color override for one category[/dim]
+  [bright_blue]replx theme reset[/bright_blue]                   [dim]# Remove all overrides (restore theme defaults)[/dim]
+
+[bold cyan]Panel Categories:[/bold cyan]
+  [bright_blue]help[/bright_blue]       --help panels and subcommand hints  [dim](default: blue)[/dim]
+  [bright_blue]success[/bright_blue]    operation completed successfully    [dim](default: green)[/dim]
+  [bright_blue]data[/bright_blue]       status / read-only query results    [dim](default: cyan)[/dim]
+  [bright_blue]mode[/bright_blue]       interactive mode banners            [dim](default: magenta)[/dim]
+  [bright_blue]warning[/bright_blue]    warnings / partial failures         [dim](default: yellow)[/dim]
+  [bright_blue]neutral[/bright_blue]    no-op / already in that state       [dim](default: dim)[/dim]
+  [bright_blue]error[/bright_blue]      errors / invalid input              [dim](default: red)[/dim]
+
+[bold cyan]Panel Box Styles:[/bold cyan]
+  [bright_blue]rounded[/bright_blue]       Rounded corners (default)
+  [bright_blue]horizontals[/bright_blue]   Top and bottom lines only
+
+[bold cyan]Color Format:[/bold cyan]
+  Hex color in [yellow]#RRGGBB[/yellow] format.  Examples:
+    replx theme color help #61afef
+    replx theme color error #ff4444
+    replx theme box horizontals
+    replx theme reset
+
+[bold cyan]Storage:[/bold cyan]
+  Settings are saved in [dim]~/.replx/.config[/dim] and apply to all sessions.
+  Theme base colors come from the active theme (vscode-auto, one-dark-pro, etc).
+  Category overrides take priority over theme base colors."""
+    OutputHelper.print_panel(help_text, title="theme", border_style="help")
+
+
+def _theme_show():
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.console import Group
+    from rich.text import Text
+
+    panel_colors = AgentPortManager.read_panel_colors()
+    panel_box = AgentPortManager.read_panel_box()
+    theme_name = OutputHelper.get_theme_display_name()
+    stored = OutputHelper.get_theme()
+
+    data_color  = OutputHelper._resolve_category_color('data')
+    guide_color = OutputHelper._resolve_category_color('help')
+
+    header_str = f"Theme: [{data_color}]{theme_name}[/{data_color}]"
+    if stored == 'vscode-auto':
+        header_str += "  [dim](vscode-auto)[/dim]"
+    header_str += f"\nBox style: [{data_color}]{panel_box}[/{data_color}]"
+
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+    table.add_column("Category",    width=12)
+    table.add_column("Base key",    width=12)
+    table.add_column("Theme color", width=14)
+    table.add_column("Override",    width=14)
+    table.add_column("Active",      width=16)
+
+    for cat in VALID_PANEL_CATEGORIES:
+        color_key = _CATEGORY_COLOR_KEYS[cat]
+        theme_hex = OutputHelper._theme_styles.get(color_key, "")
+        override  = panel_colors.get(cat)
+        active    = override if override else theme_hex
+        swatch    = f"[{active}]██[/{active}]" if active else "  "
+        override_display = f"[{guide_color}]{override}[/{guide_color}]" if override else "[dim]-[/dim]"
+        table.add_row(cat, color_key, theme_hex, override_display, f"{active}  {swatch}")
+
+    footer_str = (
+        f"[dim]replx theme color[/dim] [{guide_color}]CATEGORY HEX[/{guide_color}]"
+        f"   [dim]# e.g. replx theme color error #ff4444[/dim]\n"
+        f"[dim]replx theme box[/dim] [{guide_color}]STYLE[/{guide_color}]"
+        f"             [dim]# e.g. replx theme box horizontals[/dim]\n"
+        f"[dim]replx theme reset[/dim]"
+        f"                   [dim]# remove all overrides[/dim]"
+    )
+
+    content = Group(
+        Text.from_markup(header_str + "\n"),
+        table,
+        Text.from_markup("\n" + footer_str),
+    )
+
+    OutputHelper._console.print(Panel(
+        content,
+        title="Theme",
+        border_style=data_color,
+        box=get_panel_box(),
+        expand=True,
+        width=OutputHelper._get_panel_width(),
+        title_align="left",
+    ))
+
+
+def _theme_show_color(name: str):
+    name = name.lower()
+    if name not in VALID_PANEL_CATEGORIES:
+        OutputHelper.print_panel(
+            f"Unknown category: [red]{name}[/red]\n\n"
+            f"Valid categories: {', '.join(VALID_PANEL_CATEGORIES)}",
+            title="Theme Error",
+            border_style="error",
+        )
+        raise typer.Exit(1)
+    color_key = _CATEGORY_COLOR_KEYS[name]
+    theme_hex = OutputHelper._theme_styles.get(color_key, "")
+    panel_colors = AgentPortManager.read_panel_colors()
+    override = panel_colors.get(name)
+    active = override if override else theme_hex
+    swatch = f"[{active}]████[/{active}]" if active else ""
+    msg = (f"[bold]{name}[/bold]  base-key: [dim]{color_key}[/dim]\n"
+           f"  Theme:  [bright_cyan]{theme_hex}[/bright_cyan]\n"
+           f"  Active: [bright_cyan]{active}[/bright_cyan]  {swatch}")
+    if override:
+        msg += f"\n  [yellow]Override active[/yellow]"
+    OutputHelper.print_panel(msg, title="Theme Color", border_style="data")
+
+
+def _theme_set_color(name: str, value: str):
+    import re as _re
+    name = name.lower()
+    if name not in VALID_PANEL_CATEGORIES:
+        OutputHelper.print_panel(
+            f"Unknown category: [red]{name}[/red]\n\n"
+            f"Valid categories: {', '.join(VALID_PANEL_CATEGORIES)}",
+            title="Theme Error",
+            border_style="error",
+        )
+        raise typer.Exit(1)
+
+    v = value.strip()
+    if not v.startswith('#'):
+        v = '#' + v
+    if not _re.fullmatch(r'#[0-9a-fA-F]{6}', v):
+        OutputHelper.print_panel(
+            f"Invalid hex color: [red]{value}[/red]\n\n"
+            "Expected format: [yellow]#RRGGBB[/yellow]  (e.g. [bright_cyan]#61afef[/bright_cyan])",
+            title="Theme Error",
+            border_style="error",
+        )
+        raise typer.Exit(1)
+
+    panel_colors = AgentPortManager.read_panel_colors()
+    old = panel_colors.get(name)
+    panel_colors[name] = v
+    AgentPortManager.write_panel_colors(panel_colors)
+
+    swatch = f"[{v}]████[/{v}]"
+    msg = f"[bold]{name}[/bold]  [green]{v}[/green]  {swatch}"
+    if old:
+        msg += f"\n[dim]was: {old}[/dim]"
+    OutputHelper.print_panel(msg, title="Color Updated", border_style="success")
+
+
+def _theme_show_box():
+    current = AgentPortManager.read_panel_box()
+    OutputHelper.print_panel(
+        f"Current box style: [bright_cyan]{current}[/bright_cyan]\n\n"
+        f"Available: {', '.join(_VALID_BOX_STYLES)}\n\n"
+        "[dim]replx theme box rounded[/dim]\n"
+        "[dim]replx theme box horizontals[/dim]",
+        title="Panel Box Style",
+        border_style="data",
+    )
+
+
+def _theme_set_box(style: str):
+    from ..helpers import invalidate_panel_box_cache
+    style = style.strip().lower()
+    if style not in _VALID_BOX_STYLES:
+        OutputHelper.print_panel(
+            f"Unknown box style: [red]{style}[/red]\n\n"
+            f"Valid styles: {', '.join(_VALID_BOX_STYLES)}",
+            title="Theme Error",
+            border_style="error",
+        )
+        raise typer.Exit(1)
+    AgentPortManager.write_panel_box(style)
+    invalidate_panel_box_cache()
+    OutputHelper.print_panel(
+        f"Panel box style set to [bright_cyan]{style}[/bright_cyan].\n"
+        "[dim]Takes effect immediately for all new panels.[/dim]",
+        title="Box Style Updated",
+        border_style="success",
+    )
+
+
+def _theme_reset_color(name: str):
+    name = name.lower()
+    if name not in VALID_PANEL_CATEGORIES:
+        OutputHelper.print_panel(
+            f"Unknown category: [red]{name}[/red]\n\n"
+            f"Valid categories: {', '.join(VALID_PANEL_CATEGORIES)}",
+            title="Theme Error",
+            border_style="error",
+        )
+        raise typer.Exit(1)
+    panel_colors = AgentPortManager.read_panel_colors()
+    if name not in panel_colors:
+        OutputHelper.print_panel(
+            f"[dim]{name}[/dim] has no override — already using theme default.",
+            title="Theme Reset",
+            border_style="neutral",
+        )
+        return
+    del panel_colors[name]
+    AgentPortManager.write_panel_colors(panel_colors)
+    color_key = _CATEGORY_COLOR_KEYS[name]
+    default_hex = OutputHelper._theme_styles.get(color_key, '')
+    OutputHelper.print_panel(
+        f"[bold]{name}[/bold] reset to theme default: "
+        f"[bright_cyan]{default_hex}[/bright_cyan]",
+        title="Color Reset",
+        border_style="success",
+    )
+
+
+def _theme_reset_all():
+    AgentPortManager.write_panel_colors({})
+    OutputHelper.print_panel(
+        "All panel color overrides removed. Theme defaults restored.",
+        title="Theme Reset",
+        border_style="success",
     )
 
