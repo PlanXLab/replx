@@ -1,0 +1,1538 @@
+import os
+import glob
+import time
+import threading
+import urllib.error
+from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import typer
+from rich.panel import Panel
+from rich.live import Live
+
+from ..helpers import (
+    OutputHelper, StoreManager, InstallHelper, SearchHelper, RegistryHelper,
+    CompilerHelper,
+    get_panel_box, CONSOLE_WIDTH
+)
+from replx.utils import device_name_to_path
+from replx.utils.constants import HTTP_REQUEST_TIMEOUT
+from ..config import STATE
+from ..connection import (
+    _ensure_connected, _create_agent_client
+)
+from ..app import app
+
+
+def _upload_file_with_progress(client, local_path: str, remote_path: str, progress_callback):
+    return client.send_command_streaming(
+        'put_from_local_streaming',
+        progress_callback=progress_callback,
+        local_path=local_path,
+        remote_path=remote_path
+    )
+
+
+def _find_local_pkg_version(local_meta: dict, *, scope: str, target: str, source_path: str, pkg_name: str) -> tuple[float, bool]:
+    if not local_meta or not isinstance(local_meta, dict):
+        return 0.0, True
+
+    local_packages = local_meta.get("packages", {})
+    if not local_packages or not isinstance(local_packages, dict):
+        return 0.0, True
+
+    if not scope or not target or not source_path or not pkg_name:
+        return 0.0, True
+
+    base_key = f"{scope}:{target}:{pkg_name}"
+
+    if base_key in local_packages:
+        return RegistryHelper.get_version(local_packages[base_key]), False
+
+    if scope == "device":
+        best = None
+        for key, meta in local_packages.items():
+            if not isinstance(key, str):
+                continue
+            if key.startswith(base_key + "@"):
+                v = RegistryHelper.get_version(meta)
+                best = v if best is None else max(best, v)
+        if best is not None:
+            return best, False
+
+    prefix_lower = f"{scope}:{target}:".lower()
+    for key, meta in local_packages.items():
+        if not isinstance(key, str) or not isinstance(meta, dict):
+            continue
+        if key.lower().startswith(prefix_lower) and meta.get("source") == source_path:
+            return RegistryHelper.get_version(meta), False
+
+    return 0.0, True
+
+
+@app.command(name="pkg", rich_help_panel="Package Management")
+def pkg(
+    args: list[str] = typer.Argument(None, help="Package command and arguments"),
+    owner: str = typer.Option("PlanXLab", help="GitHub repo owner (for search/download)"),
+    repo: str = typer.Option("replx_libs", help="GitHub repo name (for search/download)"),
+    ref: str = typer.Option("main", help="Git reference (for search/download)"),
+    show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
+):
+    if show_help:
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
+        help_text = """\
+Package management for MicroPython devices.
+
+[bold cyan]Usage:[/bold cyan] replx pkg [yellow]SUBCOMMAND[/yellow] [args]
+
+[bold cyan]Subcommands:[/bold cyan]
+  [yellow]search[/yellow] [dim][QUERY][/dim]          Search available libraries. [dim]QUERY[/dim] filters results by module name
+  [yellow]download[/yellow]                Download to local store
+  [yellow]update[/yellow] [green]TARGET[/green] [dim][OPTION][/dim]  Install to device (.py → .mpy)
+  [yellow]clean[/yellow]                   Remove current core/device from local store
+
+[bold cyan]Update Targets:[/bold cyan]
+    [green]core.all[/green]                 Install all core libs for connected board
+    [green]device.all[/green]               Install all device libs for connected board
+    [green]core.<file>[/green]              Install one core file (e.g., core.termio.py)
+    [green]device.<file>[/green]            Install one device file (e.g., device.termio.py)
+
+[bold cyan]Examples:[/bold cyan]
+  replx pkg search                                   [dim]List all libraries[/dim]
+  replx pkg search audio                             [dim]Search by name[/dim]
+  replx pkg download                                 [dim]Download for connected board[/dim]
+  replx pkg update core.all                          [dim]Install all core libs[/dim]
+  replx pkg update device.all                        [dim]Install all device libs[/dim]
+  replx pkg update core.termio.py                    [dim]→ /lib/termio.mpy[/dim]
+  replx pkg update device.termio.py                  [dim]→ /lib/<device>/termio.mpy[/dim]
+  replx pkg clean                                    [dim]Remove current core/device[/dim]
+
+[bold cyan]Workflow:[/bold cyan] search → download → update core.all
+
+[bold cyan]Note:[/bold cyan]
+  • Device connection required (--port or default)
+  • Core/device auto-detected from connected board
+    • Options --owner/--repo/--ref are for search/download/update only"""
+        OutputHelper.print_panel(help_text, title="pkg", border_style="help")
+        console.print()
+        raise typer.Exit()
+    
+    if not args:
+        OutputHelper.print_panel(
+            "Subcommands: [bright_blue]search[/bright_blue]  [bright_blue]download[/bright_blue]  [bright_blue]update[/bright_blue]  [bright_blue]clean[/bright_blue]\n\n"
+            "  [bright_green]replx pkg search[/bright_green]      [dim]# List available libraries[/dim]\n"
+            "  [bright_green]replx pkg download[/bright_green]    [dim]# Download to local store[/dim]\n"
+            "  [bright_green]replx pkg update[/bright_green]      [dim]# Install to device[/dim]\n"
+            "  [bright_green]replx pkg clean[/bright_green]       [dim]# Remove current core/device[/dim]\n\n"
+            "Use [bright_blue]replx pkg --help[/bright_blue] for details.",
+            title="Package Management",
+            border_style="help"
+        )
+        raise typer.Exit(1)
+    
+    cmd = args[0].lower()
+    cmd_args = args[1:] if len(args) > 1 else []
+    
+    if cmd == "search":
+        _pkg_search(cmd_args, owner, repo, ref)
+    elif cmd == "download":
+        _pkg_download(cmd_args, owner, repo, ref)
+    elif cmd == "update":
+        _pkg_update(cmd_args, owner, repo, ref)
+    elif cmd == "clean":
+        _pkg_clean(cmd_args)
+    else:
+        OutputHelper.print_panel(
+            f"Unknown command: [red]{cmd}[/red]\n\n"
+            "Available commands: [bright_blue]search[/bright_blue], [bright_blue]download[/bright_blue], [bright_blue]update[/bright_blue], [bright_blue]clean[/bright_blue]",
+            title="Package Error",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+
+
+def _pkg_search(args: list[str], owner: str, repo: str, ref: str):
+    status = _ensure_connected()
+    
+    lib_name = args[0] if args else None
+    
+    try:
+        remote = StoreManager.load_remote_meta(owner, repo, ref)
+    except Exception as e:
+        raise typer.BadParameter(f"Failed to load remote registry: {e}")
+
+    try:
+        local = StoreManager.load_local_meta()
+    except Exception:
+        local = {}
+
+    cores, devices = RegistryHelper.root_sections(remote)
+
+    STAT_ICON_NEW = ""
+    STAT_ICON_UPD = ""
+
+    def status_label(remote_ver: float, local_ver_: float, missing_local: bool) -> str:
+        if missing_local:
+            return "NEW"
+        if remote_ver > (local_ver_ or 0.0):
+            return "UPD"
+        return ""
+
+    def local_ver(source_path: str, target: str, scope: str) -> tuple[float, bool]:
+        if not source_path or not target:
+            return 0.0, True
+
+        filename = source_path.split("/")[-1] if "/" in source_path else source_path
+        name = filename.replace(".py", "").replace(".pyi", "").replace("__init__", "")
+        if not name and "/" in source_path:
+            parts = source_path.split("/")
+            name = parts[-2] if len(parts) >= 2 else ""
+
+        return _find_local_pkg_version(local, scope=scope, target=target, source_path=source_path, pkg_name=name)
+
+    def add_core_rows(core_name: str, rows: list):
+        for relpath, pkg_meta in RegistryHelper.walk_files_for_core(remote, core_name, "src"):
+            if not relpath.endswith(".py"):
+                continue
+            rver = RegistryHelper.get_version(pkg_meta)
+            source = pkg_meta.get("source", "")
+            lver, missing = local_ver(source, core_name, "core")
+            stat = status_label(rver, lver, missing)
+            pkg_name = pkg_meta.get("source", "").split("/")[-1].replace(".py", "")
+            display_path = f"src/{relpath}"
+            if relpath.endswith("/__init__.py"):
+                display_path = display_path.replace("/__init__.py", "/")
+            rows.append(("core", core_name, stat, f"{rver:.1f}", display_path, pkg_name))
+
+    def add_device_rows(dev_name: str, rows: list):
+        for relpath, pkg_meta in RegistryHelper.walk_files_for_device(remote, dev_name, "src", include_submodules=True):
+            if not (relpath.endswith(".py") or relpath.endswith(".bin")):
+                continue
+            rver = RegistryHelper.get_version(pkg_meta)
+            source = pkg_meta.get("_parent_source") or pkg_meta.get("source", "")
+            lver, missing = local_ver(source, dev_name, "device")
+            stat = status_label(rver, lver, missing)
+            pkg_name = pkg_meta.get("source", "").split("/")[-1].replace(".py", "")
+            display_path = f"src/{relpath}"
+            if relpath.endswith("/__init__.py"):
+                display_path = display_path.replace("/__init__.py", "/")
+            elif relpath == "__init__.py":
+                src_parts = source.split("/")
+                if len(src_parts) >= 2 and src_parts[0] == "device":
+                    pkg_folder = src_parts[1].lstrip("_")
+                    display_path = f"src/{pkg_folder}/"
+            rows.append(("device", dev_name, stat, f"{rver:.1f}", display_path, pkg_name))
+
+    def resolve_current_dev_core() -> tuple[Optional[str], Optional[str]]:
+        if not status or not status.get('connected'):
+            return None, None
+        
+        cur_core = status.get('core', '').strip()
+        cur_dev = status.get('device', '').strip()
+        
+        if not cur_core:
+            return None, None
+        
+        dk = SearchHelper.key_ci(devices, device_name_to_path(cur_dev)) if cur_dev else None
+        ck = SearchHelper.key_ci(cores, cur_core) if cur_core else None
+        
+        if ck:
+            return dk, ck
+
+        return None, None
+
+    rows: list[tuple[str, str, str, str, str, str]] = []
+    cur_dev_key, cur_core_key = resolve_current_dev_core()
+
+    if lib_name:
+        dkey = SearchHelper.key_ci(devices, device_name_to_path(lib_name))
+        ckey = SearchHelper.key_ci(cores, lib_name)
+
+        if dkey and cur_dev_key and dkey == cur_dev_key:
+            add_device_rows(dkey, rows)
+        elif ckey and cur_core_key and ckey == cur_core_key:
+            add_core_rows(ckey, rows)
+        else:
+            q = lib_name.lower()
+            temp_rows = []
+            
+            if cur_core_key:
+                add_core_rows(cur_core_key, temp_rows)
+                if cur_dev_key and cur_dev_key != cur_core_key:
+                    add_device_rows(cur_dev_key, temp_rows)
+            
+            for scope, target, stat, ver_str, shown_path, pkg_name in temp_rows:
+                if (q in pkg_name.lower()) or (q in shown_path.lower()):
+                    rows.append((scope, target, stat, ver_str, shown_path, pkg_name))
+    else:
+        if cur_core_key:
+            add_core_rows(cur_core_key, rows)
+            if cur_dev_key and cur_dev_key != cur_core_key:
+                add_device_rows(cur_dev_key, rows)
+
+    if not rows:
+        OutputHelper.print_panel(
+            "No results found.",
+            title=f"Search Results [{owner}/{repo}@{ref}]",
+            border_style="warning"
+        )
+        return
+
+    def row_key(r):
+        scope_order = 0 if r[0] == "core" else 1
+        return (scope_order, r[1].lower(), r[4].lower())
+
+    rows.sort(key=row_key)
+
+    w1 = max(5, max(len(r[0]) for r in rows))
+    w2 = max(6, max(len(r[1]) for r in rows))
+
+    def _stat_display(stat: str) -> str:
+        if stat == "NEW":
+            return STAT_ICON_NEW
+        if stat == "UPD":
+            return STAT_ICON_UPD
+        return ""
+
+    w3 = max(4, max(len(_stat_display(r[2])) for r in rows))  # STAT
+    w4 = max(3, max(len(r[3]) for r in rows))  # VER
+
+    lines = []
+    lines.append(f"{'SCOPE'.ljust(w1)}   {'TARGET'.ljust(w2)}   {'STAT'.ljust(w3)}   {'VER'.ljust(w4)}  FILE")
+    lines.append("─" * (80 - 4))
+
+    def _color_target(scope: str, padded: str) -> str:
+        if scope == "core":
+            return f"[bright_green]{padded}[/bright_green]"
+        if scope == "device":
+            return f"[bright_yellow]{padded}[/bright_yellow]"
+        return padded
+
+    def _color_stat(padded: str, stat: str) -> str:
+        if stat == "NEW":
+            return f"[bright_yellow]{padded}[/bright_yellow]"
+        if stat == "UPD":
+            return f"[cyan]{padded}[/cyan]"
+        return padded
+
+    def _color_file(padded: str, stat: str) -> str:
+        if stat in ("NEW", "UPD"):
+            return padded
+        return f"[dim]{padded}[/dim]"
+
+    for scope, target, stat, ver_str, shown_path, _pkg_name in rows:
+        scope_cell = scope.ljust(w1)
+        target_cell = _color_target(scope, target.ljust(w2))
+
+        stat_shown = _stat_display(stat)
+        stat_cell_raw = stat_shown.ljust(w3)
+        stat_cell = _color_stat(stat_cell_raw, stat)
+
+        ver_cell = ver_str.ljust(w4)
+
+        file_plain = shown_path[4:]
+        file_cell = _color_file(file_plain, stat)
+
+        lines.append(f"{scope_cell}   {target_cell}   {stat_cell}   {ver_cell}  {file_cell}")
+
+    lines.append("")
+    lines.append(f"[dim]{STAT_ICON_NEW} new   {STAT_ICON_UPD} update[/dim]")
+
+    
+    OutputHelper.print_panel(
+        "\n".join(lines),
+        title=f"Search Results [{owner}/{repo}@{ref}]",
+        border_style="mode",
+    )
+
+
+def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
+                  scope_filter: Optional[str] = None,
+                  file_filter: Optional[str] = None):
+    _ensure_connected()
+    
+    StoreManager.ensure_home_store()
+
+    client = _create_agent_client()
+    status = client.send_command('status')
+    if not status or not status.get('connected'):
+        OutputHelper.print_panel(
+            "Device not connected.",
+            title="Download Error",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+    
+    dev = status.get('device', '').strip()
+    core = status.get('core', '').strip()
+    
+    if not core:
+        OutputHelper.print_panel(
+            "Failed to get device info from connected board.",
+            title="Download Error",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+
+    try:
+        remote = StoreManager.load_remote_meta(owner, repo, ref)
+    except Exception as e:
+        raise typer.BadParameter(f"Failed to load remote meta: {e}")
+
+    cores, devices = RegistryHelper.root_sections(remote)
+
+    if scope_filter not in (None, "core", "device"):
+        raise typer.BadParameter(f"Invalid scope_filter: {scope_filter}")
+
+    include_core = scope_filter in (None, "core")
+    include_device = scope_filter in (None, "device")
+    
+    core_exists_remote = core in cores if core else False
+    device_exists_remote = (device_name_to_path(dev) in devices if dev else False) and (dev != core)
+    
+    if not core_exists_remote:
+        OutputHelper.print_panel(
+            f"Core [yellow]{core}[/yellow] not found in remote registry.",
+            title="Notice",
+            border_style="warning"
+        )
+        raise typer.Exit(0)
+
+    try:
+        local = StoreManager.load_local_meta()
+        if not isinstance(local, dict):
+            local = {}
+    except Exception:
+        local = {}
+
+    local_packages = local.setdefault("packages", {})
+    
+    if "platform_cores" in remote and core:
+        remote_platform_cores = remote.get("platform_cores", {})
+        if core in remote_platform_cores:
+            if "platform_cores" not in local:
+                local["platform_cores"] = {}
+            local["platform_cores"][core] = remote_platform_cores[core]
+    
+    if "device_configs" in remote and dev and dev != core:
+        remote_device_configs = remote.get("device_configs", {})
+        device_key = device_name_to_path(dev)
+        if device_key in remote_device_configs:
+            if "device_configs" not in local:
+                local["device_configs"] = {}
+            local["device_configs"][device_key] = remote_device_configs[device_key]
+    
+    if "schema_version" in remote:
+        local["schema_version"] = remote.get("schema_version")
+
+    def _local_touch_package(pkg_name: str, pkg_meta: dict) -> None:
+        local_packages[pkg_name] = pkg_meta.copy()
+
+    exts = (".py", ".pyi", ".json")
+
+    def _plan_for_core(core_name: str, part: str) -> list[tuple[str, dict, str, str, dict, str]]:
+        todo = []
+        remote_packages = remote.get("packages", {})
+        
+        for relpath, pkg_meta in RegistryHelper.walk_files_for_core(remote, core_name, part):
+            if not relpath.endswith(exts):
+                continue
+            
+            source = pkg_meta.get("source", "")
+            rver = RegistryHelper.get_version(pkg_meta)
+            
+            orig_pkg_name = None
+            orig_pkg_meta = None
+            
+            for name, meta in remote_packages.items():
+                if meta.get("source") == source:
+                    orig_pkg_name = name
+                    orig_pkg_meta = meta
+                    break
+                variants = meta.get("variants", {})
+                for var_name, var_meta in variants.items():
+                    if var_meta.get("source") == source:
+                        orig_pkg_name = name
+                        orig_pkg_meta = meta.copy()
+                        orig_pkg_meta["source"] = source
+                        break
+                if orig_pkg_name:
+                    break
+            
+            if not orig_pkg_name or not orig_pkg_meta:
+                pkg_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "").replace("__init__", "")
+                if not pkg_name or pkg_name == "":
+                    pkg_name = source.split("/")[-2] if len(source.split("/")) >= 2 else "unknown"
+                orig_pkg_name = pkg_name
+                orig_pkg_meta = pkg_meta
+            
+            source_for_match = (
+                source
+                or orig_pkg_meta.get("source", "")
+                or orig_pkg_meta.get("typehint", "")
+                or ""
+            )
+            lver, missing = _find_local_pkg_version(
+                local,
+                scope="core",
+                target=core_name,
+                source_path=source_for_match,
+                pkg_name=orig_pkg_name,
+            )
+
+            change_type = "NEW" if missing else ("UPD" if float(lver) < float(rver) else "")
+            
+            if float(lver) < float(rver):
+                display_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "")
+                todo.append((relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+        
+        return todo
+
+    def _plan_for_device(device_name: str, part: str) -> list[tuple[str, dict, str, str, dict, str]]:
+        todo = []
+        remote_packages = remote.get("packages", {})
+        
+        for relpath, pkg_meta in RegistryHelper.walk_files_for_device(remote, device_name, part):
+            if not relpath.endswith(exts):
+                continue
+            
+            source = pkg_meta.get("source", "")
+            rver = RegistryHelper.get_version(pkg_meta)
+            
+            orig_pkg_name = None
+            orig_pkg_meta = None
+            
+            for name, meta in remote_packages.items():
+                if meta.get("source") == source:
+                    orig_pkg_name = name
+                    orig_pkg_meta = meta
+                    break
+                variants = meta.get("variants", {})
+                for var_name, var_meta in variants.items():
+                    if var_meta.get("source") == source:
+                        orig_pkg_name = name
+                        orig_pkg_meta = meta.copy()
+                        orig_pkg_meta["source"] = source
+                        break
+                if orig_pkg_name:
+                    break
+            
+            if not orig_pkg_name or not orig_pkg_meta:
+                pkg_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "").replace("__init__", "")
+                if not pkg_name or pkg_name == "":
+                    pkg_name = source.split("/")[-2] if len(source.split("/")) >= 2 else "unknown"
+                orig_pkg_name = pkg_name
+                orig_pkg_meta = pkg_meta
+            
+            source_for_match = (
+                source
+                or orig_pkg_meta.get("source", "")
+                or orig_pkg_meta.get("typehint", "")
+                or ""
+            )
+            lver, missing = _find_local_pkg_version(
+                local,
+                scope="device",
+                target=device_name,
+                source_path=source_for_match,
+                pkg_name=orig_pkg_name,
+            )
+
+            change_type = "NEW" if missing else ("UPD" if float(lver) < float(rver) else "")
+            
+            if float(lver) < float(rver):
+                display_name = source.split("/")[-1].replace(".py", "").replace(".pyi", "")
+                todo.append((relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+        
+        return todo
+
+    plan = []
+    new_count = 0
+    upd_count = 0
+    download_targets = []
+    
+    if core_exists_remote and include_core:
+        core_src_files = _plan_for_core(core, "src")
+        core_hints_files = _plan_for_core(core, "typehints")
+
+        if file_filter:
+            core_src_files = [
+                item for item in core_src_files
+                if os.path.basename(item[0]) == file_filter
+            ]
+            core_hints_files = []
+        
+        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in core_src_files:
+            plan.append(("core", core, "src", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+            if change_type == "NEW":
+                new_count += 1
+            elif change_type == "UPD":
+                upd_count += 1
+        
+        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in core_hints_files:
+            plan.append(("core", core, "typehints", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+            if change_type == "NEW":
+                new_count += 1
+            elif change_type == "UPD":
+                upd_count += 1
+        
+        if core_src_files or core_hints_files:
+            download_targets.append(f"core/{core}")
+    
+    if device_exists_remote and include_device:
+        device_src_files = _plan_for_device(device_name_to_path(dev), "src")
+        device_hints_files = _plan_for_device(device_name_to_path(dev), "typehints")
+
+        if file_filter:
+            device_src_files = [
+                item for item in device_src_files
+                if os.path.basename(item[0]) == file_filter
+            ]
+            device_hints_files = []
+        
+        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in device_src_files:
+            plan.append(("device", device_name_to_path(dev), "src", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+            if change_type == "NEW":
+                new_count += 1
+            elif change_type == "UPD":
+                upd_count += 1
+        
+        for relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type in device_hints_files:
+            plan.append(("device", device_name_to_path(dev), "typehints", relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, change_type))
+            if change_type == "NEW":
+                new_count += 1
+            elif change_type == "UPD":
+                upd_count += 1
+        
+        if device_src_files or device_hints_files:
+            download_targets.append(f"device/{dev}")
+    
+    download_target = " + ".join(download_targets) if download_targets else ""
+    
+    total = len(plan)
+
+    if total > 0:
+        done = 0
+        done_lock = threading.Lock()
+        errors = []
+        
+        def download_file(task):
+            scope, target, part, relpath, pkg_meta, display_name, orig_pkg_name, orig_pkg_meta, _change_type = task
+            
+            if part == "typehints":
+                source = pkg_meta.get("typehint", "")
+                if not source:
+                    return (False, relpath, "No typehint path in metadata")
+            else:
+                source = pkg_meta.get("source", "")
+            
+            if scope == "device" and part == "typehints":
+                out_path = os.path.join(StoreManager.pkg_root(), scope, target, part, target, relpath.replace("/", os.sep))
+            else:
+                out_path = os.path.join(StoreManager.pkg_root(), scope, target, part, relpath.replace("/", os.sep))
+            
+            try:
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                InstallHelper.download_raw_file(owner, repo, ref, source, out_path)
+                
+                if part == "typehints":
+                    submodules = pkg_meta.get("submodules_typehints", [])
+                else:
+                    submodules = pkg_meta.get("submodules", [])
+                    
+                for submodule_path in submodules:
+                    relpath_dir = os.path.dirname(relpath) if "/" in relpath or "\\" in relpath else ""
+                    submodule_filename = os.path.basename(submodule_path)
+                    sub_relpath = os.path.join(relpath_dir, submodule_filename) if relpath_dir else submodule_filename
+                    
+                    if scope == "device" and part == "typehints":
+                        sub_out_path = os.path.join(StoreManager.pkg_root(), scope, target, part, target, sub_relpath.replace("/", os.sep))
+                    else:
+                        sub_out_path = os.path.join(StoreManager.pkg_root(), scope, target, part, sub_relpath.replace("/", os.sep))
+                    
+                    os.makedirs(os.path.dirname(sub_out_path), exist_ok=True)
+                    InstallHelper.download_raw_file(owner, repo, ref, submodule_path, sub_out_path)
+                
+                unique_pkg_name = f"{scope}:{target}:{orig_pkg_name}"
+                _local_touch_package(unique_pkg_name, orig_pkg_meta)
+                return (True, relpath, None)
+            except urllib.error.HTTPError:
+                url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{source}"
+                return (False, relpath, f"404 Not Found - URL: {url}")
+            except OSError as e:
+                return (False, relpath, f"Local: {e}")
+            except Exception as e:
+                return (False, relpath, str(e))
+        
+        default_workers = 4
+        max_workers = min(
+            int(os.environ.get("REPLX_DOWNLOAD_THREADS", str(default_workers))),
+            total,
+            8
+        )
+        
+        with Live(OutputHelper.create_progress_panel(done, total, title=f"Downloading {download_target}", message=f"Downloading {total} file(s)..."), console=OutputHelper._console, refresh_per_second=10) as live:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_task = {executor.submit(download_file, task): task for task in plan}
+                
+                for future in as_completed(future_to_task):
+                    success, relpath, error = future.result()
+                    
+                    with done_lock:
+                        done += 1
+                        
+                        if not success:
+                            errors.append(f"{relpath}: {error}")
+                        
+                        live.update(OutputHelper.create_progress_panel(
+                            done, total, 
+                            title=f"Downloading {download_target}", 
+                            message=f"Downloading... {relpath} ({done}/{total})"
+                        ))
+        
+        if errors:
+            OutputHelper._console.print("\n[red]Download errors:[/red]")
+            for err in errors[:5]:
+                OutputHelper._console.print(f"  [yellow]•[/yellow] {err}")
+            if len(errors) > 5:
+                OutputHelper._console.print(f"  [dim]... and {len(errors) - 5} more errors[/dim]")
+            raise typer.BadParameter(f"Failed to download {len(errors)} file(s)")
+    
+    if device_exists_remote and dev:
+        device_typehints_pkg_dir = os.path.join(StoreManager.pkg_root(), "device", device_name_to_path(dev), "typehints", device_name_to_path(dev))
+        init_pyi_path = os.path.join(device_typehints_pkg_dir, "__init__.pyi")
+        
+        if os.path.isdir(device_typehints_pkg_dir) and not os.path.exists(init_pyi_path):
+            try:
+                with open(init_pyi_path, "w", encoding="utf-8") as f:
+                    f.write("# Type hints for device package\n")
+            except Exception:
+                pass 
+    
+    StoreManager.save_local_meta(local)
+    
+    if total == 0:
+        if dev == core:
+            message = f"Core [bright_green]{core}[/bright_green] is already up to date."
+        else:
+            message = f"Core [bright_green]{core}[/bright_green] and device [bright_green]{dev}[/bright_green] are already up to date."
+    else:
+        message = f"[bright_green]{download_target}[/bright_green]: [green]{total}[/green] file(s) downloaded. ( {new_count},  {upd_count})"
+    
+    OutputHelper.print_panel(
+        message,
+        title="Download Complete",
+        border_style="success"
+    )
+
+
+INSTALL_HELP = """\
+SPEC can be:
+  (empty)             Install all core and device libs/files.
+  core/               Install core libs into /lib/...
+  device/             Install device libs into /lib/<device>/...
+  ./foo.py            -> /lib/foo.mpy
+  ./main.py|boot.py   -> /main.mpy or /boot.mpy
+  ./app/              -> /app (folder)
+  https://.../x.py    -> /lib/x.mpy
+"""
+
+
+def _install_spec_internal(spec: str, live=None, update_callback=None):
+    if spec.startswith("core.") or spec.startswith("device."):
+        scope, rest = InstallHelper.resolve_spec(spec)
+        base, local_list = InstallHelper.list_local_py_targets(scope, rest)
+        if not local_list:
+            raise typer.BadParameter("No local files to install. Run 'replx pkg download' first.")
+
+        total = len(local_list)
+        
+        if not live and not update_callback:
+            from rich.spinner import Spinner
+            temp_panel = Panel(
+                Spinner("dots", text=f" Preparing {total} files for installation..."),
+                title="Compiling", title_align="left", border_style=OutputHelper._resolve_category_color('data'),
+                box=get_panel_box(), width=CONSOLE_WIDTH
+            )
+            temp_live = Live(temp_panel, console=OutputHelper._console, refresh_per_second=10)
+            temp_live.start()
+        else:
+            temp_live = None
+        
+        batch_specs = []
+        unique_dirs = set()
+        for abs_file, rel in local_list:
+            rel_dir = os.path.dirname(rel)
+            
+            is_python = abs_file.endswith(".py")
+            
+            if rel.startswith("ext/") and "/" in rel[4:]:
+                parts = rel.split("/")
+                if len(parts) >= 3:
+                    rel_dir = "ext"
+                    remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
+                    
+                    if is_python:
+                        CompilerHelper.compile_to_staging(abs_file, base)
+                        out_file = CompilerHelper.staging_out_for(abs_file, base, CompilerHelper.mpy_arch_tag())
+                        remote_path = ("/" + remote_dir + os.path.splitext(parts[-1])[0] + ".mpy").replace("//", "/")
+                    else:
+                        out_file = abs_file
+                        remote_path = ("/" + remote_dir + parts[-1]).replace("//", "/")
+                    
+                    batch_specs.append((out_file, remote_path))
+                    unique_dirs.add(remote_dir)
+                    continue
+            
+            remote_dir = InstallHelper.remote_dir_for(scope, rel_dir)
+            
+            if is_python:
+                CompilerHelper.compile_to_staging(abs_file, base)
+                out_file = CompilerHelper.staging_out_for(abs_file, base, CompilerHelper.mpy_arch_tag())
+                remote_path = ("/" + remote_dir + os.path.splitext(os.path.basename(rel))[0] + ".mpy").replace("//", "/")
+            else:
+                out_file = abs_file
+                remote_path = ("/" + remote_dir + os.path.basename(rel)).replace("//", "/")
+            
+            batch_specs.append((out_file, remote_path))
+            
+            if remote_dir:
+                unique_dirs.add(remote_dir)
+        
+        if temp_live:
+            temp_live.stop()
+        
+        if unique_dirs:
+            client = _create_agent_client()
+            
+            all_paths = set()
+            for remote_dir in sorted(unique_dirs):
+                parts = [p for p in remote_dir.replace("\\", "/").strip("/").split("/") if p]
+                path = ""
+                for p in parts:
+                    path = path + "/" + p
+                    all_paths.add(path)
+            
+            for path in sorted(all_paths):
+                try:
+                    client.send_command('mkdir', path=path)
+                except Exception:
+                    pass
+        
+        client = _create_agent_client()
+        
+        file_sizes = []
+        for local_path, _ in batch_specs:
+            size = os.path.getsize(local_path) if os.path.exists(local_path) else 0
+            file_sizes.append(size)
+        total_bytes_all = sum(file_sizes)
+        
+        progress_state = {
+            "file_idx": 0,
+            "total_files": total,
+            "current_file": "",
+            "bytes_sent": 0,
+            "bytes_total": 0,
+            "cumulative_bytes": 0,
+            "total_bytes_all": total_bytes_all,
+        }
+        progress_lock = threading.Lock()
+        
+        def progress_callback(data):
+            with progress_lock:
+                if isinstance(data, dict):
+                    progress_state["bytes_sent"] = data.get("current", 0)
+                    progress_state["bytes_total"] = data.get("total", 0)
+        
+        def do_install(live_obj):
+            for idx, (local_path, remote_path) in enumerate(batch_specs):
+                filename = os.path.basename(local_path)
+                file_size = file_sizes[idx]
+                
+                with progress_lock:
+                    progress_state["file_idx"] = idx
+                    progress_state["current_file"] = filename
+                    progress_state["bytes_sent"] = 0
+                    progress_state["bytes_total"] = file_size
+                
+                upload_result = [None]
+                def do_upload_thread(lp=local_path, rp=remote_path):
+                    try:
+                        upload_result[0] = _upload_file_with_progress(client, lp, rp, progress_callback)
+                    except Exception as e:
+                        upload_result[0] = {"error": str(e)}
+                
+                upload_thread = threading.Thread(target=do_upload_thread, daemon=True)
+                upload_thread.start()
+                
+                while upload_thread.is_alive():
+                    with progress_lock:
+                        bytes_sent = progress_state["bytes_sent"]
+                        cumulative = progress_state["cumulative_bytes"]
+                    
+                    total_sent = cumulative + bytes_sent
+                    
+                    msg = f"[{idx+1}/{total}] {filename} ({OutputHelper.format_bytes(file_size)})"
+                    
+                    counter_text = f"({OutputHelper.format_bytes(total_sent)}/{OutputHelper.format_bytes(total_bytes_all)})"
+                    panel = OutputHelper.create_progress_panel(total_sent, total_bytes_all, title=f"Installing {spec} to {STATE.device}", message=msg, counter_text=counter_text)
+                    
+                    if update_callback:
+                        update_callback(panel)
+                    else:
+                        live_obj.update(panel)
+                    time.sleep(0.1)
+                
+                upload_thread.join()
+                
+                with progress_lock:
+                    progress_state["cumulative_bytes"] += file_size
+                
+                resp = upload_result[0]
+                if resp and resp.get('error'):
+                    pass
+            
+            panel = OutputHelper.create_progress_panel(total_bytes_all, total_bytes_all, title=f"Installing {spec} to {STATE.device}", message="Complete", counter_text=f"({OutputHelper.format_bytes(total_bytes_all)}/{OutputHelper.format_bytes(total_bytes_all)})")
+            if update_callback:
+                update_callback(panel)
+            else:
+                live_obj.update(panel)
+        
+        if live is not None:
+            do_install(live)
+        else:
+            with Live(OutputHelper.create_progress_panel(0, total_bytes_all, title=f"Installing {spec} to {STATE.device}", message=f"Processing {total} file(s)...", counter_text=f"(0B/{OutputHelper.format_bytes(total_bytes_all)})"), console=OutputHelper._console, refresh_per_second=10) as internal_live:
+                do_install(internal_live)
+        
+        return {"files": total, "bytes": total_bytes_all}
+    else:
+        raise typer.BadParameter(f"Invalid spec format: {spec}")
+
+
+def _pkg_update(args: list[str], owner: str = "PlanXLab", repo: str = "replx_libs", ref: str = "main"):
+    _ensure_connected()
+
+    StoreManager.ensure_home_store()
+    spec = args[0].strip() if args else None
+
+    if len(args) > 1:
+        OutputHelper.print_panel(
+            "Only one TARGET is supported for [bright_blue]pkg update[/bright_blue].\n\n"
+            "Valid targets:\n"
+            "  [bright_blue]core.all[/bright_blue]\n"
+            "  [bright_blue]device.all[/bright_blue]\n"
+            "  [bright_blue]core.<file>[/bright_blue]\n"
+            "  [bright_blue]device.<file>[/bright_blue]",
+            title="Update Error",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+
+    def _install_local_folder(abs_dir: str):
+        py_files = []
+        other_files = []
+        for dp, _, fns in os.walk(abs_dir):
+            for fn in fns:
+                full_path = os.path.join(dp, fn)
+                if fn.endswith(".py"):
+                    py_files.append(full_path)
+                else:
+                    other_files.append(full_path)
+        
+        total = len(py_files) + len(other_files)
+        if total == 0:
+            OutputHelper.print_panel(
+                f"No files found in [yellow]{abs_dir}[/yellow]",
+                title="Update",
+                border_style="warning"
+            )
+            return 0
+        
+        base = abs_dir
+        folder_name = os.path.basename(abs_dir)
+        base_target = f"lib/{folder_name}"
+        
+        upload_files = []
+        total_size = 0
+        
+        for ap in py_files:
+            CompilerHelper.compile_to_staging(ap, base)
+            rel = os.path.relpath(ap, base).replace("\\", "/")
+            remote = f"/{base_target}/{rel}"
+            remote = remote[:-3] + ".mpy"
+            out_mpy = CompilerHelper.staging_out_for(ap, base, CompilerHelper.mpy_arch_tag())
+            rel_dir = f"{base_target}/{os.path.dirname(rel)}".rstrip("/")
+            file_size = os.path.getsize(out_mpy)
+            upload_files.append((out_mpy, remote, rel_dir, file_size))
+            total_size += file_size
+        
+        for ap in other_files:
+            rel = os.path.relpath(ap, base).replace("\\", "/")
+            remote = f"/{base_target}/{rel}"
+            rel_dir = f"{base_target}/{os.path.dirname(rel)}".rstrip("/")
+            file_size = os.path.getsize(ap)
+            upload_files.append((ap, remote, rel_dir, file_size))
+            total_size += file_size
+        
+        unique_dirs = set()
+        for _, _, rel_dir, _ in upload_files:
+            if rel_dir:
+                unique_dirs.add(rel_dir)
+        
+        client = _create_agent_client()
+
+        for rel_dir in unique_dirs:
+            try:
+                InstallHelper.ensure_remote_dir(rel_dir, client=client)
+            except Exception:
+                pass
+        
+        total_files = len(upload_files)
+        folder_name = os.path.basename(abs_dir)
+        
+        progress_state = {"cumulative": 0, "current": 0}
+        progress_lock = threading.Lock()
+        
+        def progress_callback(data):
+            with progress_lock:
+                if isinstance(data, dict):
+                    progress_state["current"] = data.get("current", 0)
+        
+        with Live(OutputHelper.create_progress_panel(0, total_size, title=f"Updating {folder_name} to {STATE.device}", message=f"Preparing...", counter_text=f"0/{OutputHelper.format_bytes(total_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
+            for idx, (local_file, remote, _, file_size) in enumerate(upload_files):
+                filename = os.path.basename(local_file)
+                
+                with progress_lock:
+                    progress_state["current"] = 0
+                
+                upload_result = [None]
+                def do_upload(lp=local_file, rp=remote):
+                    try:
+                        upload_result[0] = client.send_command_streaming(
+                            'put_from_local_streaming',
+                            progress_callback=progress_callback,
+                            local_path=lp,
+                            remote_path=rp
+                        )
+                    except Exception as e:
+                        upload_result[0] = {"error": str(e)}
+                
+                upload_thread = threading.Thread(target=do_upload, daemon=True)
+                upload_thread.start()
+                
+                while upload_thread.is_alive():
+                    with progress_lock:
+                        current_bytes = progress_state["current"]
+                        cumulative = progress_state["cumulative"]
+                    total_sent = cumulative + current_bytes
+                    live.update(OutputHelper.create_progress_panel(total_sent, total_size, title=f"Updating {folder_name} to {STATE.device}", message=f"[{idx+1}/{total_files}] {filename} ({OutputHelper.format_bytes(file_size)})", counter_text=f"{OutputHelper.format_bytes(total_sent)}/{OutputHelper.format_bytes(total_size)}"))
+                    time.sleep(0.05)
+                
+                upload_thread.join()
+                
+                with progress_lock:
+                    progress_state["cumulative"] += file_size
+            
+            live.update(OutputHelper.create_progress_panel(total_size, total_size, title=f"Updating {folder_name} to {STATE.device}", message="Complete", counter_text=f"{OutputHelper.format_bytes(total_size)}/{OutputHelper.format_bytes(total_size)}"))
+        
+        target_display = f"/{base_target}/"
+        OutputHelper.print_panel(
+            f"[green]{total_files}[/green] file(s) ([cyan]{OutputHelper.format_bytes(total_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
+            title="Update Complete",
+            border_style="success"
+        )
+        return total_files
+
+    def _install_single_file(abs_file: str):
+        base = os.path.dirname(abs_file)
+        name = os.path.basename(abs_file)
+        target_dir = "lib"
+        
+        
+        if abs_file.endswith('.py'):
+            CompilerHelper.compile_to_staging(abs_file, base)
+            local_file = CompilerHelper.staging_out_for(abs_file, base, CompilerHelper.mpy_arch_tag())
+            remote = f"/{target_dir}/{name[:-3]}.mpy"
+        else:
+            local_file = abs_file
+            remote = f"/{target_dir}/{name}"
+        
+        file_size = os.path.getsize(local_file)
+        client = _create_agent_client()
+        InstallHelper.ensure_remote_dir(target_dir, client=client)
+        
+        progress_state = {"current": 0}
+        progress_lock = threading.Lock()
+        
+        def progress_callback(data):
+            with progress_lock:
+                if isinstance(data, dict):
+                    progress_state["current"] = data.get("current", 0)
+        
+        with Live(OutputHelper.create_progress_panel(0, file_size, title=f"Updating {name} to {STATE.device}", message="Uploading...", counter_text=f"0/{OutputHelper.format_bytes(file_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
+            upload_result = [None]
+            def do_upload():
+                try:
+                    upload_result[0] = client.send_command_streaming(
+                        'put_from_local_streaming',
+                        progress_callback=progress_callback,
+                        local_path=local_file,
+                        remote_path=remote
+                    )
+                except Exception as e:
+                    upload_result[0] = {"error": str(e)}
+            
+            upload_thread = threading.Thread(target=do_upload, daemon=True)
+            upload_thread.start()
+            
+            while upload_thread.is_alive():
+                with progress_lock:
+                    current_bytes = progress_state["current"]
+                live.update(OutputHelper.create_progress_panel(current_bytes, file_size, title=f"Updating {name} to {STATE.device}", message="Uploading...", counter_text=f"{OutputHelper.format_bytes(current_bytes)}/{OutputHelper.format_bytes(file_size)}"))
+                time.sleep(0.05)
+            
+            upload_thread.join()
+            
+            resp = upload_result[0]
+            if resp and not resp.get('success'):
+                OutputHelper.print_panel(
+                    f"Upload failed: [red]{resp.get('error', 'Unknown error')}[/red]",
+                    title="Update Failed",
+                    border_style="error"
+                )
+                return 0
+            live.update(OutputHelper.create_progress_panel(file_size, file_size, title=f"Updating {name} to {STATE.device}", message="Complete", counter_text=f"{OutputHelper.format_bytes(file_size)}/{OutputHelper.format_bytes(file_size)}"))
+        
+        target_display = "/lib/"
+        OutputHelper.print_panel(
+            f"[green]1[/green] file ([cyan]{OutputHelper.format_bytes(file_size)}[/cyan]) updated to [cyan]{target_display}[/cyan]",
+            title="Update Complete",
+            border_style="success"
+        )
+        return 1
+
+    if spec in ("core/", "device/", "core", "device"):
+        OutputHelper.print_panel(
+            f"Unsupported target: [red]{spec}[/red]\n\n"
+            "Use the new target format:\n"
+            "  [bright_blue]core.all[/bright_blue]\n"
+            "  [bright_blue]device.all[/bright_blue]\n"
+            "  [bright_blue]core.<file>[/bright_blue]\n"
+            "  [bright_blue]device.<file>[/bright_blue]",
+            title="Update Error",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+
+    if not spec:
+        OutputHelper.print_panel(
+            "Specify a target:\n\n"
+            "  [bright_blue]core.all[/bright_blue]        Install all core libraries\n"
+            "  [bright_blue]device.all[/bright_blue]      Install all device libraries\n"
+            "  [bright_blue]core.<file>[/bright_blue]     Install one core file\n"
+            "  [bright_blue]device.<file>[/bright_blue]   Install one device file\n\n"
+            "Examples:\n"
+            "  [bright_blue]replx pkg update core.all[/bright_blue]\n"
+            "  [bright_blue]replx pkg update core.termio.py[/bright_blue]",
+            title="Update Error",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+
+    try:
+        scope, rest = InstallHelper.resolve_spec(spec)
+    except typer.BadParameter:
+        OutputHelper.print_panel(
+            f"Invalid target: [red]{spec}[/red]\n\n"
+            "Valid targets:\n"
+            "  [bright_blue]core.all[/bright_blue]\n"
+            "  [bright_blue]device.all[/bright_blue]\n"
+            "  [bright_blue]core.<file>[/bright_blue]\n"
+            "  [bright_blue]device.<file>[/bright_blue]",
+            title="Update Error",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+
+    _pkg_download(
+        [], owner, repo, ref,
+        scope_filter=scope,
+        file_filter=rest if rest else None,
+    )
+
+    if rest:
+        _, local_list = InstallHelper.list_local_py_targets(scope, rest)
+        if not local_list:
+            OutputHelper.print_panel(
+                f"Target file not found in local store: [red]{spec}[/red]\n\n"
+                "Run [bright_blue]replx pkg search[/bright_blue] to inspect available modules.",
+                title="Update Error",
+                border_style="error"
+            )
+            raise typer.Exit(1)
+
+    _install_spec_internal(spec)
+    return
+
+
+def _pkg_clean(args: list[str]):
+    import shutil
+    
+    _ensure_connected()
+    
+    pkg_root = StoreManager.pkg_root()
+    core_path = os.path.join(pkg_root, "core", STATE.core)
+    device_path = os.path.join(pkg_root, "device", device_name_to_path(STATE.device))
+    meta_path = StoreManager.local_meta_path()
+    
+    core_exists = os.path.isdir(core_path)
+    device_exists = os.path.isdir(device_path)
+    meta_exists = os.path.isfile(meta_path)
+    
+    if not core_exists and not device_exists:
+        OutputHelper.print_panel(
+            f"No libraries for [yellow]{STATE.core}/{STATE.device}[/yellow] found in local store.",
+            title="Clean",
+            border_style="warning"
+        )
+        return
+    
+    removed_items = []
+    total_size = 0
+    
+    def get_dir_size(path: str) -> int:
+        total = 0
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                try:
+                    total += os.path.getsize(fp)
+                except OSError:
+                    pass
+        return total
+    
+    try:
+        if core_exists:
+            size = get_dir_size(core_path)
+            shutil.rmtree(core_path)
+            removed_items.append(f"core/{STATE.core}/ ({OutputHelper.format_bytes(size)})")
+            total_size += size
+        
+        if device_exists:
+            size = get_dir_size(device_path)
+            shutil.rmtree(device_path)
+            removed_items.append(f"device/{STATE.device}/ ({OutputHelper.format_bytes(size)})")
+            total_size += size
+        
+        if meta_exists:
+            local_meta = StoreManager.load_local_meta()
+            local_packages = local_meta.get("packages", {})
+            
+            core_prefix = f"core:{STATE.core}:"
+            device_prefix = f"device:{device_name_to_path(STATE.device)}:"
+            
+            keys_to_remove = [k for k in local_packages.keys() 
+                             if k.startswith(core_prefix) or k.startswith(device_prefix)]
+            
+            entries_removed = 0
+            if keys_to_remove:
+                for key in keys_to_remove:
+                    del local_packages[key]
+                entries_removed += len(keys_to_remove)
+            
+            if core_exists and "platform_cores" in local_meta:
+                if STATE.core in local_meta["platform_cores"]:
+                    del local_meta["platform_cores"][STATE.core]
+                    entries_removed += 1
+            
+            if device_exists and "device_configs" in local_meta:
+                device_key = device_name_to_path(STATE.device)
+                if device_key in local_meta["device_configs"]:
+                    del local_meta["device_configs"][device_key]
+                    entries_removed += 1
+            
+            if entries_removed > 0:
+                StoreManager.save_local_meta(local_meta)
+                removed_items.append(f"registry.json ({entries_removed} entries removed)")
+        
+        if removed_items:
+            items_text = "\n".join(f"  [green]✓[/green] {item}" for item in removed_items)
+            OutputHelper.print_panel(
+                f"Removed from local store:\n{items_text}\n\n"
+                f"Total freed: [bright_yellow]{OutputHelper.format_bytes(total_size)}[/bright_yellow]",
+                title="Clean Complete",
+                border_style="success"
+            )
+        
+    except Exception as e:
+        OutputHelper.print_panel(
+            f"Failed to clean local store: [red]{e}[/red]",
+            title="Clean Error",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+
+
+@app.command(name="mpy", rich_help_panel="Package Management")
+def mpy(
+    files: list[str] = typer.Argument(None, help="Python files or directories to compile"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output path (for single file)"),
+    device: Optional[str] = typer.Option(None, "--device", "-d", help="Board destination path for .mpy (e.g., lib)"),
+    show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True)
+):
+    if show_help:
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH)
+        help_text = """\
+Compile Python files to MicroPython bytecode (.mpy).
+
+[bold cyan]Usage:[/bold cyan] replx mpy [yellow]FILE(s)[/yellow] [OPTIONS]
+
+[bold cyan]Options:[/bold cyan]
+  [yellow]-o, --output PATH[/yellow]     Output path (single file only)
+  [yellow]-d, --device PATH[/yellow]     Install compiled .mpy to board at this path (e.g., lib)
+
+[bold cyan]Examples:[/bold cyan]
+  replx mpy main.py                  [dim]# Compile single file[/dim]
+  replx mpy main.py -o out.mpy       [dim]# Specify output path[/dim]
+  replx mpy main.py -d lib           [dim]# Compile and install to /lib/ on device[/dim]
+  replx mpy *.py -d lib              [dim]# Compile all and install to /lib/ on device[/dim]
+  replx mpy *.py                     [dim]# Compile all .py files[/dim]
+  replx mpy src/                     [dim]# Compile folder[/dim]
+
+[bold cyan]Output:[/bold cyan]
+  • Single file: same directory as source (or -o path)
+  • Multiple files: same directory as each source
+  • Folder: parallel structure in folder
+
+[bold cyan]Note:[/bold cyan]
+  • Requires board connection (architecture auto-detected)
+  • Compiled .mpy files are smaller and use less RAM"""
+        OutputHelper.print_panel(help_text, title="mpy", border_style="help")
+        console.print()
+        raise typer.Exit()
+    
+    if not files:
+        OutputHelper.print_panel(
+            "Specify Python files to compile:\n\n"
+            "  [bright_green]replx mpy main.py[/bright_green]          [dim]# Single file[/dim]\n"
+            "  [bright_green]replx mpy *.py[/bright_green]             [dim]# Multiple files[/dim]\n"
+            "  [bright_green]replx mpy src/[/bright_green]             [dim]# Folder[/dim]\n\n"
+            "Use [bright_blue]replx mpy --help[/bright_blue] for details.",
+            title="MPY Compiler",
+            border_style="help"
+        )
+        raise typer.Exit(1)
+    
+    _ensure_connected()
+    target_arch = STATE.core
+    
+    if not target_arch:
+        OutputHelper.print_panel(
+            "Could not determine board architecture.\n\n"
+            "Please reconnect the board and try again.",
+            title="Architecture Unknown",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+    
+    py_files = []
+    for pattern in files:
+        if '*' in pattern or '?' in pattern:
+            matches = glob.glob(pattern)
+            for m in matches:
+                if m.endswith('.py') and os.path.isfile(m):
+                    py_files.append(os.path.abspath(m))
+        elif os.path.isdir(pattern):
+            for root, _, fnames in os.walk(pattern):
+                for fn in fnames:
+                    if fn.endswith('.py'):
+                        py_files.append(os.path.abspath(os.path.join(root, fn)))
+        elif os.path.isfile(pattern):
+            if pattern.endswith('.py'):
+                py_files.append(os.path.abspath(pattern))
+            else:
+                OutputHelper.print_panel(
+                    f"Not a Python file: [red]{pattern}[/red]",
+                    title="Invalid File",
+                    border_style="error"
+                )
+                raise typer.Exit(1)
+        else:
+            OutputHelper.print_panel(
+                f"File not found: [red]{pattern}[/red]",
+                title="File Not Found",
+                border_style="error"
+            )
+            raise typer.Exit(1)
+    
+    if not py_files:
+        OutputHelper.print_panel(
+            "No Python files found to compile.",
+            title="No Files",
+            border_style="warning"
+        )
+        raise typer.Exit(1)
+    
+    if output and len(py_files) > 1:
+        OutputHelper.print_panel(
+            "The [yellow]-o/--output[/yellow] option can only be used with a single file.",
+            title="Invalid Option",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+    
+    version = STATE.version if STATE.version else "1.24.0"
+    arch_args = CompilerHelper._march_for_core(target_arch, version)
+    
+    compiled = []
+    failed = []
+    total_src_size = 0
+    total_mpy_size = 0
+    
+    try:
+        import mpy_cross
+    except ImportError:
+        OutputHelper.print_panel(
+            "mpy-cross is not installed.\n\n"
+            "Install it with: [bright_green]pip install mpy-cross[/bright_green]",
+            title="Missing Dependency",
+            border_style="error"
+        )
+        raise typer.Exit(1)
+    
+    for py_file in py_files:
+        src_size = os.path.getsize(py_file)
+        total_src_size += src_size
+        
+        if output:
+            out_mpy = output if output.endswith('.mpy') else output + '.mpy'
+        else:
+            out_mpy = os.path.splitext(py_file)[0] + '.mpy'
+        
+        try:
+            compiled_out = CompilerHelper.compile_file(py_file, out_mpy, target_arch, version)
+            mpy_size = os.path.getsize(compiled_out)
+            total_mpy_size += mpy_size
+            compiled.append((py_file, compiled_out, src_size, mpy_size))
+        except Exception as e:
+            failed.append((py_file, str(e)))
+    
+    if compiled:
+        if len(compiled) == 1:
+            py_file, out_mpy, src_size, mpy_size = compiled[0]
+            ratio = (1 - mpy_size / src_size) * 100 if src_size > 0 else 0
+            OutputHelper.print_panel(
+                f"[green]✓[/green] {os.path.basename(py_file)} → {os.path.basename(out_mpy)}\n\n"
+                f"  Source: [cyan]{OutputHelper.format_bytes(src_size)}[/cyan]\n"
+                f"  Output: [cyan]{OutputHelper.format_bytes(mpy_size)}[/cyan] [dim]({ratio:.0f}% smaller)[/dim]\n"
+                f"  Arch:   [yellow]{target_arch}[/yellow]",
+                title="Compiled",
+                border_style="success"
+            )
+        else:
+            lines = []
+            for py_file, out_mpy, src_size, mpy_size in compiled:
+                lines.append(f"[green]✓[/green] {os.path.basename(py_file)} → {os.path.basename(out_mpy)} ({OutputHelper.format_bytes(mpy_size)})")
+            
+            ratio = (1 - total_mpy_size / total_src_size) * 100 if total_src_size > 0 else 0
+            lines.append("")
+            lines.append(f"Total: [cyan]{OutputHelper.format_bytes(total_src_size)}[/cyan] → [cyan]{OutputHelper.format_bytes(total_mpy_size)}[/cyan] [dim]({ratio:.0f}% smaller)[/dim]")
+            lines.append(f"Arch:  [yellow]{target_arch}[/yellow]")
+            
+            OutputHelper.print_panel(
+                "\n".join(lines),
+                title=f"Compiled {len(compiled)} files",
+                border_style="success"
+            )
+    
+    if device and compiled:
+        device_path = device.lstrip("/").rstrip("/")
+        client = _create_agent_client()
+        try:
+            client.send_command('mkdir', path="/" + device_path)
+        except Exception:
+            pass
+
+        upload_failed = []
+        upload_ok = []
+
+        for py_file, out_mpy, src_size, mpy_size in compiled:
+            basename = os.path.basename(out_mpy)
+            remote_path = f"/{device_path}/{basename}"
+
+            progress_state = {"current": 0}
+            progress_lock = threading.Lock()
+
+            def progress_callback(data, _state=progress_state, _lock=progress_lock):
+                with _lock:
+                    if isinstance(data, dict):
+                        _state["current"] = data.get("current", 0)
+
+            upload_result = [None]
+
+            def do_upload(lp=out_mpy, rp=remote_path):
+                try:
+                    upload_result[0] = client.send_command_streaming(
+                        'put_from_local_streaming',
+                        progress_callback=progress_callback,
+                        local_path=lp,
+                        remote_path=rp
+                    )
+                except Exception as e:
+                    upload_result[0] = {"error": str(e)}
+
+            upload_thread = threading.Thread(target=do_upload, daemon=True)
+
+            with Live(OutputHelper.create_progress_panel(0, mpy_size, title=f"Installing to {STATE.device}", message=f"{basename} ({OutputHelper.format_bytes(mpy_size)})", counter_text=f"0/{OutputHelper.format_bytes(mpy_size)}"), console=OutputHelper._console, refresh_per_second=10) as live:
+                upload_thread.start()
+                while upload_thread.is_alive():
+                    with progress_lock:
+                        current_bytes = progress_state["current"]
+                    live.update(OutputHelper.create_progress_panel(current_bytes, mpy_size, title=f"Installing to {STATE.device}", message=f"{basename} ({OutputHelper.format_bytes(mpy_size)})", counter_text=f"{OutputHelper.format_bytes(current_bytes)}/{OutputHelper.format_bytes(mpy_size)}"))
+                    time.sleep(0.05)
+                upload_thread.join()
+                live.update(OutputHelper.create_progress_panel(mpy_size, mpy_size, title=f"Installing to {STATE.device}", message=f"{basename} ({OutputHelper.format_bytes(mpy_size)})", counter_text=f"{OutputHelper.format_bytes(mpy_size)}/{OutputHelper.format_bytes(mpy_size)}"))
+
+            resp = upload_result[0]
+            if resp and not resp.get('success'):
+                upload_failed.append((basename, resp.get('error', 'Unknown error')))
+            else:
+                upload_ok.append((basename, remote_path, mpy_size))
+
+        if upload_ok:
+            if len(upload_ok) == 1:
+                name, rpath, size = upload_ok[0]
+                OutputHelper.print_panel(
+                    f"[green]✓[/green] {name} → [cyan]{rpath}[/cyan]\n\n"
+                    f"  Size: [cyan]{OutputHelper.format_bytes(size)}[/cyan]",
+                    title=f"Installed to {STATE.device}",
+                    border_style="success"
+                )
+            else:
+                lines = [f"[green]✓[/green] {name} → [cyan]{rpath}[/cyan] ({OutputHelper.format_bytes(size)})" for name, rpath, size in upload_ok]
+                total_uploaded = sum(s for _, _, s in upload_ok)
+                lines.append("")
+                lines.append(f"Total: [cyan]{OutputHelper.format_bytes(total_uploaded)}[/cyan]  Dest: [cyan]/{device_path}/[/cyan]")
+                OutputHelper.print_panel(
+                    "\n".join(lines),
+                    title=f"Installed {len(upload_ok)} files to {STATE.device}",
+                    border_style="success"
+                )
+
+        if upload_failed:
+            lines = [f"[red]✗[/red] {name}: {err}" for name, err in upload_failed]
+            OutputHelper.print_panel(
+                "\n".join(lines),
+                title="Upload Failed",
+                border_style="error"
+            )
+            raise typer.Exit(1)
+
+    if failed:
+        lines = [f"[red]✗[/red] {os.path.basename(f)}: {err}" for f, err in failed]
+        OutputHelper.print_panel(
+            "\n".join(lines),
+            title=f"Failed ({len(failed)} files)",
+            border_style="error"
+        )
+        raise typer.Exit(1)

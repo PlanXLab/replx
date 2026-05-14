@@ -1,0 +1,217 @@
+import time
+import threading
+import sys
+
+from replx.utils import canon_port as _canon_port
+from ..command_dispatcher import CommandContext
+
+
+class SessionCommandsMixin:
+    @staticmethod
+    def _canon_port(port: str) -> str:
+        return _canon_port(port)
+
+    def _cmd_session_setup(self, ctx: CommandContext, port: str = None,
+                           core: str = "RP2350", device: str = None,
+                           as_foreground: bool = True, set_default: bool = False,
+                           local_default: str = None) -> dict:
+        ppid = ctx.ppid
+        if not ppid:
+            raise ValueError("Session PPID required")
+
+        if not port and ctx.explicit_port:
+            port = ctx.explicit_port
+
+        if not port:
+            raise ValueError("Port is required")
+        
+        port = self._canon_port(port)
+        conn_key = port
+
+        session = self._get_or_create_session(ppid)
+        
+        if local_default:
+            session.default_port = self._canon_port(local_default)
+
+        existing_conn = self._get_connection(conn_key)
+
+        if existing_conn:
+            self.session_manager.add_connection_to_session(
+                ppid, port,
+                as_foreground=as_foreground,
+                default_port=self._effective_default_port(session)
+            )
+
+            if set_default:
+                self._set_default_port(conn_key)
+
+            return {
+                "connected": True,
+                "device": existing_conn.device,
+                "core": existing_conn.core,
+                "version": existing_conn.version,
+                "manufacturer": existing_conn.manufacturer,
+                "device_root_fs": existing_conn.device_root_fs,
+                "port": port,
+                "is_foreground": session.foreground == conn_key if session.foreground else False,
+                "existing": True,
+                "switched_from": None
+            }
+
+        new_conn = self._create_board_connection(
+            port=port,
+            core=core,
+            device=device
+        )
+
+        self._add_connection(conn_key, new_conn)
+
+        self.session_manager.add_connection_to_session(
+            ppid, port,
+            as_foreground=as_foreground,
+            default_port=self._effective_default_port(session)
+        )
+
+        if set_default:
+            self._set_default_port(conn_key)
+
+        return {
+            "connected": True,
+            "device": new_conn.device,
+            "core": new_conn.core,
+            "version": new_conn.version,
+            "manufacturer": new_conn.manufacturer,
+            "device_root_fs": new_conn.device_root_fs,
+            "port": port,
+            "is_foreground": session.foreground == conn_key if session.foreground else False,
+            "existing": False,
+            "switched_from": None
+        }
+
+    def _cmd_session_disconnect(self, ctx: CommandContext, port: str = None, all_ports: bool = False) -> dict:
+        ppid = ctx.ppid
+        if not port and ctx.explicit_port:
+            port = ctx.explicit_port
+        port = self._canon_port(port) if port else None
+        if not ppid:
+            raise ValueError("Session PPID required")
+
+        session = self._get_session(ppid)
+        if not session:
+            raise ValueError("No session found for this terminal")
+
+        ports_to_close = []
+        old_foreground = session.foreground
+
+        if all_ports:
+            ports_to_close = list(session.get_all_connections())
+            freed_port = "all"
+        elif port:
+            found = None
+            for conn in session.get_all_connections():
+                if conn == port:
+                    found = conn
+                    break
+            if not found:
+                raise ValueError(f"Port {port} not in session")
+            ports_to_close = [found]
+            freed_port = found
+        else:
+            if not session.foreground:
+                raise ValueError("No foreground connection to free")
+            ports_to_close = [session.foreground]
+            freed_port = session.foreground
+
+        for conn_port in ports_to_close:
+            # Remove this port from every session that referenced it. After
+            # this loop, ``find_sessions_using_port`` reflects the updated
+            # state so we can decide whether the underlying serial connection
+            # is now orphaned and safe to close.
+            for sess in self.session_manager.get_all_sessions().values():
+                if conn_port in sess.get_all_connections():
+                    sess.remove_connection(conn_port)
+
+            # Only close the underlying serial port if no other session still
+            # references it; otherwise we would yank the connection out from
+            # under terminals that are still using it (C2 fix).
+            remaining = self.session_manager.find_sessions_using_port(conn_port)
+            if not remaining:
+                self.connection_manager.disconnect(conn_port)
+
+        self.session_manager.cleanup_empty_sessions()
+
+        if not self.session_manager.has_sessions():
+            def delayed_shutdown():
+                time.sleep(0.3)
+                # A new client may have created a session inside the grace
+                # window; abort the shutdown if so (C3 fix).
+                if self.session_manager.has_sessions():
+                    return
+                self.cleanup()
+
+            shutdown_thread = threading.Thread(target=delayed_shutdown, daemon=True)
+            shutdown_thread.start()
+
+        remaining_connections = len(session.get_all_connections()) if session and not session.is_empty() else 0
+        new_foreground = session.foreground if session and not session.is_empty() else None
+        fg_changed = old_foreground != new_foreground
+
+        return {
+            "freed_port": freed_port,
+            "new_foreground": new_foreground,
+            "fg_changed": fg_changed,
+            "remaining_connections": remaining_connections
+        }
+
+    def _cmd_session_switch_fg(self, ctx: CommandContext) -> dict:
+        ppid = ctx.ppid
+        if not ppid:
+            return {"success": False, "error": "Session PPID required"}
+
+        port = self._canon_port(ctx.explicit_port)
+        if not port:
+            return {"success": False, "error": "Port required"}
+
+        conn = self.connection_manager.get_connection(port)
+        if not conn:
+            return {"success": False, "error": f"Connection {port} not found"}
+
+        session = self._get_session(ppid)
+        if not session:
+            session = self._get_or_create_session(ppid)
+
+        old_fg = session.foreground
+
+        session.add_connection(port, as_foreground=True)
+
+        return {
+            "success": True,
+            "old_foreground": old_fg,
+            "new_foreground": port,
+            "session_created": old_fg is None
+        }
+
+    def _cmd_set_default(self, ctx: CommandContext, port: str = None, update_session: bool = False) -> dict:
+        port = port or ctx.explicit_port
+        if port:
+            self._set_default_port(port)
+            
+            if update_session and ctx.ppid:
+                session = self._get_session(ctx.ppid)
+                if session:
+                    session.default_port = port
+            
+            return {"default": port, "set": True}
+        else:
+            self._default_port = None
+            return {"default": None, "set": False}
+
+    def _cmd_release(self, ctx: CommandContext) -> dict:
+        if ctx.ppid:
+            if ctx.explicit_port:
+                return self._cmd_session_disconnect(ctx, port=ctx.explicit_port)
+            else:
+                return self._cmd_session_disconnect(ctx, all_ports=False)
+
+        self._cmd_shutdown(ctx)
+        return {"released": True, "port": ""}
