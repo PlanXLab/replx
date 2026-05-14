@@ -1592,13 +1592,20 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
   replx shell
 
 [bold cyan]File commands (same as replx commands):[/bold cyan]
-  [yellow]ls[/yellow] [path]                    List directory contents
+  [yellow]ls[/yellow] [path]              List directory contents
   [yellow]cat[/yellow] file               Show file contents
   [yellow]cp[/yellow] src dest            Copy file/directory
   [yellow]mv[/yellow] src dest            Move/rename
   [yellow]rm[/yellow] [-rf] file          Remove file/directory
   [yellow]mkdir[/yellow] dir              Create directory
   [yellow]touch[/yellow] file             Create empty file
+
+[bold cyan]Board commands:[/bold cyan]
+  [yellow]usage[/yellow]                  Show memory/storage usage
+  [yellow]exec[/yellow] "code"            Run MicroPython code
+  [yellow]run[/yellow] script.py          Run script from device
+  [yellow]repl[/yellow]                   Enter Python REPL
+  [yellow]edit[/yellow] file              Open file in VSCode
 
 [bold cyan]Hardware commands (same as replx commands):[/bold cyan]
   [yellow]whoami[/yellow]                 Show current connection info
@@ -1612,24 +1619,20 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
   [yellow]i2c[/yellow] [args]                   I2C scan/read/write
 
 [bold cyan]Navigation commands (shell-only):[/bold cyan]
-  [yellow]cd[/yellow] path                Change directory
+  [yellow]cd[/yellow] [path]              Change directory (no arg → root /)
   [yellow]pwd[/yellow]                    Print current directory
   [yellow]clear[/yellow]                  Clear screen
 
-[bold cyan]Other commands:[/bold cyan]
-  [yellow]usage[/yellow]                  Show memory/storage usage
-  [yellow]exec[/yellow] "code"            Run MicroPython code
-  [yellow]run[/yellow] script.py          Run script from device
-  [yellow]repl[/yellow]                   Enter Python REPL
-  [yellow]edit[/yellow] file              Open file in VSCode
+[bold cyan]Other:[/bold cyan]
   [yellow]exit[/yellow]                   Exit shell
-  [yellow]help[/yellow] [command]                  Show help
+  [yellow]help[/yellow] [command]         Show help
 
 [bold cyan]Example session:[/bold cyan]
   [ticle]:/ > ls
   [dim]  boot.py  main.py  lib/[/dim]
-  [ticle]:/ > gpio read GP1 pulse_h
-  [dim]  ... measurement ...[/dim]
+  [ticle]:/ > cat main.py
+  [ticle]:/ > exec "import sys; print(sys.version)"
+  [ticle]:/ > run main.py
   [ticle]:/ > exit
 
 [bold cyan]Tips:[/bold cyan]
@@ -1637,6 +1640,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
   • Tab key not supported (use full filenames)
   • Type 'help cmd' for help on any command
   • Current directory is remembered until you exit
+  • Use 'replx get/put' outside shell for file transfers between PC and device
 
 [bold cyan]Related:[/bold cyan]
   replx repl             [dim]# Interactive MicroPython instead[/dim]"""
@@ -1696,8 +1700,9 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
     }
 
     EXCLUDED_COMMANDS = {
-        'version', 'setup', 'scan', 'shell', 'reset', 'get', 'put', 'format',
-        'init', 'install', 'update', 'search'
+        'version', 'setup', 'scan', 'shell', 'format',
+        'init', 'install', 'update', 'search',
+        'get', 'put', 'reset', 'mip',
     }
 
     def _hw_parse(tokens):
@@ -1848,7 +1853,7 @@ In shell mode, 'run' always runs from device (equivalent to 'replx run -d').
   run t1.mpy            [dim]# Run .mpy file from device[/dim]
 
 [bold yellow]Note:[/bold yellow]
-  In shell mode, -e and -n options are not available.
+  In shell mode, -e/--echo, -n/--non-interactive, and --text/--hex are not available.
   Use 'replx run' directly for those options.""", border_style=OutputHelper._resolve_category_color('neutral'), box=get_panel_box(), width=CONSOLE_WIDTH))
             elif cmd == "wifi":
                 shell_console.print(Panel("""\
@@ -1940,7 +1945,7 @@ Manage WiFi connection.
   [yellow]uart[/yellow] [args]               UART open/read/write
   [yellow]spi[/yellow] [args]                SPI open/read/write
   [yellow]i2c[/yellow] [args]                I2C scan/read/write
-  [yellow]cd[/yellow] <dir>            Change directory
+  [yellow]cd[/yellow] [dir]            Change directory (no arg → /)
   [yellow]pwd[/yellow]                 Print current directory
   [yellow]clear[/yellow]               Clear screen
   [yellow]edit[/yellow] <file>         Edit file in VSCode
@@ -1971,7 +1976,11 @@ Manage WiFi connection.
                 if "--help" in args or "-h" in args:
                     print_shell_help("cd")
                     return
-                    
+
+                if len(args) == 1:
+                    current_path = '/'
+                    return
+
                 if len(args) != 2:
                     print("Usage: cd <directory>")
                     return
@@ -2165,19 +2174,31 @@ Manage WiFi connection.
                 if "--help" in args or "-h" in args:
                     print_shell_help("run")
                     return
-                    
-                if "-e" in args or "--echo" in args:
-                    print("Error: -e/--echo option is not available in shell mode.")
+
+                _run_unsupported = [
+                    ("-e", "--echo"),
+                    ("-n", "--non-interactive"),
+                    ("--text", "--hex", "--line"),
+                ]
+                for _flags in _run_unsupported:
+                    if any(f in args for f in _flags):
+                        _flag_str = '/'.join(_flags)
+                        OutputHelper.print_panel(
+                            f"[yellow]{_flag_str}[/yellow] is not available in shell mode.",
+                            title="run",
+                            border_style="warning"
+                        )
+                        return
+
+                script_file = next((a for a in args[1:] if not a.startswith('-')), None)
+                if not script_file:
+                    OutputHelper.print_panel(
+                        "Missing script file.\n\n"
+                        "[bold cyan]Usage:[/bold cyan] run [yellow]SCRIPT_FILE[/yellow]",
+                        title="run",
+                        border_style="warning"
+                    )
                     return
-                if "-n" in args or "--non-interactive" in args:
-                    print("Error: -n/--non-interactive option is not available in shell mode.")
-                    return
-                    
-                if len(args) != 2:
-                    print("Usage: run <script_file>")
-                    return
-                
-                script_file = args[1]
                 if script_file.startswith('/'):
                     remote_path = script_file
                 else:
@@ -2431,7 +2452,7 @@ Manage WiFi connection.
                     show_help=False,
                 )
                 return
-                
+
         except typer.Exit:
             pass
         except SystemExit:
