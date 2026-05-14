@@ -1603,7 +1603,7 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
 [bold cyan]Board commands:[/bold cyan]
   [yellow]usage[/yellow]                  Show memory/storage usage
   [yellow]exec[/yellow] "code"            Run MicroPython code
-  [yellow]run[/yellow] script.py          Run script from device
+  [yellow]run[/yellow] script.py [--text|--hex]  Run script from device
   [yellow]repl[/yellow]                   Enter Python REPL
   [yellow]edit[/yellow] file              Open file in VSCode
 
@@ -1842,18 +1842,23 @@ Run a script from device storage.
 In shell mode, 'run' always runs from device (equivalent to 'replx run -d').
 
 [bold cyan]Usage:[/bold cyan]
-  run [yellow]SCRIPT_FILE[/yellow]
+  run [yellow]SCRIPT_FILE[/yellow] [[yellow]--text[/yellow]|[yellow]--hex[/yellow]]
 
 [bold cyan]Arguments:[/bold cyan]
   [yellow]SCRIPT_FILE[/yellow]  Script file path on device [red][required][/red]
 
+[bold cyan]Options:[/bold cyan]
+  [yellow]--text[/yellow]       Line input mode: display output as text
+  [yellow]--hex[/yellow]        Line input mode: display output as hex bytes
+
 [bold cyan]Examples:[/bold cyan]
   run main.py           [dim]# Run /main.py from device[/dim]
-  run lib/test.py       [dim]# Run /lib/test.py from device[/dim]
+  run main.py --text    [dim]# Run and show output as text lines[/dim]
+  run lib/test.py --hex [dim]# Run and show output as hex[/dim]
   run t1.mpy            [dim]# Run .mpy file from device[/dim]
 
 [bold yellow]Note:[/bold yellow]
-  In shell mode, -e/--echo, -n/--non-interactive, and --text/--hex are not available.
+  In shell mode, -e/--echo and -n/--non-interactive are not available.
   Use 'replx run' directly for those options.""", border_style=OutputHelper._resolve_category_color('neutral'), box=get_panel_box(), width=CONSOLE_WIDTH))
             elif cmd == "wifi":
                 shell_console.print(Panel("""\
@@ -1935,7 +1940,7 @@ Manage WiFi connection.
   [yellow]usage[/yellow]               Show memory/storage usage
   [yellow]exec[/yellow] <code>         Execute MicroPython code
   [yellow]repl[/yellow]                Enter Python REPL
-  [yellow]run[/yellow] <script>        Run script from device
+  [yellow]run[/yellow] <script> [--text|--hex]  Run script from device
   [yellow]wifi[/yellow] [args]               Manage WiFi
   [yellow]whoami[/yellow]              Show current connection info
   [yellow]ble[/yellow] [args]                Manage BLE
@@ -2178,7 +2183,6 @@ Manage WiFi connection.
                 _run_unsupported = [
                     ("-e", "--echo"),
                     ("-n", "--non-interactive"),
-                    ("--text", "--hex", "--line"),
                 ]
                 for _flags in _run_unsupported:
                     if any(f in args for f in _flags):
@@ -2190,6 +2194,8 @@ Manage WiFi connection.
                         )
                         return
 
+                _line_text = "--text" in args
+                _line_hex = "--hex" in args
                 script_file = next((a for a in args[1:] if not a.startswith('-')), None)
                 if not script_file:
                     OutputHelper.print_panel(
@@ -2209,8 +2215,8 @@ Manage WiFi connection.
                     non_interactive=False,
                     echo=False,
                     device=True,
-                    line_text=False,
-                    line_hex=False,
+                    line_text=_line_text,
+                    line_hex=_line_hex,
                     show_help=False,
                 )
                 _cleanup_windows_batch_prompt_artifacts()
