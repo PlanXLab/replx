@@ -1,6 +1,4 @@
 __pycache__/
-.vscode/
 *.egg
 .DS_Store
 *.pyc
-replx.egg-info/
