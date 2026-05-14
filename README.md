@@ -150,6 +150,7 @@ These commands communicate with the board. Except for `setup`, the port can be o
 - Files: `ls`, `cat`, `get`, `put`, `cp`, `mv`, `rm`, `mkdir`, `touch`
 - Board: `usage`, `reset`, `format`, `init`, `wifi`, `firmware`
 - Package/compile: `pkg`, `mpy`
+- Hardware: `gpio`, `pwm`, `adc`, `uart`, `spi`, `i2c`, `ble`
 
 ---
 
@@ -249,6 +250,7 @@ These commands communicate with the board. Except for `setup`, the port can be o
 | `uart` | Open, write, read, and monitor UART. |
 | `spi` | Open, write, read, and transfer SPI data. |
 | `i2c` | Scan, read, write, and dump I2C devices. |
+| `ble` | Manage BLE radio, scan, advertise, GATT server/client, and L2CAP. |
 
 ---
 
@@ -1049,6 +1051,67 @@ Options:
 - `--repeat N`: repeat count for `read`/`seq` (0 = unlimited, default: 1)
 - `--interval MS`: delay between repeats (default: 0)
 
+#### `ble`
+Manage BLE (Bluetooth Low Energy) on the board. No subcommand shows adapter info and radio state. `on`/`off` toggles the radio. `scan` runs a passive advertisement scan with a live panel. `advertise` broadcasts an advertisement packet. `server` starts a GATT server; `client` connects to a GATT server. `ping` tests connectivity without subscribing. `read`/`write` perform one-shot characteristic access. `stream send/recv` use L2CAP CoC channels. Requires `aioble` on the board (`replx mip install aioble`).
+
+Usage:
+```sh
+replx ble
+replx ble on|off
+replx ble scan [REFRESH_MS]
+replx ble advertise DEVICE_NAME [OPTIONS]
+replx ble server --svc UUID --char UUID [OPTIONS]
+replx ble client ADDR/TYPE --svc UUID --char UUID [OPTIONS]
+replx ble ping ADDR/TYPE
+replx ble read ADDR SVC_UUID CHAR_UUID
+replx ble write ADDR SVC_UUID CHAR_UUID HEX
+replx ble stream send ADDR PSM HEX
+replx ble stream recv PSM
+```
+
+Advertise Options:
+- `--service-uuid UUID`: advertised service UUID
+- `--service-data UUID:hex:DATA` / `UUID:text:TEXT`: service data bytes or UTF-8 text
+- `--manufacturer-data COMPANY_ID:hex:DATA` / `COMPANY_ID:text:TEXT`: manufacturer data
+- `--duration-ms MS`: advertising interval in ms (default: 1000)
+- `--no-connect`: broadcaster mode (non-connectable)
+
+Server Options:
+- `--svc UUID`, `--char UUID`: service/characteristic UUID
+- `--value hex:HEX` / `text:TEXT`: initial characteristic value
+- `--read`, `--write`, `--notify`, `--indicate`: GATT properties
+- `--notify-on-change`: auto-notify connected clients when value changes
+- `--name NAME`: GAP device name (default: replx-ble)
+- `--interval MS`: auto-notify interval in ms (requires `--notify`)
+
+Client Options:
+- `--svc UUID`, `--char UUID`: service/characteristic UUID to connect to
+- `--value hex:HEX` / `text:TEXT`: initial value to write after connecting
+- `--notify`: subscribe to notifications after connecting
+
+Address Format: `ADDR/1` for random address, `ADDR/0` for public. Use the Type shown by `replx ble scan`.
+
+Examples:
+```sh
+replx ble
+replx ble on
+replx ble scan
+replx ble advertise ticle-lite --service-data 1010:text:hello --no-connect
+replx ble ping 4D:0E:55:65:19:15/1
+replx ble server --svc 1010 --char 1011 --name ticle-lite --read --write --notify --notify-on-change
+replx ble client AA:BB:CC:DD:EE:FF/1 --svc 1010 --char 1011 --notify
+replx ble read AA:BB:CC:DD:EE:FF/1 1010 1011
+replx ble write AA:BB:CC:DD:EE:FF/1 1010 1011 0102FF
+replx ble stream send AA:BB:CC:DD:EE:FF/1 80 0102FF
+replx ble stream recv 80
+```
+
+Notes:
+- `scan`, `advertise`, `server`, `stream recv` run until stopped (q or Ctrl+C)
+- scan panel: press `s` to pause/resume, `f` to toggle named/all devices
+- server panel: press `v` to switch value view, `c` to change the value
+- client panel: press `r` to read, `w` to write, `n` to toggle notify
+
 ---
 
 ## Troubleshooting
@@ -1110,5 +1173,16 @@ Options:
 | `monitor`/`scope` shows nothing | Missing board-side library | Install `termviz` (gpio/adc) or `ufilter` (adc scope) via `replx pkg` |
 | Slave/Target mode fails | Board not supported | PIO-based slave/target modes require RP2350 or RP2040 |
 | `seq` timeout | Sequence too long for default timeout | Increase `--timeout MS` or set to 0 for unlimited |
+
+#### BLE
+
+| Symptom | Likely Cause | Resolution |
+|---|---|---|
+| `aioble not found` | Library not installed on board | `replx mip install aioble` |
+| `ble scan` shows no devices | BLE radio off or no nearby advertisers | `replx ble on`, move devices closer, check `replx ble` for radio state |
+| `ble client` cannot connect | Wrong address type (random vs. public) | Use the Type shown by `replx ble scan` — `ADDR/1` (random) or `ADDR/0` (public) |
+| `ble server/client` exits immediately | UUID mismatch or missing `--svc`/`--char` | Confirm UUIDs on both sides; check with `replx ble scan` |
+| `ble advertise` no response | `--no-connect` set but client expects connectable | Remove `--no-connect` or use a connectable advertisement |
+| `ble stream` fails | L2CAP PSM not open on the other end | Ensure `stream recv PSM` is running before `stream send` |
 
 ---
