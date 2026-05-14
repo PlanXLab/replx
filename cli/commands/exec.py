@@ -10,6 +10,7 @@ import shlex
 import hashlib
 import subprocess
 import shutil
+import tempfile
 from collections import deque
 from pathlib import Path
 
@@ -1713,13 +1714,18 @@ Use familiar commands (ls, cd, cat, etc.) without typing "replx" each time.
         while i < len(tokens):
             t = tokens[i]
             if t.startswith('-'):
-                nxt = tokens[i + 1] if i + 1 < len(tokens) else None
-                if nxt is not None and not nxt.startswith('-'):
-                    opts[t] = nxt
-                    i += 2
-                else:
-                    opts[t] = True
+                if '=' in t:
+                    key, val = t.split('=', 1)
+                    opts[key] = val
                     i += 1
+                else:
+                    nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+                    if nxt is not None and not nxt.startswith('-'):
+                        opts[t] = nxt
+                        i += 2
+                    else:
+                        opts[t] = True
+                        i += 1
             else:
                 pos.append(t)
                 i += 1
@@ -1907,8 +1913,15 @@ Manage WiFi connection.
         cmd = args[0]
         
         if cmd in EXCLUDED_COMMANDS:
+            _suggestions = {
+                'get': "replx get",
+                'put': "replx put",
+                'reset': "replx reset",
+                'mip': "replx mip",
+            }
+            _hint = f"\n\nUse [bright_blue]{_suggestions[cmd]}[/bright_blue] instead." if cmd in _suggestions else ""
             OutputHelper.print_panel(
-                f"[yellow]'{cmd}'[/yellow] is not available in shell mode.",
+                f"[yellow]'{cmd}'[/yellow] is not available in shell mode.{_hint}",
                 title="Command Not Available",
                 border_style="warning"
             )
@@ -1987,7 +2000,11 @@ Manage WiFi connection.
                     return
 
                 if len(args) != 2:
-                    print("Usage: cd <directory>")
+                    OutputHelper.print_panel(
+                        "[bold cyan]Usage:[/bold cyan] cd [yellow]DIRECTORY[/yellow]",
+                        title="cd",
+                        border_style="warning"
+                    )
                     return
                 
                 new_path = posixpath.normpath(posixpath.join(current_path, args[1]))
@@ -1998,9 +2015,17 @@ Manage WiFi connection.
                     if is_dir:
                         current_path = new_path
                     else:
-                        print(f"cd: {args[1]}: Not a directory")
+                        OutputHelper.print_panel(
+                            f"[yellow]{args[1]}[/yellow]: Not a directory",
+                            title="cd",
+                            border_style="error"
+                        )
                 except Exception:
-                    print(f"cd: {args[1]}: No such directory")
+                    OutputHelper.print_panel(
+                        f"[yellow]{args[1]}[/yellow]: No such directory",
+                        title="cd",
+                        border_style="error"
+                    )
                 return
                 
             elif cmd == "ls":
@@ -2066,7 +2091,11 @@ Manage WiFi connection.
                         file_args.append(arg)
 
                 if len(file_args) < 2:
-                    print("Usage: cp [-r] <source...> <dest>")
+                    OutputHelper.print_panel(
+                        "[bold cyan]Usage:[/bold cyan] cp [yellow][-r][/yellow] [yellow]SRC...[/yellow] [yellow]DST[/yellow]",
+                        title="cp",
+                        border_style="warning"
+                    )
                     return
 
                 abs_args = [posixpath.normpath(posixpath.join(current_path, arg)) for arg in file_args]
@@ -2089,7 +2118,11 @@ Manage WiFi connection.
                         file_args.append(arg)
 
                 if len(file_args) < 2:
-                    print("Usage: mv [-r] <source...> <dest>")
+                    OutputHelper.print_panel(
+                        "[bold cyan]Usage:[/bold cyan] mv [yellow][-r][/yellow] [yellow]SRC...[/yellow] [yellow]DST[/yellow]",
+                        title="mv",
+                        border_style="warning"
+                    )
                     return
 
                 abs_args = [posixpath.normpath(posixpath.join(current_path, arg)) for arg in file_args]
@@ -2115,7 +2148,11 @@ Manage WiFi connection.
                         file_args.append(arg)
 
                 if not file_args:
-                    print("Usage: rm [-rf] <files...>")
+                    OutputHelper.print_panel(
+                        "[bold cyan]Usage:[/bold cyan] rm [yellow][-rf][/yellow] [yellow]FILES...[/yellow]",
+                        title="rm",
+                        border_style="warning"
+                    )
                     return
 
                 abs_args = [posixpath.normpath(posixpath.join(current_path, arg)) for arg in file_args]
@@ -2128,7 +2165,11 @@ Manage WiFi connection.
                     return
                     
                 if len(args) < 2:
-                    print("Usage: mkdir <directories...>")
+                    OutputHelper.print_panel(
+                        "[bold cyan]Usage:[/bold cyan] mkdir [yellow]DIRS...[/yellow]",
+                        title="mkdir",
+                        border_style="warning"
+                    )
                     return
                 
                 abs_args = [posixpath.normpath(posixpath.join(current_path, arg)) for arg in args[1:]]
@@ -2141,7 +2182,11 @@ Manage WiFi connection.
                     return
                     
                 if len(args) < 2:
-                    print("Usage: touch <files...>")
+                    OutputHelper.print_panel(
+                        "[bold cyan]Usage:[/bold cyan] touch [yellow]FILES...[/yellow]",
+                        title="touch",
+                        border_style="warning"
+                    )
                     return
                 
                 abs_args = [posixpath.normpath(posixpath.join(current_path, arg)) for arg in args[1:]]
@@ -2161,7 +2206,11 @@ Manage WiFi connection.
                     return
                     
                 if len(args) < 2:
-                    print("Usage: exec <python_code>")
+                    OutputHelper.print_panel(
+                        "[bold cyan]Usage:[/bold cyan] exec [yellow]\"CODE\"[/yellow]",
+                        title="exec",
+                        border_style="warning"
+                    )
                     return
                 
                 code = ' '.join(args[1:])
@@ -2173,6 +2222,7 @@ Manage WiFi connection.
                     print_shell_help("repl")
                     return
                 repl(show_help=False)
+                _cleanup_windows_batch_prompt_artifacts()
                 return
                 
             elif cmd == "run":
@@ -2228,7 +2278,11 @@ Manage WiFi connection.
                     return
 
                 if len(args) != 2:
-                    print("Usage: edit <file>")
+                    OutputHelper.print_panel(
+                        "[bold cyan]Usage:[/bold cyan] edit [yellow]FILE[/yellow]",
+                        title="edit",
+                        border_style="warning"
+                    )
                     return
 
                 file_arg = args[1]
@@ -2237,8 +2291,7 @@ Manage WiFi connection.
                 else:
                     remote_path = posixpath.normpath(posixpath.join(current_path, file_arg))
                 
-                temp_dir = os.path.join(os.getcwd(), '.temp')
-                os.makedirs(temp_dir, exist_ok=True)
+                temp_dir = tempfile.mkdtemp(prefix='replx_edit_')
                 
                 filename = posixpath.basename(remote_path)
                 local_path = os.path.join(temp_dir, filename)
@@ -2250,7 +2303,11 @@ Manage WiFi connection.
                         result = client.send_command('is_dir', path=remote_path)
                         is_dir = result if isinstance(result, bool) else result.get('is_dir', False)
                         if is_dir:
-                            print(f"Error: '{remote_path}' is a directory, not a file.")
+                            OutputHelper.print_panel(
+                                f"[yellow]'{remote_path}'[/yellow] is a directory, not a file.",
+                                title="edit",
+                                border_style="error"
+                            )
                             return
                     except Exception:
                         pass
@@ -2261,29 +2318,53 @@ Manage WiFi connection.
                         if isinstance(result, dict) and result.get('error'):
                             with open(local_path, 'w', encoding='utf-8') as f:
                                 pass
-                            print(f"Creating new file: {remote_path}")
+                            OutputHelper.print_panel(
+                                f"Creating new file: [yellow]{remote_path}[/yellow]",
+                                title="edit",
+                                border_style=OutputHelper._resolve_category_color('neutral')
+                            )
                         else:
-                            print(f"Downloaded: {remote_path}")
+                            OutputHelper.print_panel(
+                                f"Downloaded: [yellow]{remote_path}[/yellow]",
+                                title="edit",
+                                border_style="success"
+                            )
                     except Exception:
                         with open(local_path, 'w', encoding='utf-8') as f:
                             pass
-                        print(f"Creating new file: {remote_path}")
+                        OutputHelper.print_panel(
+                            f"Creating new file: [yellow]{remote_path}[/yellow]",
+                            title="edit",
+                            border_style=OutputHelper._resolve_category_color('neutral')
+                        )
                     
                     with open(local_path, 'rb') as f:
                         original_hash = hashlib.md5(f.read()).hexdigest()
                     
-                    print("Opening in VSCode... (close the file tab to continue)")
+                    OutputHelper.print_panel(
+                        "Opening in VSCode... (close the file tab to continue)",
+                        title="edit",
+                        border_style=OutputHelper._resolve_category_color('neutral')
+                    )
                     opened, editor_error = _open_editor_and_wait(local_path, original_hash)
                     if not opened:
                         detail = editor_error or "Unknown error"
-                        print(f"Error: Could not open editor: {detail}")
+                        OutputHelper.print_panel(
+                            f"Could not open editor: {detail}",
+                            title="edit",
+                            border_style="error"
+                        )
                         return
                     
                     with open(local_path, 'rb') as f:
                         new_hash = hashlib.md5(f.read()).hexdigest()
 
                     if new_hash == original_hash:
-                        print("No changes detected.")
+                        OutputHelper.print_panel(
+                            "No changes detected.",
+                            title="edit",
+                            border_style=OutputHelper._resolve_category_color('neutral')
+                        )
                     else:
                         print("File was modified. Apply the changes? [y/N]: ", end="", flush=True)
                         response = sys.stdin.buffer.readline().decode(errors='replace').strip().lower()
@@ -2291,12 +2372,24 @@ Manage WiFi connection.
                         if response == 'y':
                             result = client.send_command('put_from_local', local_path=local_path, remote_path=remote_path)
                             if isinstance(result, dict) and result.get('error'):
-                                print(f"Upload failed: {result.get('error')}")
+                                OutputHelper.print_panel(
+                                    f"Upload failed: {result.get('error')}",
+                                    title="edit",
+                                    border_style="error"
+                                )
                             else:
                                 file_size = os.path.getsize(local_path)
-                                print(f"Uploaded: {remote_path} ({file_size} bytes)")
+                                OutputHelper.print_panel(
+                                    f"Uploaded: [yellow]{remote_path}[/yellow] ({file_size} bytes)",
+                                    title="edit",
+                                    border_style="success"
+                                )
                         else:
-                            print("Changes discarded.")
+                            OutputHelper.print_panel(
+                                "Changes discarded.",
+                                title="edit",
+                                border_style=OutputHelper._resolve_category_color('neutral')
+                            )
                 
                 finally:
                     try:
@@ -2464,7 +2557,11 @@ Manage WiFi connection.
         except SystemExit:
             raise
         except Exception as e:
-            print(f"Error: {e}")
+            OutputHelper.print_panel(
+                str(e),
+                title="Error",
+                border_style="error"
+            )
     
     header_content = f"Connected to [bright_yellow]{STATE.device}[/bright_yellow] on [bright_green]{STATE.core}[/bright_green]\n\n"
     header_content += "Type [bright_blue]help[/bright_blue] or [bright_blue]?[/bright_blue] to see available commands\n"
@@ -2496,7 +2593,11 @@ Manage WiFi connection.
                 except SystemExit:
                     break
                 except Exception as e:
-                    print(f"Error: {e}")
+                    OutputHelper.print_panel(
+                        str(e),
+                        title="Error",
+                        border_style="error"
+                    )
             except EOFError:
                 break
             
