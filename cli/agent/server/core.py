@@ -399,9 +399,46 @@ class AgentServer(
 
         # Reap stuck busy locks so a long-orphaned command (client crashed
         # mid-flight) cannot block other terminals forever.
-        for conn in all_conns.values():
+        dead_ports = []
+        for port, conn in all_conns.items():
             try:
                 conn.force_release_if_stale()
+            except Exception:
+                pass
+
+            # --- Liveness check for idle connections ---
+            # Skip connections that are actively busy (command in flight) or
+            # running a detached script — those paths handle their own
+            # transport errors and we don't want to race with them.
+            if conn.busy or conn.is_detached():
+                conn._liveness_fail_count = 0
+                continue
+
+            transport = getattr(
+                getattr(conn, 'repl_protocol', None), 'transport', None
+            )
+            if transport is None:
+                continue
+
+            try:
+                # keep_alive() only raises TransportError for definitive
+                # disconnect signals (e.g. ClearCommError on Windows).
+                transport.keep_alive()
+                conn._liveness_fail_count = 0
+            except TransportError:
+                conn._liveness_fail_count += 1
+                # Require a few consecutive failures to avoid false positives
+                # from momentary glitches.
+                if conn._liveness_fail_count >= 3:
+                    dead_ports.append(port)
+            except Exception:
+                pass
+
+        for port in dead_ports:
+            try:
+                conn = self.connection_manager.get_connection(port)
+                if conn:
+                    self._handle_port_disconnect(port, conn)
             except Exception:
                 pass
 
@@ -412,26 +449,94 @@ class AgentServer(
         
         def drain_loop():
             tail_buffer = b""
+            # Brief startup delay so the script can begin executing before we poll.
             for _ in range(50):
                 if not conn.is_detached():
                     return
                 time.sleep(0.01)
-            
+
+            # Maximum wall-clock time before we give up and force-release.
+            DRAIN_HARD_TIMEOUT_S = 120.0
+            # How long to wait without any serial data before running a
+            # liveness check (transport still open? board still alive?).
+            SILENCE_LIVENESS_CHECK_S = 30.0
+
+            start_time = time.time()
+            last_data_time = time.time()
+            last_liveness_check_time = time.time()
+
             while conn.is_detached() and self.running:
+                now = time.time()
+
+                # Hard timeout: the script has been running too long without
+                # returning to the REPL.  Force-release so the board manager
+                # becomes usable again (user can run `replx reset` to interrupt
+                # the script on the board itself).
+                if now - start_time > DRAIN_HARD_TIMEOUT_S:
+                    print(
+                        f"replx agent: drain timeout for {conn.port} "
+                        f"({DRAIN_HARD_TIMEOUT_S:.0f}s), force-releasing detached state",
+                        file=sys.stderr,
+                    )
+                    conn.set_detached(False)
+                    conn.release()
+                    return
+
                 try:
                     if conn.repl_protocol:
                         data = conn.repl_protocol.drain()
                         if data:
-                            tail_buffer = (tail_buffer + data)[-50:]
-                            
+                            last_data_time = now
+                            tail_buffer = (tail_buffer + data)[-128:]
+
+                            # Normal completion: board returned to REPL prompt.
                             if b'\r\n>>> ' in tail_buffer or tail_buffer.endswith(b'>>> '):
                                 conn.set_detached(False)
                                 conn.release()
-                                break
+                                return
+
+                            # Board reboot detected (hard-fault, watchdog, or
+                            # explicit machine.reset()).  The MicroPython banner
+                            # appears before the REPL prompt, so catching it here
+                            # lets us release immediately rather than waiting for
+                            # the trailing `>>> `.
+                            if b'MicroPython v' in data or b'soft reboot' in data:
+                                conn.set_detached(False)
+                                conn.release()
+                                return
+                        else:
+                            # No data arriving.  Periodically check whether the
+                            # serial transport itself is still alive so that a USB
+                            # cable pull (or hard board freeze) is detected even
+                            # when no TransportError is raised proactively.
+                            if (
+                                now - last_data_time > SILENCE_LIVENESS_CHECK_S
+                                and now - last_liveness_check_time > SILENCE_LIVENESS_CHECK_S
+                            ):
+                                last_liveness_check_time = now
+                                transport = getattr(conn.repl_protocol, 'transport', None)
+                                if transport is not None and hasattr(transport, 'check_connection'):
+                                    if not transport.check_connection():
+                                        conn.set_detached(False)
+                                        conn.release()
+                                        try:
+                                            self._handle_port_disconnect(conn.port, conn)
+                                        except Exception:
+                                            pass
+                                        return
+
                 except Exception:
-                    break
+                    # TransportError or similar: the port is gone.
+                    conn.set_detached(False)
+                    conn.release()
+                    try:
+                        self._handle_port_disconnect(conn.port, conn)
+                    except Exception:
+                        pass
+                    return
+
                 time.sleep(0.01)
-        
+
         drain_thread = threading.Thread(target=drain_loop, daemon=True)
         conn._drain_thread = drain_thread
         drain_thread.start()
@@ -543,6 +648,39 @@ class AgentServer(
             for port, c in all_conns.items():
                 if c.is_detached():
                     self._stop_detached_script(c)
+
+    def _handle_port_disconnect(self, port: str, conn: BoardConnection = None) -> None:
+        """Handle a detected physical port disconnection (USB cable pull, board reset, etc.).
+
+        Stops all active sessions, releases all locks, disconnects the serial
+        transport, and removes the connection from both the connection manager
+        and every session that referenced it.  This is idempotent — calling it
+        on an already-removed port is a no-op.
+        """
+        if conn is None:
+            conn = self.connection_manager.get_connection(port)
+        if conn is None:
+            return
+
+        # Stop drain / interactive / REPL sub-threads before closing the port.
+        if conn.is_detached():
+            conn.stop_detached()
+        if conn.repl.active:
+            conn.repl.stop()
+        if conn.interactive.active:
+            conn.interactive.stop()
+        conn.release()
+
+        # Close the serial port and remove the connection object.
+        self.connection_manager.disconnect(port)
+        # Unlink the port from every session so sessions don't hold stale refs.
+        self.session_manager.remove_connection_from_all_sessions(port)
+
+        print(
+            f"replx agent: port {port} disconnected "
+            f"(device removed or cable unplugged)",
+            file=sys.stderr,
+        )
     
     def _encode_response_safe(self, response: dict) -> bytes:
         """Encode a response, truncating overly long error/result strings.

@@ -168,6 +168,11 @@ class BoardConnection:
     detached_running: bool = False
     _drain_thread: Optional[threading.Thread] = field(default=None, repr=False)
 
+    # Counter incremented each heartbeat when the transport fails a liveness
+    # check; reset to 0 on a successful check. The heartbeat disconnects the
+    # port after this reaches a threshold (see AgentServer._heartbeat_tick).
+    _liveness_fail_count: int = 0
+
     interactive: InteractiveSessionState = field(default_factory=InteractiveSessionState)
     repl: ReplSessionState = field(default_factory=ReplSessionState)
 
@@ -201,11 +206,18 @@ class BoardConnection:
         in-flight commands cannot believe they each own the board (the previous
         re-entrant behaviour caused premature release when the inner command
         finished first). Returns ``True`` only if this call took the lock.
+
+        When ``allow_when_detached`` is True (e.g. for ``reset``), the command
+        may take over ownership even when the busy flag is currently held by a
+        detached script, superseding that script's ownership.
         """
         with self._busy_lock:
-            if self.detached_running and not allow_when_detached:
-                return False
-            if self.busy:
+            if self.detached_running:
+                if not allow_when_detached:
+                    return False
+                # Detached-aware commands (e.g. reset) are allowed to take over
+                # even while the detached-script holds busy=True.
+            elif self.busy:
                 return False
             self.busy = True
             self.busy_session = session_id

@@ -2321,7 +2321,7 @@ Manage WiFi connection.
                             OutputHelper.print_panel(
                                 f"Creating new file: [yellow]{remote_path}[/yellow]",
                                 title="edit",
-                                border_style=OutputHelper._resolve_category_color('neutral')
+                                border_style='neutral'
                             )
                         else:
                             OutputHelper.print_panel(
@@ -2335,7 +2335,7 @@ Manage WiFi connection.
                         OutputHelper.print_panel(
                             f"Creating new file: [yellow]{remote_path}[/yellow]",
                             title="edit",
-                            border_style=OutputHelper._resolve_category_color('neutral')
+                            border_style='neutral'
                         )
                     
                     with open(local_path, 'rb') as f:
@@ -2344,7 +2344,7 @@ Manage WiFi connection.
                     OutputHelper.print_panel(
                         "Opening in VSCode... (close the file tab to continue)",
                         title="edit",
-                        border_style=OutputHelper._resolve_category_color('neutral')
+                        border_style='neutral'
                     )
                     opened, editor_error = _open_editor_and_wait(local_path, original_hash)
                     if not opened:
@@ -2363,7 +2363,7 @@ Manage WiFi connection.
                         OutputHelper.print_panel(
                             "No changes detected.",
                             title="edit",
-                            border_style=OutputHelper._resolve_category_color('neutral')
+                            border_style='neutral'
                         )
                     else:
                         print("File was modified. Apply the changes? [y/N]: ", end="", flush=True)
@@ -2388,7 +2388,7 @@ Manage WiFi connection.
                             OutputHelper.print_panel(
                                 "Changes discarded.",
                                 title="edit",
-                                border_style=OutputHelper._resolve_category_color('neutral')
+                                border_style='neutral'
                             )
                 
                 finally:
