@@ -315,6 +315,107 @@ def mem32() -> Any:
     ...
 
 
+def wake_reason() -> int:
+    """
+    Get the wake reason after light or deep sleep.
+
+    The returned value can be compared to the wake-reason constants
+    ``PIN_WAKE``, ``RTC_WAKE``, or ``WLAN_WAKE``.
+
+    :returns: Wake reason constant
+
+    :raises NotImplementedError: On ports that do not support wake-reason query.
+
+    Example
+    -------
+    ```python
+        >>> from machine import wake_reason, PIN_WAKE, RTC_WAKE
+        >>> 
+        >>> reason = wake_reason()
+        >>> if reason == PIN_WAKE:
+        ...     print("Woke from GPIO pin")
+        >>> elif reason == RTC_WAKE:
+        ...     print("Woke from RTC alarm")
+    ```
+    """
+    ...
+
+
+def time_pulse_us(pin: "Pin", pulse_level: int,
+                  timeout_us: int = 1_000_000) -> int:
+    """
+    Time a pulse on the given pin.
+
+    If the current value of the pin differs from ``pulse_level``, the function
+    first waits until the pin equals ``pulse_level``, then times how long the
+    pin stays at ``pulse_level``.
+
+    Returns the pulse duration in microseconds. Returns ``-2`` if there was a
+    timeout waiting for the initial edge, or ``-1`` if the pulse timed out
+    while being measured.
+
+    :param pin: Pin object to read
+    :param pulse_level: Pulse level to time (0 or 1)
+    :param timeout_us: Timeout in microseconds (default 1 second)
+
+    :returns: Pulse duration in microseconds (negative on timeout)
+
+    Example
+    -------
+    ```python
+        >>> from machine import Pin, time_pulse_us
+        >>> 
+        >>> trig = Pin(5, Pin.OUT)
+        >>> echo = Pin(6, Pin.IN)
+        >>> 
+        >>> # HC-SR04 ultrasonic sensor
+        >>> trig.value(0)
+        >>> trig.value(1)
+        >>> trig.value(0)
+        >>> duration = time_pulse_us(echo, 1, 30000)
+        >>> distance_cm = duration / 58.0
+        >>> print(f"Distance: {distance_cm:.1f} cm")
+    ```
+    """
+    ...
+
+
+def bitstream(pin: "Pin", encoding: int, timing: tuple, data: bytes) -> None:
+    """
+    Transmit data on ``pin`` using the given ``encoding``.
+
+    Provides bit-banged signal generation with precise timing, primarily used
+    for driving WS2812 / NeoPixel RGB LED strips.
+
+    The supported encodings are:
+
+    * ``0`` — "high low" pulse duration modulation. The ``timing`` must be a
+      4-tuple of nanoseconds ``(high_time_0, low_time_0, high_time_1, low_time_1)``.
+      For example, ``(400, 850, 800, 450)`` is the timing for WS2812 at 800kHz.
+
+    :param pin: Output pin to transmit on (must be configured as output)
+    :param encoding: Signal encoding type (0 = WS2812 pulse-width modulation)
+    :param timing: 4-tuple of timing values in nanoseconds
+    :param data: Bytes to transmit
+
+    Example
+    -------
+    ```python
+        >>> from machine import Pin, bitstream
+        >>> 
+        >>> pin = Pin(5, Pin.OUT)
+        >>> # WS2812 (NeoPixel) timing at 800kHz
+        >>> timing = (400, 850, 800, 450)
+        >>> # RGB pixels: Red, Green, Blue
+        >>> pixels = bytearray([255, 0, 0,   # Red
+        ...                     0, 255, 0,   # Green
+        ...                     0, 0, 255])  # Blue
+        >>> bitstream(pin, 0, timing, pixels)
+    ```
+    """
+    ...
+
+
 # Reset cause constants
 PWRON_RESET: int
 """Power-on reset.
@@ -327,6 +428,71 @@ WDT_RESET: int
 """Watchdog timer reset.
 
 Indicates the last reset was caused by the watchdog timer.
+"""
+
+HARD_RESET: int
+"""Hard reset cause.
+
+Indicates the last reset was a hardware reset (e.g. RESET pin pulled low,
+or power button). Port specific.
+"""
+
+SOFT_RESET: int
+"""Soft reset cause.
+
+Indicates the last reset was a software reset triggered by the MicroPython
+runtime (e.g. ``machine.soft_reset()``).
+"""
+
+DEEPSLEEP_RESET: int
+"""Deep sleep wake-up reset cause.
+
+Indicates the device woke from deep sleep mode. The reset cause is set to
+this value on wake from deep sleep on ports that perform a full reset on
+wake (i.e. the program restarts from boot).
+"""
+
+# IRQ wake-up mode constants (for lightsleep/deepsleep)
+IDLE: int
+"""IRQ wake mode: CPU idle.
+
+The CPU can be woken by any interrupt. Lowest-power active state.
+"""
+
+SLEEP: int
+"""IRQ wake mode: light sleep.
+
+Similar to IDLE; used on some ports to indicate a light-sleep state where
+the CPU clock is gated.
+"""
+
+DEEPSLEEP: int
+"""IRQ wake mode: deep sleep.
+
+Full deep sleep mode. On most ports, a wake-up causes a full system reset
+and the program restarts from boot.
+"""
+
+# Wake reason constants (returned by wake_reason())
+PIN_WAKE: int
+"""Wake reason: GPIO pin trigger.
+
+Indicates the device woke up from light or deep sleep due to a GPIO pin
+level or edge event. Availability is port specific.
+"""
+
+RTC_WAKE: int
+"""Wake reason: RTC alarm.
+
+Indicates the device woke up from light or deep sleep due to an RTC timer
+alarm. Availability is port specific.
+"""
+
+WLAN_WAKE: int
+"""Wake reason: WLAN (network) activity.
+
+Indicates the device woke up due to WLAN/network activity.
+Availability: ESP32.
 """
 
 
@@ -1589,6 +1755,1201 @@ class Signal:
         -------
         ```python
             >>> led.off()
+        ```
+        """
+        ...
+
+
+class I2S:
+    """
+    Inter-IC Sound (I2S) digital audio bus controller.
+
+    Supports both transmit (TX) and receive (RX) modes, with blocking,
+    non-blocking (IRQ callback), and asyncio-based operation.
+
+    Availability: ESP32, STM32/PyBoard, RP2.
+
+    Example
+    -------
+    ```python
+        >>> from machine import I2S, Pin
+        >>> 
+        >>> # Audio output (ESP32)
+        >>> audio_out = I2S(0,
+        ...                 sck=Pin(14), ws=Pin(13), sd=Pin(12),
+        ...                 mode=I2S.TX, bits=16, format=I2S.STEREO,
+        ...                 rate=44100, ibuf=20000)
+        >>> 
+        >>> # Write audio samples
+        >>> samples = bytearray(1024)
+        >>> num_written = audio_out.write(samples)
+        >>> audio_out.deinit()
+    ```
+    """
+
+    RX: int
+    """Receive mode constant. Use for ``mode`` parameter."""
+
+    TX: int
+    """Transmit mode constant. Use for ``mode`` parameter."""
+
+    MONO: int
+    """Mono channel format constant. Use for ``format`` parameter."""
+
+    STEREO: int
+    """Stereo channel format constant. Use for ``format`` parameter."""
+
+    def __init__(self, id: int, *, sck: "Pin", ws: "Pin", sd: "Pin",
+                 mck: Optional["Pin"] = None,
+                 mode: int, bits: int, format: int,
+                 rate: int, ibuf: int) -> None:
+        """
+        Construct and initialise an I2S object.
+
+        :param id: I2S peripheral ID (0 or 1; depends on port)
+        :param sck: Serial clock pin
+        :param ws: Word select (LRCLK) pin
+        :param sd: Serial data pin
+        :param mck: Optional master clock pin
+        :param mode: I2S.TX or I2S.RX
+        :param bits: Sample bit depth (16 or 32)
+        :param format: I2S.MONO or I2S.STEREO
+        :param rate: Audio sample rate in Hz (e.g. 44100)
+        :param ibuf: Internal DMA buffer size in bytes
+
+        Example
+        -------
+        ```python
+            >>> from machine import I2S, Pin
+            >>> 
+            >>> audio_out = I2S(0,
+            ...                 sck=Pin(14), ws=Pin(13), sd=Pin(12),
+            ...                 mode=I2S.TX, bits=16, format=I2S.STEREO,
+            ...                 rate=44100, ibuf=20000)
+        ```
+        """
+        ...
+
+    def init(self, *, sck: "Pin", ws: "Pin", sd: "Pin",
+             mck: Optional["Pin"] = None,
+             mode: int, bits: int, format: int,
+             rate: int, ibuf: int) -> None:
+        """
+        Re-initialise the I2S bus with new parameters.
+
+        :param sck: Serial clock pin
+        :param ws: Word select pin
+        :param sd: Serial data pin
+        :param mck: Optional master clock pin
+        :param mode: I2S.TX or I2S.RX
+        :param bits: Sample bit depth
+        :param format: Channel format
+        :param rate: Sample rate in Hz
+        :param ibuf: DMA buffer size in bytes
+
+        Example
+        -------
+        ```python
+            >>> audio_out.init(sck=Pin(14), ws=Pin(13), sd=Pin(12),
+            ...                mode=I2S.TX, bits=16, format=I2S.MONO,
+            ...                rate=22050, ibuf=10000)
+        ```
+        """
+        ...
+
+    def write(self, buf: bytes) -> int:
+        """
+        Write audio samples from ``buf`` to the I2S bus.
+
+        Buffer byte ordering is little-endian. For stereo, left channel precedes
+        right channel. For mono, sample data is written to both channels.
+
+        :param buf: Bytes-like object containing audio samples
+
+        :returns: Number of bytes written
+
+        Example
+        -------
+        ```python
+            >>> samples = bytearray(1024)  # fill with audio data
+            >>> num_written = audio_out.write(samples)
+        ```
+        """
+        ...
+
+    def readinto(self, buf: bytearray) -> int:
+        """
+        Read audio samples from I2S bus into ``buf``.
+
+        Buffer byte ordering is little-endian. For stereo, left channel
+        precedes right channel. For mono, left channel data is used.
+
+        :param buf: Writable buffer to read into
+
+        :returns: Number of bytes read
+
+        Example
+        -------
+        ```python
+            >>> buf = bytearray(1024)
+            >>> num_read = audio_in.readinto(buf)
+        ```
+        """
+        ...
+
+    def irq(self, handler: Callable) -> None:
+        """
+        Set a non-blocking callback for I2S transfers.
+
+        The ``handler`` is called when ``buf`` is emptied (for TX) or filled
+        (for RX), switching ``write`` and ``readinto`` to non-blocking mode.
+
+        :param handler: Callable invoked in the MicroPython scheduler context
+
+        Example
+        -------
+        ```python
+            >>> def callback(i2s):
+            ...     # refill/drain buffer
+            ...     pass
+            >>> 
+            >>> audio_out.irq(callback)
+            >>> audio_out.write(samples)  # returns immediately
+        ```
+        """
+        ...
+
+    @staticmethod
+    def shift(*, buf: bytearray, bits: int, shift: int) -> None:
+        """
+        Bitwise shift all audio samples in ``buf``.
+
+        Used for volume control. Each bit shift changes volume by ~6 dB.
+        Positive ``shift`` increases volume (left shift); negative decreases it.
+
+        :param buf: Buffer containing audio samples (modified in place)
+        :param bits: Sample size in bits (e.g. 16 or 32)
+        :param shift: Number of bits to shift (positive=louder, negative=quieter)
+
+        Example
+        -------
+        ```python
+            >>> from machine import I2S
+            >>> 
+            >>> samples = bytearray(1024)
+            >>> # Halve volume (shift right by 1 = -6dB)
+            >>> I2S.shift(buf=samples, bits=16, shift=-1)
+        ```
+        """
+        ...
+
+    def deinit(self) -> None:
+        """
+        Deinitialise the I2S bus.
+
+        Example
+        -------
+        ```python
+            >>> audio_out.deinit()
+        ```
+        """
+        ...
+
+
+class I2CTarget:
+    """
+    I2C target (peripheral/slave) controller.
+
+    Implements the I2C target (formerly "slave") role, allowing a MicroPython
+    board to respond to requests from an I2C controller.
+
+    New in MicroPython v1.28.0. Availability is port specific.
+
+    Example
+    -------
+    ```python
+        >>> from machine import I2CTarget, Pin
+        >>> 
+        >>> # Respond at address 0x42 with a 256-byte memory buffer
+        >>> mem = bytearray(256)
+        >>> target = I2CTarget(0, addr=0x42, mem=mem,
+        ...                    scl=Pin(1), sda=Pin(0))
+        >>> # The controller can now read/write mem[] via I2C
+    ```
+    """
+
+    IRQ_ADDR_MATCH_READ: int
+    """IRQ trigger: controller addressed this target for a read transaction."""
+
+    IRQ_ADDR_MATCH_WRITE: int
+    """IRQ trigger: controller addressed this target for a write transaction."""
+
+    IRQ_READ_REQ: int
+    """IRQ trigger: controller is requesting data (call write() to respond)."""
+
+    IRQ_WRITE_REQ: int
+    """IRQ trigger: controller has written data (call readinto() to read it)."""
+
+    IRQ_END_READ: int
+    """IRQ trigger: controller finished a read transaction."""
+
+    IRQ_END_WRITE: int
+    """IRQ trigger: controller finished a write transaction."""
+
+    def __init__(self, id: int, addr: int, *, addrsize: int = 7,
+                 mem: Optional[bytearray] = None, mem_addrsize: int = 8,
+                 scl: Optional["Pin"] = None,
+                 sda: Optional["Pin"] = None) -> None:
+        """
+        Create an I2C target object.
+
+        :param id: I2C peripheral ID
+        :param addr: This device's I2C address (7-bit or 10-bit)
+        :param addrsize: Address size in bits (7 or 10)
+        :param mem: Optional backing memory buffer (bytearray). If provided,
+                    the controller can read/write it directly.
+        :param mem_addrsize: Memory address size in bits (0, 8, 16, 24, or 32)
+        :param scl: SCL pin
+        :param sda: SDA pin
+
+        Example
+        -------
+        ```python
+            >>> from machine import I2CTarget, Pin
+            >>> 
+            >>> mem = bytearray(64)
+            >>> target = I2CTarget(0, addr=0x50, mem=mem,
+            ...                    scl=Pin(1), sda=Pin(0))
+        ```
+        """
+        ...
+
+    def write(self, buf: bytes) -> int:
+        """
+        Write bytes to be sent to the I2C controller.
+
+        Called in response to an ``IRQ_READ_REQ`` event to provide data
+        requested by the controller.
+
+        :param buf: Data to send to the controller
+
+        :returns: Number of bytes written
+
+        Example
+        -------
+        ```python
+            >>> def on_irq(target):
+            ...     if irq_flags & I2CTarget.IRQ_READ_REQ:
+            ...         target.write(b"hello")
+        ```
+        """
+        ...
+
+    def readinto(self, buf: bytearray) -> int:
+        """
+        Read bytes written by the I2C controller into ``buf``.
+
+        Called in response to an ``IRQ_WRITE_REQ`` event to consume data
+        sent by the controller.
+
+        :param buf: Buffer to read controller's data into
+
+        :returns: Number of bytes read
+
+        Example
+        -------
+        ```python
+            >>> def on_irq(target):
+            ...     if irq_flags & I2CTarget.IRQ_WRITE_REQ:
+            ...         buf = bytearray(8)
+            ...         target.readinto(buf)
+        ```
+        """
+        ...
+
+    def irq(self, handler: Optional[Callable] = None,
+            trigger: int = 0, hard: bool = False) -> Any:
+        """
+        Configure an interrupt handler for I2C target events.
+
+        ``IRQ_ADDR_MATCH_READ``, ``IRQ_ADDR_MATCH_WRITE``, ``IRQ_READ_REQ``,
+        and ``IRQ_WRITE_REQ`` must be handled as hard IRQs (``hard=True``)
+        because they have strict timing requirements.
+
+        :param handler: Callable invoked on IRQ events
+        :param trigger: OR of IRQ constants to enable
+        :param hard: If True, use hard interrupt
+
+        Example
+        -------
+        ```python
+            >>> def irq_handler(target):
+            ...     pass
+            >>> 
+            >>> target.irq(handler=irq_handler,
+            ...             trigger=I2CTarget.IRQ_READ_REQ | I2CTarget.IRQ_WRITE_REQ,
+            ...             hard=True)
+        ```
+        """
+        ...
+
+    def deinit(self) -> None:
+        """
+        Deinitialise the I2C target.
+
+        After this call, the hardware will no longer respond to I2C requests.
+
+        Example
+        -------
+        ```python
+            >>> target.deinit()
+        ```
+        """
+        ...
+
+
+class ADCBlock:
+    """
+    ADC block providing access to multiple ADC channels.
+
+    Represents a hardware ADC converter block that may contain multiple
+    input channels. Use ``connect()`` to get an ``ADC`` object for a
+    specific channel or pin.
+
+    Availability: RP2 and some other ports.
+
+    Example
+    -------
+    ```python
+        >>> from machine import ADCBlock, Pin
+        >>> 
+        >>> # Connect ADC block 0, channel 0 to GPIO26
+        >>> block = ADCBlock(0)
+        >>> adc = block.connect(0, Pin(26))
+        >>> value = adc.read_u16()
+        >>> print(f"ADC: {value}")
+    ```
+    """
+
+    def __init__(self, id: int, *, bits: int = 12) -> None:
+        """
+        Create an ADCBlock object.
+
+        :param id: ADC block ID (hardware-specific)
+        :param bits: Resolution in bits (hardware-specific; RP2 supports 12)
+
+        Example
+        -------
+        ```python
+            >>> from machine import ADCBlock
+            >>> 
+            >>> block = ADCBlock(0, bits=12)
+        ```
+        """
+        ...
+
+    def connect(self, channel: int, source: Optional["Pin"] = None,
+                **kwargs: Any) -> "ADC":
+        """
+        Connect a channel or pin to this ADC block and return an ADC object.
+
+        Can be called as:
+        - ``connect(channel)`` — connect by channel number
+        - ``connect(source)`` — connect by pin
+        - ``connect(channel, source)`` — connect channel to specific pin
+
+        :param channel: ADC channel number
+        :param source: Pin object to connect to this channel
+
+        :returns: ADC object configured for this channel/pin
+
+        Example
+        -------
+        ```python
+            >>> from machine import ADCBlock, Pin
+            >>> 
+            >>> block = ADCBlock(0)
+            >>> # Connect channel 0 to GPIO26
+            >>> adc = block.connect(0, Pin(26))
+            >>> print(adc.read_u16())
+        ```
+        """
+        ...
+
+
+class USBDevice:
+    """
+    Low-level USB device controller for custom USB device descriptors.
+
+    This is a singleton: calling the constructor multiple times returns the
+    same object. Allows implementing custom USB device classes at a low level.
+
+    New in MicroPython v1.28.0. Availability: RP2350 and other ports with
+    TinyUSB support.
+
+    Example
+    -------
+    ```python
+        >>> from machine import USBDevice
+        >>> 
+        >>> usb = USBDevice()
+        >>> # Configure with custom descriptors
+        >>> usb.config(desc_dev=my_dev_descriptor,
+        ...            desc_cfg=my_cfg_descriptor,
+        ...            xfer_cb=my_xfer_callback)
+        >>> usb.active(1)
+    ```
+    """
+
+    BUILTIN_NONE: Any
+    """No built-in USB class (disable built-in USB)."""
+
+    BUILTIN_DEFAULT: Any
+    """Use the default built-in USB class (CDC + MSC)."""
+
+    BUILTIN_CDC: Any
+    """Built-in CDC (USB serial) class only."""
+
+    BUILTIN_MSC: Any
+    """Built-in MSC (USB mass storage) class only."""
+
+    BUILTIN_CDC_MSC: int
+    """Built-in CDC + MSC combined."""
+
+    def __init__(self) -> None:
+        """
+        Return the USBDevice singleton.
+
+        Example
+        -------
+        ```python
+            >>> from machine import USBDevice
+            >>> 
+            >>> usb = USBDevice()
+        ```
+        """
+        ...
+
+    def config(self, desc_dev: bytes, desc_cfg: bytes,
+               desc_strs: Any = None,
+               open_itf_cb: Optional[Callable] = None,
+               reset_cb: Optional[Callable] = None,
+               control_xfer_cb: Optional[Callable] = None,
+               xfer_cb: Optional[Callable] = None) -> None:
+        """
+        Configure the USB device with descriptors and callbacks.
+
+        :param desc_dev: USB device descriptor (bytes)
+        :param desc_cfg: USB configuration descriptor (bytes)
+        :param desc_strs: Optional string descriptors (list, dict, or subscriptable)
+        :param open_itf_cb: Called when an interface is accepted by host
+        :param reset_cb: Called on USB bus reset
+        :param control_xfer_cb: Called for control endpoint transfers
+        :param xfer_cb: Called when a transfer on a non-control endpoint completes
+
+        Example
+        -------
+        ```python
+            >>> usb = USBDevice()
+            >>> usb.config(desc_dev=dev_desc,
+            ...            desc_cfg=cfg_desc,
+            ...            xfer_cb=lambda ep, result, xferred: None)
+        ```
+        """
+        ...
+
+    def active(self, state: Optional[bool] = None) -> bool:
+        """
+        Get or set the USB device active state.
+
+        :param state: If provided, activate (True) or deactivate (False)
+
+        :returns: Current active state
+
+        Example
+        -------
+        ```python
+            >>> usb = USBDevice()
+            >>> usb.active(True)   # enable USB
+            >>> print(usb.active())
+        ```
+        """
+        ...
+
+    def submit_xfer(self, ep: int, buffer: Any) -> bool:
+        """
+        Submit a USB transfer on endpoint ``ep``.
+
+        :param ep: Endpoint number (not 0; use control_xfer_cb for EP0)
+        :param buffer: Buffer with read access for IN endpoints,
+                       write access for OUT endpoints
+
+        :returns: True if queued successfully, False if the transfer could
+                  not be queued
+
+        :raises OSError: If the USB device is not active
+
+        Example
+        -------
+        ```python
+            >>> buf = bytearray(64)
+            >>> if usb.submit_xfer(0x81, buf):
+            ...     print("Transfer queued")
+        ```
+        """
+        ...
+
+
+class CAN:
+    """
+    Controller Area Network (CAN) bus interface.
+
+    Supports CAN 2.0 (classic CAN). Some ports may also support CAN FD.
+    New in MicroPython v1.28.0.
+
+    Example
+    -------
+    ```python
+        >>> from machine import CAN
+        >>> 
+        >>> can = CAN(1, 500_000)         # CAN bus 1, 500 kbps
+        >>> can.set_filters(None)         # receive all messages
+        >>> 
+        >>> # Send a message
+        >>> can.send(0x123, b'\\x01\\x02\\x03')
+        >>> 
+        >>> # Receive a message
+        >>> msg = can.recv()
+        >>> if msg:
+        ...     can_id, data, flags, errs = msg
+        ...     print(hex(can_id), bytes(data).hex())
+        >>> 
+        >>> can.deinit()
+    ```
+    """
+
+    # Mode constants
+    MODE_NORMAL: int
+    """Normal operating mode: sends/receives on the CAN bus."""
+
+    MODE_SLEEP: int
+    """Low-power sleep mode."""
+
+    MODE_LOOPBACK: int
+    """Test mode: receives own transmitted messages; ignores ACK errors."""
+
+    MODE_SILENT: int
+    """Listen-only mode: receives messages without transmitting (no ACK)."""
+
+    MODE_SILENT_LOOPBACK: int
+    """Test mode without a transceiver: receives own TX messages internally."""
+
+    # State constants
+    STATE_STOPPED: int
+    """Controller has not been initialised."""
+
+    STATE_ACTIVE: int
+    """Controller is active; TEC and REC error counters below 96."""
+
+    STATE_WARNING: int
+    """One or both error counters are between 96 and 127."""
+
+    STATE_PASSIVE: int
+    """Error Passive state; at least one counter >= 128 but TEC < 255."""
+
+    STATE_BUS_OFF: int
+    """Bus-Off state; TEC > 255. Call restart() to recover."""
+
+    # Message flag constants
+    FLAG_RTR: int
+    """Indicates a Remote Transmission Request message."""
+
+    FLAG_EXT_ID: int
+    """Indicates an Extended (29-bit) CAN identifier."""
+
+    FLAG_UNORDERED: int
+    """Allow multiple messages with the same ID to be queued in any order."""
+
+    # Receive error flags
+    RECV_ERR_FULL: int
+    """Hardware FIFO is full; messages may be lost."""
+
+    RECV_ERR_OVERRUN: int
+    """Hardware FIFO overrun; one or more messages have been lost."""
+
+    # IRQ constants
+    IRQ_RX: int
+    """IRQ trigger: at least one message received."""
+
+    IRQ_TX: int
+    """IRQ trigger: message successfully transmitted or transmission failed."""
+
+    IRQ_STATE: int
+    """IRQ trigger: controller entered a more severe error state."""
+
+    IRQ_TX_FAILED: int
+    """Additional IRQ flag for IRQ_TX: transmission failed."""
+
+    FILTERS_MAX: int
+    """Maximum number of receive filters supported by this controller."""
+
+    TX_QUEUE_LEN: int
+    """Maximum number of messages that can be queued for transmission."""
+
+    def __init__(self, id: int, *args: int, **kwargs: Any) -> None:
+        """
+        Construct and initialise a CAN controller.
+
+        :param id: CAN peripheral ID (board-specific)
+        :param args: Additional positional arguments (e.g. bitrate) passed
+                     to ``init()``
+
+        Example
+        -------
+        ```python
+            >>> from machine import CAN
+            >>> 
+            >>> can = CAN(1, 500_000)  # bus 1 at 500 kbps
+        ```
+        """
+        ...
+
+    def init(self, bitrate: int, mode: int = 0,
+             sample_point: int = 75, sjw: int = 1,
+             tseg1: Optional[int] = None,
+             tseg2: Optional[int] = None,
+             **kwargs: Any) -> None:
+        """
+        Initialise the CAN bus.
+
+        :param bitrate: Bus bit rate in bits per second
+        :param mode: Operating mode constant (default MODE_NORMAL)
+        :param sample_point: Sample point as integer percentage (default 75%)
+        :param sjw: Resynchronisation jump width in time quanta (1-4)
+        :param tseg1: Propagation + phase segment 1 (time quanta)
+        :param tseg2: Phase segment 2 (time quanta)
+
+        Example
+        -------
+        ```python
+            >>> can.init(500_000, mode=CAN.MODE_NORMAL, sample_point=75)
+            >>> 
+            >>> # Or with explicit timing segments
+            >>> can.init(500_000, tseg1=13, tseg2=2, sjw=1)
+        ```
+        """
+        ...
+
+    def deinit(self) -> None:
+        """
+        De-initialise the CAN controller.
+
+        Pending messages are dropped and the controller stops interacting
+        with the bus.
+
+        Example
+        -------
+        ```python
+            >>> can.deinit()
+        ```
+        """
+        ...
+
+    def restart(self) -> None:
+        """
+        Exit the Bus-Off error state.
+
+        Cancels pending messages and attempts to recover the controller to
+        an active state.
+
+        Example
+        -------
+        ```python
+            >>> if can.state() == CAN.STATE_BUS_OFF:
+            ...     can.restart()
+        ```
+        """
+        ...
+
+    def state(self) -> int:
+        """
+        Return the current controller state.
+
+        :returns: One of STATE_STOPPED, STATE_ACTIVE, STATE_WARNING,
+                  STATE_PASSIVE, or STATE_BUS_OFF
+
+        Example
+        -------
+        ```python
+            >>> if can.state() == CAN.STATE_ACTIVE:
+            ...     print("CAN bus OK")
+        ```
+        """
+        ...
+
+    def set_filters(self, filters: Any) -> None:
+        """
+        Set receive filters.
+
+        :param filters: ``None`` to accept all; empty list to reject all;
+                        or an iterable of ``(identifier, bit_mask, flags)``
+                        tuples.
+
+        Example
+        -------
+        ```python
+            >>> can.set_filters(None)    # receive all
+            >>> 
+            >>> # Only receive standard IDs 0x301 and 0x700
+            >>> can.set_filters(((0x301, 0x7FF, 0),
+            ...                   (0x700, 0x7FF, 0)))
+        ```
+        """
+        ...
+
+    def send(self, id: int, data: bytes, flags: int = 0) -> Optional[int]:
+        """
+        Queue a CAN message for transmission.
+
+        :param id: CAN identifier (integer)
+        :param data: Message data bytes (up to 8 bytes for classic CAN)
+        :param flags: OR of FLAG_* constants
+
+        :returns: Transmit buffer index if queued, or None if queue is full
+
+        Example
+        -------
+        ```python
+            >>> idx = can.send(0x123, b'\\x01\\x02\\x03')
+            >>> if idx is None:
+            ...     print("TX queue full")
+        ```
+        """
+        ...
+
+    def recv(self, arg: Optional[list] = None) -> Optional[list]:
+        """
+        Return a received CAN message, or None if none available.
+
+        Returns a list of ``[id, data_memoryview, flags, errors]``.
+        If ``arg`` is provided, it must be a list of at least 4 elements
+        (with a memoryview at index 1) to avoid allocation.
+
+        Note: ``set_filters()`` must be called before receiving.
+
+        :param arg: Optional pre-allocated result list
+
+        :returns: ``[id, data, flags, errors]`` or None
+
+        Example
+        -------
+        ```python
+            >>> can.set_filters(None)
+            >>> msg = can.recv()
+            >>> if msg:
+            ...     can_id, data, flags, errs = msg
+            ...     print(hex(can_id), bytes(data).hex())
+        ```
+        """
+        ...
+
+    def cancel_send(self, index: int) -> bool:
+        """
+        Cancel a pending transmit at the given buffer index.
+
+        :param index: Transmit buffer index from send()
+
+        :returns: True if a pending message was cancelled; False otherwise
+
+        Example
+        -------
+        ```python
+            >>> idx = can.send(0x100, b'\\x00')
+            >>> if idx is not None:
+            ...     can.cancel_send(idx)
+        ```
+        """
+        ...
+
+    def irq(self, handler: Optional[Callable] = None,
+            trigger: int = 0, hard: bool = False) -> Any:
+        """
+        Configure a CAN interrupt handler.
+
+        :param handler: Callable receiving the CAN instance as argument
+        :param trigger: OR of IRQ_RX, IRQ_TX, IRQ_STATE
+        :param hard: If True, use hard interrupt
+
+        :returns: IRQ object
+
+        Example
+        -------
+        ```python
+            >>> def can_callback(can):
+            ...     msg = can.recv()
+            ...     if msg:
+            ...         print("Received:", hex(msg[0]))
+            >>> 
+            >>> can.irq(handler=can_callback, trigger=CAN.IRQ_RX)
+        ```
+        """
+        ...
+
+    def get_counters(self, list: Optional[list] = None) -> list:
+        """
+        Return error and statistics counters.
+
+        Returns a list of 8 values: TEC, REC, warning-entries,
+        passive-entries, bus-off-entries, pending TX, pending RX, RX overruns.
+        Pass an existing list to avoid allocation.
+
+        :param list: Optional pre-allocated result list
+
+        :returns: List of 8 counter values (None for unsupported counters)
+
+        Example
+        -------
+        ```python
+            >>> counters = can.get_counters()
+            >>> tec, rec = counters[0], counters[1]
+            >>> print(f"TEC={tec} REC={rec}")
+        ```
+        """
+        ...
+
+    def get_timings(self, list: Optional[list] = None) -> list:
+        """
+        Return the current CAN bus timing configuration.
+
+        Returns a list of 6 values: exact bitrate, SJW, tseg1, tseg2,
+        FD timings (or None), and controller-specific timings (or None).
+
+        :param list: Optional pre-allocated result list
+
+        :returns: List of timing values
+
+        Example
+        -------
+        ```python
+            >>> timings = can.get_timings()
+            >>> print(f"Bitrate: {timings[0]}, tseg1: {timings[2]}, tseg2: {timings[3]}")
+        ```
+        """
+        ...
+
+
+class Counter:
+    """
+    Hardware pulse/event counter.
+
+    Counts input pulses on a GPIO pin using dedicated hardware counter
+    peripheral (e.g. PCNT on ESP32, QTIMER/XBAR on MIMXRT).
+
+    New in MicroPython v1.28.0.
+
+    Example
+    -------
+    ```python
+        >>> from machine import Counter, Pin
+        >>> 
+        >>> cnt = Counter(0, src=Pin(5), edge=Counter.RISING)
+        >>> 
+        >>> # Count pulses for 1 second
+        >>> import time
+        >>> time.sleep(1)
+        >>> print("Pulses:", cnt.value())
+        >>> 
+        >>> # Reset and count again
+        >>> cnt.value(0)
+        >>> cnt.deinit()
+    ```
+    """
+
+    RISING: int
+    """Count on rising edge."""
+
+    FALLING: int
+    """Count on falling edge."""
+
+    UP: int
+    """Count upward."""
+
+    DOWN: int
+    """Count downward."""
+
+    IRQ_RESET: int
+    """IRQ trigger: reset input transition. (MIMXRT)"""
+
+    IRQ_INDEX: int
+    """IRQ trigger: index input transition. (MIMXRT)"""
+
+    IRQ_MATCH: int
+    """IRQ trigger: counter value matches match value. (MIMXRT)"""
+
+    IRQ_ROLL_OVER: int
+    """IRQ trigger: counter rolled over from maximum to minimum. (MIMXRT)"""
+
+    IRQ_ROLL_UNDER: int
+    """IRQ trigger: counter rolled under from minimum to maximum. (MIMXRT)"""
+
+    def __init__(self, id: int, *args: Any, **kwargs: Any) -> None:
+        """
+        Return the singleton Counter object for the given peripheral ID.
+
+        Additional arguments are passed to ``init()``.
+
+        :param id: Counter peripheral ID (hardware-specific)
+
+        Example
+        -------
+        ```python
+            >>> from machine import Counter, Pin
+            >>> 
+            >>> cnt = Counter(0, src=Pin(5), edge=Counter.RISING)
+        ```
+        """
+        ...
+
+    def init(self, src: "Pin", *args: Any, **kwargs: Any) -> None:
+        """
+        Initialise and reset the Counter.
+
+        :param src: Input pin (Pin object)
+        :param edge: Count edge: Counter.RISING (default) or Counter.FALLING
+        :param direction: Count direction: Counter.UP (default) or Counter.DOWN
+        :param filter_ns: Minimum stable signal duration in ns (default 0)
+        :param max: Upper counting range (default is hardware maximum)
+        :param min: Lower counting range (default 0)
+
+        Example
+        -------
+        ```python
+            >>> cnt.init(src=Pin(5), edge=Counter.RISING,
+            ...          direction=Counter.UP)
+        ```
+        """
+        ...
+
+    def value(self, value: Optional[int] = None) -> int:
+        """
+        Get or set the counter value.
+
+        :param value: If provided, reset counter to this value
+
+        :returns: Current counter value as signed integer
+
+        Example
+        -------
+        ```python
+            >>> cnt.value(0)               # Reset
+            >>> import time; time.sleep(1)
+            >>> pulses = cnt.value()        # Read count
+        ```
+        """
+        ...
+
+    def cycles(self, value: Optional[int] = None) -> int:
+        """
+        Get or set the overflow/underflow cycle counter.
+
+        :param value: If provided, set cycles counter to this value
+
+        :returns: Previous cycles counter value
+
+        Availability: MIMXRT only.
+
+        Example
+        -------
+        ```python
+            >>> cycles = cnt.cycles()
+            >>> print("Overflow count:", cycles)
+        ```
+        """
+        ...
+
+    def irq(self, handler: Optional[Callable] = None,
+            trigger: int = 0, hard: bool = False) -> Any:
+        """
+        Configure an interrupt handler for counter events.
+
+        :param handler: Callable receiving Counter instance as argument
+        :param trigger: OR of IRQ_RESET, IRQ_INDEX, IRQ_MATCH,
+                        IRQ_ROLL_OVER, IRQ_ROLL_UNDER
+        :param hard: If True, use hard interrupt
+
+        Availability: MIMXRT only.
+
+        Example
+        -------
+        ```python
+            >>> def on_rollover(counter):
+            ...     print("Counter rolled over!")
+            >>> 
+            >>> cnt.irq(handler=on_rollover,
+            ...         trigger=Counter.IRQ_ROLL_OVER)
+        ```
+        """
+        ...
+
+    def deinit(self) -> None:
+        """
+        Stop the counter and release hardware resources.
+
+        Example
+        -------
+        ```python
+            >>> cnt.deinit()
+        ```
+        """
+        ...
+
+
+class Encoder:
+    """
+    Quadrature encoder interface.
+
+    Decodes two-phase quadrature signals (phase A and phase B) from rotary
+    encoders or linear encoders using dedicated hardware peripherals.
+
+    New in MicroPython v1.28.0.
+
+    Example
+    -------
+    ```python
+        >>> from machine import Encoder, Pin
+        >>> 
+        >>> enc = Encoder(0, phase_a=Pin(5), phase_b=Pin(6),
+        ...               phases=4)  # 4x quadrature decoding
+        >>> 
+        >>> # Read position
+        >>> print("Position:", enc.value())
+        >>> enc.value(0)  # Reset to zero
+        >>> enc.deinit()
+    ```
+    """
+
+    IRQ_RESET: int
+    """IRQ trigger: reset input transition. (MIMXRT)"""
+
+    IRQ_INDEX: int
+    """IRQ trigger: index input transition. (MIMXRT)"""
+
+    IRQ_MATCH: int
+    """IRQ trigger: position matches match value. (MIMXRT)"""
+
+    IRQ_ROLL_OVER: int
+    """IRQ trigger: position counter rolled over from maximum to minimum. (MIMXRT)"""
+
+    IRQ_ROLL_UNDER: int
+    """IRQ trigger: position counter rolled under from minimum to maximum. (MIMXRT)"""
+
+    def __init__(self, id: int, *args: Any, **kwargs: Any) -> None:
+        """
+        Return the singleton Encoder object for the given peripheral ID.
+
+        Additional arguments are passed to ``init()``.
+
+        :param id: Encoder peripheral ID (hardware-specific)
+
+        Example
+        -------
+        ```python
+            >>> from machine import Encoder, Pin
+            >>> 
+            >>> enc = Encoder(0, phase_a=Pin(5), phase_b=Pin(6))
+        ```
+        """
+        ...
+
+    def init(self, phase_a: "Pin", phase_b: "Pin",
+             *args: Any, **kwargs: Any) -> None:
+        """
+        Initialise and reset the Encoder.
+
+        :param phase_a: Phase A input pin
+        :param phase_b: Phase B input pin
+        :param filter_ns: Minimum stable signal duration in ns (default 0)
+        :param phases: Number of edges to count per pulse (1, 2, or 4; default 1)
+        :param max: Upper position range
+        :param min: Lower position range (default 0)
+        :param index: Optional index pin (resets counter on rising edge)
+        :param reset: Optional reset pin
+
+        Example
+        -------
+        ```python
+            >>> enc.init(phase_a=Pin(5), phase_b=Pin(6),
+            ...          phases=4, min=-32768, max=32767)
+        ```
+        """
+        ...
+
+    def value(self, value: Optional[int] = None) -> int:
+        """
+        Get or set the encoder position value.
+
+        :param value: If provided, set position to this value
+
+        :returns: Current position as signed integer
+
+        Example
+        -------
+        ```python
+            >>> enc.value(0)        # Reset position
+            >>> pos = enc.value()   # Read current position
+        ```
+        """
+        ...
+
+    def cycles(self, value: Optional[int] = None) -> int:
+        """
+        Get or set the overflow/underflow cycle counter.
+
+        :param value: If provided, set cycles counter to this value
+
+        :returns: Previous cycles counter value
+
+        Availability: MIMXRT only.
+
+        Example
+        -------
+        ```python
+            >>> cycles = enc.cycles()
+            >>> print("Full rotations:", cycles)
+        ```
+        """
+        ...
+
+    def irq(self, handler: Optional[Callable] = None,
+            trigger: int = 0, hard: bool = False) -> Any:
+        """
+        Configure an interrupt handler for encoder events.
+
+        :param handler: Callable receiving Encoder instance as argument
+        :param trigger: OR of IRQ constants
+        :param hard: If True, use hard interrupt
+
+        Availability: MIMXRT only.
+
+        Example
+        -------
+        ```python
+            >>> def on_index(enc):
+            ...     enc.value(0)  # Reset on index pulse
+            >>> 
+            >>> enc.irq(handler=on_index, trigger=Encoder.IRQ_INDEX)
+        ```
+        """
+        ...
+
+    def deinit(self) -> None:
+        """
+        Stop the encoder and release hardware resources.
+
+        Example
+        -------
+        ```python
+            >>> enc.deinit()
         ```
         """
         ...

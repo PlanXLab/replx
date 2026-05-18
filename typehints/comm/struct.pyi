@@ -143,3 +143,159 @@ def calcsize(fmt: str) -> int:
     ```
     """
     ...
+
+
+def iter_unpack(fmt: str, buffer: Union[bytes, bytearray]) -> Iterator[tuple]:
+    """
+    Iteratively unpack from *buffer* according to format string *fmt*.
+
+    Returns an iterator that yields successive tuples.  The buffer size must
+    be a multiple of the size required by *fmt*.
+
+    :param fmt: Pack format string (see ``pack()`` for format codes).
+    :param buffer: Buffer to unpack from.
+    :returns: Iterator of tuples.
+
+    Example
+    -------
+    ```python
+        >>> import struct
+        >>> 
+        >>> buf = struct.pack('<HH', 1, 2) + struct.pack('<HH', 3, 4)
+        >>> for a, b in struct.iter_unpack('<HH', buf):
+        ...     print(a, b)
+        1 2
+        3 4
+    ```
+    """
+    ...
+
+
+class Struct:
+    """
+    Pre-compiled struct format.
+
+    Equivalent to calling ``struct.pack()`` / ``struct.unpack()`` with a
+    fixed format string, but avoids re-parsing the format on every call.
+
+    Example
+    -------
+    ```python
+        >>> import struct
+        >>> 
+        >>> s = struct.Struct('<HI')
+        >>> buf = s.pack(10, 200)
+        >>> s.unpack(buf)
+        (10, 200)
+    ```
+    """
+
+    def __init__(self, fmt: str) -> None:
+        """
+        Create a ``Struct`` object for the given format string *fmt*.
+
+        :param fmt: Pack format string.
+
+        Example
+        -------
+        ```python
+            >>> import struct
+            >>> s = struct.Struct('>BH')
+        ```
+        """
+        ...
+
+    @property
+    def format(self) -> str:
+        """The format string passed to the constructor."""
+        ...
+
+    @property
+    def size(self) -> int:
+        """Byte size of the struct."""
+        ...
+
+    def pack(self, *values: Any) -> bytes:
+        """
+        Pack *values* according to this struct's format.
+
+        :returns: Packed bytes.
+
+        Example
+        -------
+        ```python
+            >>> s = struct.Struct('<HI')
+            >>> s.pack(1, 2)
+            b'\\x01\\x00\\x02\\x00\\x00\\x00'
+        ```
+        """
+        ...
+
+    def pack_into(self, buffer: bytearray, offset: int, *values: Any) -> None:
+        """
+        Pack *values* into *buffer* at *offset*.
+
+        :param buffer: Writable buffer.
+        :param offset: Byte offset into the buffer.
+
+        Example
+        -------
+        ```python
+            >>> buf = bytearray(6)
+            >>> s = struct.Struct('<HI')
+            >>> s.pack_into(buf, 0, 1, 2)
+        ```
+        """
+        ...
+
+    def unpack(self, buffer: Union[bytes, bytearray]) -> tuple:
+        """
+        Unpack from *buffer*.
+
+        :param buffer: Buffer containing packed data.
+        :returns: Tuple of unpacked values.
+
+        Example
+        -------
+        ```python
+            >>> s = struct.Struct('<HI')
+            >>> s.unpack(b'\\x01\\x00\\x02\\x00\\x00\\x00')
+            (1, 2)
+        ```
+        """
+        ...
+
+    def unpack_from(self, buffer: Union[bytes, bytearray], offset: int = 0) -> tuple:
+        """
+        Unpack from *buffer* starting at *offset*.
+
+        :param buffer: Buffer containing packed data.
+        :param offset: Byte offset into the buffer.
+        :returns: Tuple of unpacked values.
+
+        Example
+        -------
+        ```python
+            >>> s = struct.Struct('<HI')
+            >>> s.unpack_from(b'\\x00' * 2 + b'\\x01\\x00\\x02\\x00\\x00\\x00', 2)
+            (1, 2)
+        ```
+        """
+        ...
+
+    def iter_unpack(self, buffer: Union[bytes, bytearray]) -> Iterator[tuple]:
+        """
+        Iteratively unpack from *buffer*.
+
+        :param buffer: Buffer to unpack from.
+        :returns: Iterator of tuples.
+
+        Example
+        -------
+        ```python
+            >>> s = struct.Struct('<HH')
+            >>> for a, b in s.iter_unpack(b'\\x01\\x00\\x02\\x00\\x03\\x00\\x04\\x00'):
+            ...     print(a, b)
+        ```
+        """
+        ...

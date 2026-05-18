@@ -143,6 +143,133 @@ def split(pattern: str, string: str, maxsplit: int = 0) -> list[str]:
     ...
 
 
+def fullmatch(pattern: str, string: str) -> Optional['match']:
+    """
+    Match pattern against entire string.
+
+    Returns a match object only if the whole string matches the pattern;
+    returns ``None`` otherwise.
+
+    :param pattern: Regex pattern string.
+    :param string: String to match against.
+    :returns: Match object or ``None``.
+
+    Example
+    -------
+    ```python
+        >>> import re
+        >>> 
+        >>> re.fullmatch(r'\\d+', '123')   # match: entire string is digits
+        >>> re.fullmatch(r'\\d+', '12x')   # None: 'x' is not a digit
+    ```
+    """
+    ...
+
+
+def findall(pattern: str, string: str) -> list:
+    """
+    Return all non-overlapping matches as a list.
+
+    If the pattern has no groups, returns a list of strings.
+    If the pattern has one group, returns a list of group strings.
+    If the pattern has multiple groups, returns a list of tuples.
+
+    :param pattern: Regex pattern string.
+    :param string: String to search.
+    :returns: List of matches.
+
+    Example
+    -------
+    ```python
+        >>> import re
+        >>> 
+        >>> re.findall(r'\\d+', 'a1 b22 c333')
+        ['1', '22', '333']
+    ```
+    """
+    ...
+
+
+def finditer(pattern: str, string: str) -> Iterator['match']:
+    """
+    Return an iterator over all non-overlapping match objects.
+
+    :param pattern: Regex pattern string.
+    :param string: String to search.
+    :returns: Iterator of match objects.
+
+    Example
+    -------
+    ```python
+        >>> import re
+        >>> 
+        >>> for m in re.finditer(r'\\d+', 'a1 b22 c333'):
+        ...     print(m.group(), m.start())
+    ```
+    """
+    ...
+
+
+def subn(pattern: str, repl: Union[str, callable], string: str, count: int = 0) -> tuple:
+    """
+    Like ``sub()``, but return a 2-tuple ``(new_string, number_of_subs_made)``.
+
+    :param pattern: Regex pattern string.
+    :param repl: Replacement string or callable.
+    :param string: Input string.
+    :param count: Maximum number of substitutions (0 = all).
+    :returns: Tuple ``(result_string, count)`` where *count* is the number of replacements made.
+
+    Example
+    -------
+    ```python
+        >>> import re
+        >>> 
+        >>> re.subn(r'\\s+', ' ', 'a   b  c')
+        ('a b c', 2)
+    ```
+    """
+    ...
+
+
+def escape(pattern: str) -> str:
+    """
+    Escape special regex characters in *pattern*.
+
+    Returns a string with all non-alphanumeric characters backslash-escaped,
+    so it can be used as a literal string in a regex.
+
+    :param pattern: String to escape.
+    :returns: Escaped string.
+
+    Example
+    -------
+    ```python
+        >>> import re
+        >>> 
+        >>> re.escape('1+1=2')
+        '1\\\\+1\\\\=2'
+        >>> re.search(re.escape('file.txt'), 'dir/file.txt')
+    ```
+    """
+    ...
+
+
+def purge() -> None:
+    """
+    Clear the regular expression cache.
+
+    Example
+    -------
+    ```python
+        >>> import re
+        >>> 
+        >>> re.purge()
+    ```
+    """
+    ...
+
+
 class regex:
     """
     Compiled regular expression.

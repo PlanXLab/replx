@@ -338,3 +338,147 @@ class ptr:
     def __init__(self, buf: Any) -> None: ...
     def __getitem__(self, index: int) -> int: ...
     def __setitem__(self, index: int, value: int) -> None: ...
+
+
+class RingIO:
+    """
+    A non-blocking ring buffer stream supporting the asyncio stream protocol.
+
+    ``RingIO`` provides a FIFO buffer that can be used to pass data between
+    coroutines or interrupt handlers without blocking.  It implements
+    `asyncio.Stream`-compatible ``read``, ``readline``, ``write`` methods so
+    it can be awaited with ``asyncio.StreamReader``/``StreamWriter``.
+
+    Example
+    -------
+    ```python
+        >>> import micropython
+        >>> 
+        >>> rio = micropython.RingIO(64)
+        >>> rio.write(b"hello")
+        5
+        >>> rio.any()
+        5
+        >>> rio.read(5)
+        b'hello'
+    ```
+    """
+
+    def __init__(self, size: int) -> None:
+        """
+        Create a ``RingIO`` with a buffer of *size* bytes.
+
+        :param size: Buffer size in bytes.
+
+        Example
+        -------
+        ```python
+            >>> import micropython
+            >>> rio = micropython.RingIO(128)
+        ```
+        """
+        ...
+
+    def any(self) -> int:
+        """
+        Return the number of bytes available to read without blocking.
+
+        :returns: Number of bytes ready in the buffer.
+
+        Example
+        -------
+        ```python
+            >>> rio.write(b"abc")
+            >>> rio.any()
+            3
+        ```
+        """
+        ...
+
+    def read(self, nbytes: Optional[int] = None) -> bytes:
+        """
+        Read and return up to *nbytes* bytes.  If *nbytes* is omitted,
+        read as many bytes as are immediately available (non-blocking).
+
+        :param nbytes: Maximum number of bytes to read.
+        :returns: Bytes read from the buffer.
+
+        Example
+        -------
+        ```python
+            >>> rio.write(b"hello world")
+            >>> rio.read(5)
+            b'hello'
+        ```
+        """
+        ...
+
+    def readinto(self, buf: bytearray, nbytes: Optional[int] = None) -> int:
+        """
+        Read bytes into *buf*.  If *nbytes* is provided, read at most that
+        many bytes.  Returns the number of bytes read.
+
+        :param buf: Buffer to read data into.
+        :param nbytes: Optional maximum number of bytes to read.
+        :returns: Number of bytes actually read.
+
+        Example
+        -------
+        ```python
+            >>> buf = bytearray(8)
+            >>> rio.write(b"data")
+            >>> rio.readinto(buf, 4)
+            4
+        ```
+        """
+        ...
+
+    def readline(self, nbytes: Optional[int] = None) -> bytes:
+        """
+        Read up to a newline character (``\\n``).  If *nbytes* is given,
+        read at most that many bytes.  Returns bytes including the newline
+        if found, otherwise all available bytes.
+
+        :param nbytes: Optional maximum number of bytes to read.
+        :returns: Bytes up to and including the newline.
+
+        Example
+        -------
+        ```python
+            >>> rio.write(b"line1\\nline2")
+            >>> rio.readline()
+            b'line1\\n'
+        ```
+        """
+        ...
+
+    def write(self, buf: bytes) -> int:
+        """
+        Write *buf* to the ring buffer.  Returns the number of bytes
+        written, which may be less than ``len(buf)`` if the buffer is full.
+
+        :param buf: Data to write.
+        :returns: Number of bytes actually written.
+
+        Example
+        -------
+        ```python
+            >>> rio = micropython.RingIO(64)
+            >>> rio.write(b"hello")
+            5
+        ```
+        """
+        ...
+
+    def close(self) -> None:
+        """
+        Close the ``RingIO`` and release its buffer.
+
+        Example
+        -------
+        ```python
+            >>> rio = micropython.RingIO(64)
+            >>> rio.close()
+        ```
+        """
+        ...

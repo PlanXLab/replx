@@ -433,3 +433,412 @@ def country(code: str = None) -> Optional[str]:
     ```
     """
     ...
+
+
+def ipconfig(*args: Any, **kwargs: Any) -> Any:
+    """
+    Get or set global IP-configuration parameters.
+
+    Supported parameters:
+
+    * ``dns`` – Get/set DNS server (supports IPv4 and IPv6 addresses).
+    * ``prefer`` (``4`` or ``6``) – Specify which address family to return
+      when a domain name has both A and AAAA records.
+
+    :returns: Parameter value when called as getter, ``None`` when setting.
+
+    Example
+    -------
+    ```python
+        >>> import network
+        >>> 
+        >>> # Get current DNS server
+        >>> network.ipconfig('dns')
+        '8.8.8.8'
+        >>> # Set DNS server
+        >>> network.ipconfig(dns='8.8.4.4')
+        >>> # Prefer IPv4 when both A and AAAA records exist
+        >>> network.ipconfig(prefer=4)
+    ```
+    """
+    ...
+
+
+def route(*args: Any, **kwargs: Any) -> Any:
+    """
+    Get or set entries in the routing table.
+
+    When called with no arguments, returns the current routing table.
+
+    Example
+    -------
+    ```python
+        >>> import network
+        >>> 
+        >>> network.route()
+    ```
+    """
+    ...
+
+
+class AbstractNIC:
+    """
+    Abstract base class for network interface objects.
+
+    Provides the common interface that all MicroPython network drivers
+    must implement (``WLAN``, ``LAN``, etc.).
+
+    Example
+    -------
+    ```python
+        >>> import network
+        >>> 
+        >>> nic = network.WLAN(network.STA_IF)  # concrete subclass
+        >>> nic.active(True)
+        >>> nic.connect('ssid', 'password')
+    ```
+    """
+
+    def active(self, is_active: Optional[bool] = None) -> Optional[bool]:
+        """
+        Activate or deactivate the interface.  Without arguments, query
+        the current state.
+
+        :param is_active: ``True`` to activate, ``False`` to deactivate.
+        :returns: Current state when called with no arguments.
+
+        Example
+        -------
+        ```python
+            >>> nic.active(True)
+            >>> nic.active()
+            True
+        ```
+        """
+        ...
+
+    def connect(self, service_id: Any = None, key: Optional[str] = None, **kwargs: Any) -> None:
+        """
+        Connect to a network.  Optional on always-connected interfaces.
+
+        :param service_id: Network identifier (e.g. SSID).
+        :param key: Authentication credential (e.g. password).
+
+        Example
+        -------
+        ```python
+            >>> nic.connect('MySSID', 'password')
+        ```
+        """
+        ...
+
+    def disconnect(self) -> None:
+        """
+        Disconnect from the current network.
+
+        Example
+        -------
+        ```python
+            >>> nic.disconnect()
+        ```
+        """
+        ...
+
+    def isconnected(self) -> bool:
+        """
+        Return ``True`` if connected to a network.
+
+        :returns: Connection state.
+
+        Example
+        -------
+        ```python
+            >>> while not nic.isconnected():
+            ...     pass
+        ```
+        """
+        ...
+
+    def status(self, param: Optional[str] = None) -> Any:
+        """
+        Query dynamic status of the interface.  With no argument, return
+        the network link status.  Pass a string parameter name for specific
+        values (e.g. ``'rssi'``, ``'stations'``).
+
+        :param param: Optional status parameter name.
+        :returns: Status value.
+
+        Example
+        -------
+        ```python
+            >>> nic.status('rssi')
+            -55
+        ```
+        """
+        ...
+
+    def ifconfig(self, ip_mask_gw_dns: Optional[Tuple[str, str, str, str]] = None) -> Optional[Tuple[str, str, str, str]]:
+        """
+        Get or set IP-level parameters (IP, subnet mask, gateway, DNS).
+        Deprecated – prefer ``ipconfig()``.
+
+        :param ip_mask_gw_dns: 4-tuple to set, omit to get.
+        :returns: Current IP configuration 4-tuple when called with no args.
+
+        Example
+        -------
+        ```python
+            >>> nic.ifconfig()
+            ('192.168.1.5', '255.255.255.0', '192.168.1.1', '8.8.8.8')
+            >>> nic.ifconfig(('192.168.1.10', '255.255.255.0', '192.168.1.1', '8.8.8.8'))
+        ```
+        """
+        ...
+
+    def ipconfig(self, *args: Any, **kwargs: Any) -> Any:
+        """
+        Get or set interface-level IP-configuration parameters.
+
+        :returns: Parameter value when used as getter.
+
+        Example
+        -------
+        ```python
+            >>> nic.ipconfig('addr4')
+            ('192.168.1.5', 24)
+        ```
+        """
+        ...
+
+    def config(self, param: Optional[str] = None, **kwargs: Any) -> Any:
+        """
+        Get or set general network interface parameters.
+
+        :param param: Parameter name string to query.
+        :returns: Parameter value when called as getter.
+
+        Example
+        -------
+        ```python
+            >>> nic.config('mac')
+            b'\\xde\\xad\\xbe\\xef\\x00\\x01'
+            >>> nic.config(txpower=20)
+        ```
+        """
+        ...
+
+
+class WLANWiPy:
+    """
+    WiPy-specific WLAN class.
+
+    Provides the WLAN interface for WiPy boards with WiPy-specific extensions.
+
+    Example
+    -------
+    ```python
+        >>> import network
+        >>> 
+        >>> wlan = network.WLANWiPy(network.STA_IF)
+        >>> wlan.active(True)
+        >>> wlan.connect('MySSID', auth=(network.WPA2, 'password'))
+    ```
+    """
+
+    STA: int
+    AP: int
+    WEP: int
+    WPA: int
+    WPA2: int
+    INT_ANT: int
+    EXT_ANT: int
+
+    def __init__(self, mode: int, *, ssid: Optional[str] = None, auth: Optional[tuple] = None,
+                 channel: int = 1, antenna: int = 0) -> None:
+        """
+        Create a WLANWiPy object.
+
+        :param mode: ``STA`` or ``AP``.
+        :param ssid: SSID for AP mode.
+        :param auth: Authentication tuple ``(security, password)``.
+        :param channel: WiFi channel (AP mode).
+        :param antenna: Antenna selection.
+
+        Example
+        -------
+        ```python
+            >>> wlan = network.WLANWiPy(network.STA_IF)
+        ```
+        """
+        ...
+
+    def active(self, is_active: Optional[bool] = None) -> Optional[bool]:
+        """
+        Activate or deactivate the WLAN interface.
+
+        Example
+        -------
+        ```python
+            >>> wlan.active(True)
+        ```
+        """
+        ...
+
+    def connect(self, ssid: str, *, auth: Optional[tuple] = None,
+                bssid: Optional[bytes] = None, timeout: Optional[int] = None) -> None:
+        """
+        Connect to a WiFi network.
+
+        :param ssid: Network SSID.
+        :param auth: Authentication tuple ``(security, password)``.
+        :param bssid: Target AP MAC address.
+        :param timeout: Connection timeout in milliseconds.
+
+        Example
+        -------
+        ```python
+            >>> wlan.connect('MySSID', auth=(network.WPA2, 'password'))
+        ```
+        """
+        ...
+
+    def disconnect(self) -> None:
+        """
+        Disconnect from the current network.
+
+        Example
+        -------
+        ```python
+            >>> wlan.disconnect()
+        ```
+        """
+        ...
+
+    def isconnected(self) -> bool:
+        """
+        Return ``True`` if connected to an AP.
+
+        :returns: Connection state.
+
+        Example
+        -------
+        ```python
+            >>> wlan.isconnected()
+            True
+        ```
+        """
+        ...
+
+    def ifconfig(self, config: Optional[Any] = None) -> Optional[tuple]:
+        """
+        Get or set IP configuration.
+
+        :param config: ``'dhcp'`` or 4-tuple ``(ip, mask, gw, dns)``.
+        :returns: Current configuration tuple when called with no args.
+
+        Example
+        -------
+        ```python
+            >>> wlan.ifconfig()
+            ('192.168.1.5', '255.255.255.0', '192.168.1.1', '8.8.8.8')
+        ```
+        """
+        ...
+
+    def mode(self, mode: Optional[int] = None) -> Optional[int]:
+        """
+        Get or set the WLAN mode.
+
+        :param mode: ``STA`` or ``AP``.
+        :returns: Current mode when called with no args.
+
+        Example
+        -------
+        ```python
+            >>> wlan.mode(network.STA_IF)
+        ```
+        """
+        ...
+
+    def ssid(self, ssid: Optional[str] = None) -> Optional[str]:
+        """
+        Get or set the SSID.
+
+        Example
+        -------
+        ```python
+            >>> wlan.ssid()
+            'MySSID'
+        ```
+        """
+        ...
+
+    def auth(self, auth: Optional[tuple] = None) -> Optional[tuple]:
+        """
+        Get or set the authentication configuration.
+
+        :param auth: Authentication tuple ``(security, password)``.
+        :returns: Current auth tuple when called with no args.
+
+        Example
+        -------
+        ```python
+            >>> wlan.auth()
+            (3, 'password')
+        ```
+        """
+        ...
+
+    def channel(self, channel: Optional[int] = None) -> Optional[int]:
+        """
+        Get or set the WiFi channel.
+
+        Example
+        -------
+        ```python
+            >>> wlan.channel(6)
+        ```
+        """
+        ...
+
+    def antenna(self, antenna: Optional[int] = None) -> Optional[int]:
+        """
+        Get or set the antenna selection.
+
+        Example
+        -------
+        ```python
+            >>> wlan.antenna(network.EXT_ANT)
+        ```
+        """
+        ...
+
+    def mac(self) -> bytes:
+        """
+        Return the MAC address as a 6-byte bytes object.
+
+        :returns: MAC address.
+
+        Example
+        -------
+        ```python
+            >>> wlan.mac()
+            b'\\xde\\xad\\xbe\\xef\\x00\\x01'
+        ```
+        """
+        ...
+
+    def scan(self) -> list:
+        """
+        Scan for available networks.
+
+        :returns: List of tuples ``(ssid, bssid, channel, rssi, security)``.
+
+        Example
+        -------
+        ```python
+            >>> for net in wlan.scan():
+            ...     print(net)
+        ```
+        """
+        ...
