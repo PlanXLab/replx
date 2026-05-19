@@ -28,17 +28,12 @@ from ..app import app
 _MIP_INDEX_URL = "https://micropython.org/pi/v2"
 _MIP_INDEX_TTL = 3600  # 1 hour
 
-# MicroPython mpy arch codes (py/persistentcode.h MP_NATIVE_ARCH_* enum)
 _MIP_MPY_ARCH_CODES = {
     1: "x86", 2: "x64", 3: "armv6", 4: "armv6m",
     5: "armv7m", 6: "armv7em", 7: "armv7emsp", 8: "armv7emdp",
     9: "xtensa", 10: "xtensawin", 11: "rv32imc", 12: "rv64imc",
 }
 
-
-# ---------------------------------------------------------------------------
-# Storage helpers
-# ---------------------------------------------------------------------------
 
 def _mip_root() -> Path:
     root = StoreManager.HOME_STORE / "mip"
@@ -107,10 +102,6 @@ def _save_mip_meta(meta: dict):
         json.dump(meta, f, ensure_ascii=False, indent=2)
     os.replace(tmp, str(p))
 
-
-# ---------------------------------------------------------------------------
-# URL helpers
-# ---------------------------------------------------------------------------
 
 def _rewrite_github_url(spec: str, branch: str = "HEAD") -> str:
     """github:org/repo[/path] → https://raw.githubusercontent.com/org/repo/HEAD/[path]"""
@@ -304,10 +295,6 @@ def _collect_github_directory_files(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Package resolution & file collection
-# ---------------------------------------------------------------------------
-
 def _get_mpy_abi_from_state() -> str:
     """Derive the mpy ABI version number from the connected board's firmware version.
 
@@ -367,12 +354,6 @@ def _collect_github_pages_files(
     abi_str: str,
     staging_files_dir: Path,
 ) -> list[tuple[str, str]] | None:
-    """Try GitHub Pages CDN: {org}.github.io/{repo}/builds/latest/{arch}_{abi}/
-
-    Uses gh-pages branch via GitHub Contents API.
-    Returns list of (local_path, filename), or None if not found.
-    """
-    # Try both "6.3" and "6" style suffixes
     suffixes = [abi_str]
     if "." in abi_str:
         suffixes.append(abi_str.split(".")[0])
@@ -415,7 +396,6 @@ def _collect_github_pages_files(
 
 
 def _package_json_url(target: str, version: Optional[str], index_url: str, mpy_abi: str = "py") -> tuple[str, str]:
-    """Returns (package_json_url, base_url_for_relative_paths)."""
     if target.startswith("github:"):
         base = _rewrite_github_url(target, version or "HEAD")
         pkg_url = f"{base}/package.json"
@@ -425,7 +405,7 @@ def _package_json_url(target: str, version: Optional[str], index_url: str, mpy_a
             return target, target.rpartition("/")[0]
         pkg_url = target.rstrip("/") + "/package.json"
         return pkg_url, target.rstrip("/")
-    # Named package from registry
+
     ver = version or "latest"
     pkg_url = f"{index_url}/package/{mpy_abi}/{target}/{ver}.json"
     return pkg_url, index_url
@@ -452,14 +432,12 @@ def _collect_install_files(
         return []
     visited.add(visit_key)
 
-    # Single .py/.mpy URL — download directly
     if target.startswith(("http://", "https://")) and target.endswith((".py", ".mpy")):
         filename = target.rsplit("/", 1)[-1]
         local_path = str(staging_files_dir / filename)
         _write_file(local_path, _download_bytes(target))
         return [(local_path, filename)]
 
-    # Standard mip-compatible GitHub file target: github:org/repo/path/foo.py
     if target.startswith("github:"):
         _, _, github_path, _ = _parse_github_spec(target, version)
         if github_path.endswith((".py", ".mpy")):
@@ -479,7 +457,6 @@ def _collect_install_files(
 
     result: list[tuple[str, str]] = []
 
-    # hashes → pre-compiled .mpy from CDN (ABI-versioned, no recompilation needed)
     for dest_rel, short_hash in pkg_json.get("hashes", []):
         dest_rel = dest_rel.replace("\\", "/")
         file_url = f"{index_url}/file/{short_hash[:2]}/{short_hash}"
@@ -487,7 +464,6 @@ def _collect_install_files(
         _write_file(local_path, _download_bytes(file_url))
         result.append((local_path, dest_rel))
 
-    # urls → source .py files
     for dest_rel, file_url in pkg_json.get("urls", []):
         dest_rel = dest_rel.replace("\\", "/")
         if not file_url.startswith(("http://", "https://")):
@@ -496,7 +472,6 @@ def _collect_install_files(
         _write_file(local_path, _download_bytes(file_url))
         result.append((local_path, dest_rel))
 
-    # deps → recurse
     for dep_name, dep_version in pkg_json.get("deps", []):
         sub = _collect_install_files(dep_name, dep_version or None, index_url, staging_files_dir, visited, mpy_abi)
         result.extend(sub)
@@ -504,12 +479,7 @@ def _collect_install_files(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Board helpers
-# ---------------------------------------------------------------------------
-
 def _ensure_remote_dirs(paths: set[str], client) -> None:
-    """Ensure all given absolute remote directory paths exist on the board."""
     all_paths: set[str] = set()
     for path in paths:
         parts = [p for p in path.replace("\\", "/").strip("/").split("/") if p]
@@ -533,10 +503,6 @@ def _upload_file_with_progress(client, local_path: str, remote_path: str, progre
     )
 
 
-# ---------------------------------------------------------------------------
-# Command entry point
-# ---------------------------------------------------------------------------
-
 @app.command(name="mip", rich_help_panel="Package Management")
 def mip(
     args: list[str] = typer.Argument(None, help="Subcommand and arguments"),
@@ -545,7 +511,6 @@ def mip(
     no_compile: bool = typer.Option(False, "--no-compile", help="Skip .mpy compilation, upload .py as-is"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
-    """Manage MicroPython community packages from micropython.org."""
     if show_help:
         help_text = """\
 MicroPython community package manager (micropython.org/pi/v2).
@@ -616,10 +581,6 @@ MicroPython community package manager (micropython.org/pi/v2).
         )
         raise typer.Exit(1)
 
-
-# ---------------------------------------------------------------------------
-# search
-# ---------------------------------------------------------------------------
 
 def _mip_search(args: list[str], index_url: str):
     query = args[0] if args else None
@@ -711,7 +672,6 @@ def _mip_search_github(spec: str):
     try:
         pkg_json = _fetch_json(pkg_json_url)
     except typer.BadParameter:
-        # No package.json — fall back to showing repo contents via GitHub API
         org, repo, sub_path, ref = _parse_github_spec(spec)
         _mip_search_github_contents(spec, org, repo, sub_path, ref)
         return
@@ -736,7 +696,6 @@ def _mip_search_github(spec: str):
 
 
 def _mip_search_github_contents(spec: str, org: str, repo: str, sub_path: str, ref: str = ""):
-    """Fallback: show repo contents via GitHub Contents API when package.json is absent."""
     try:
         items = _fetch_github_contents(org, repo, sub_path, ref)
     except typer.BadParameter as e:
@@ -831,10 +790,6 @@ def _mip_search_github_contents(spec: str, org: str, repo: str, sub_path: str, r
     OutputHelper.print_panel("\n".join(lines), title=f"GitHub: {spec}", border_style="data")
 
 
-# ---------------------------------------------------------------------------
-# install
-# ---------------------------------------------------------------------------
-
 def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: bool):
     _ensure_connected()
 
@@ -853,7 +808,6 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
     target_spec = args[0]
     version: Optional[str] = None
 
-    # Parse version suffix (only for plain names, not URLs or github: specs)
     if (
         "@" in target_spec
         and not target_spec.startswith(("http://", "https://", "github:"))
@@ -862,7 +816,6 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
 
     pkg_display = target_spec + (f"@{version}" if version else "")
 
-    # Staging directory for this install (cleaned up afterwards)
     slug = hashlib.md5(f"{target_spec}{version or ''}".encode()).hexdigest()[:8]
     staging_dir = _mip_staging() / slug
     if staging_dir.exists():
@@ -870,8 +823,6 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
     staging_files_dir = staging_dir / "files"
     staging_files_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Step 1: Collect all files ---
-    # Use mpy ABI version to get pre-compiled .mpy from CDN; fall back to source if --no-compile
     mpy_abi = "py" if no_compile else _get_mpy_abi_from_state()
     abi_note = f"[dim] (mpy ABI {mpy_abi})[/dim]" if mpy_abi != "py" else ""
     OutputHelper._console.print(
@@ -880,7 +831,6 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
     try:
         files = _collect_install_files(target_spec, version, index_url, staging_files_dir, mpy_abi=mpy_abi)
     except Exception as e:
-        # github:org/repo (no sub-path) + 404 → try GitHub Pages CDN
         _pkg_error = e
         files = None
         if target_spec.startswith("github:") and "404" in str(e):
@@ -929,9 +879,8 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
         )
         raise typer.Exit(1)
 
-    # --- Step 2: Compile .py → .mpy (unless --no-compile) ---
     device_base = device_path.strip("/")
-    upload_specs: list[tuple[str, str]] = []  # (local_path, remote_path)
+    upload_specs: list[tuple[str, str]] = [] 
 
     for local_path, dest_rel in files:
         dest_rel = dest_rel.replace("\\", "/")
@@ -954,7 +903,6 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
             remote_path = f"/{device_base}/{dest_rel}"
             upload_specs.append((local_path, remote_path.replace("//", "/")))
 
-    # --- Step 3: Create remote directories ---
     client = _create_agent_client()
     unique_dirs: set[str] = set()
     for _, remote_path in upload_specs:
@@ -963,7 +911,6 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
             unique_dirs.add(d)
     _ensure_remote_dirs(unique_dirs, client)
 
-    # --- Step 4: Upload with progress ---
     total_files = len(upload_specs)
     file_sizes = [
         os.path.getsize(lp) if os.path.exists(lp) else 0
@@ -1046,7 +993,6 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
             )
         )
 
-    # --- Step 5: Clean staging ---
     try:
         shutil.rmtree(staging_dir)
     except Exception:
@@ -1061,7 +1007,6 @@ def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: 
             border_style="warning",
         )
 
-    # --- Step 6: Update mip_meta ---
     meta = _load_mip_meta()
     meta["packages"][target_spec] = {
         "version": version or "latest",

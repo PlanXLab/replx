@@ -75,16 +75,14 @@ _SYNTAX_THEME_MAP = {
     'github-light': 'friendly',
 }
 
-# Maps panel category names to base color keys in _THEME_STYLES.
-# All print_panel() calls must use one of these category names as border_style.
 _CATEGORY_COLOR_KEYS: dict[str, str] = {
-    'help':    'blue',      # --help and router no-arg subcommand hint panels
-    'success': 'green',     # operation completed successfully
-    'data':    'cyan',      # status / read-only query results
-    'mode':    'magenta',   # interactive mode entry banners (REPL, Shell)
-    'warning': 'yellow',    # warnings / partial failures / caution
-    'neutral': 'dim',       # no-op / already in that state / cancelled
-    'error':   'red',       # errors, invalid input, failures
+    'help':    'blue',
+    'success': 'green',
+    'data':    'cyan',
+    'mode':    'magenta',
+    'warning': 'yellow',
+    'neutral': 'dim',
+    'error':   'red',
 }
 
 VALID_PANEL_CATEGORIES: tuple[str, ...] = tuple(_CATEGORY_COLOR_KEYS)

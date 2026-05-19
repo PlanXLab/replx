@@ -1,5 +1,6 @@
 import sys
 import importlib
+from contextlib import contextmanager
 from typing import Optional
 import typer
 from rich.panel import Panel
@@ -95,10 +96,6 @@ def _preprocess_cli_aliases():
                 sys.argv[i] = aliases[arg]
             break
 
-_preprocess_connection_shortcut()
-_preprocess_cli_aliases()
-
-
 def _apply_workspace_theme() -> None:
     theme = 'dark'
     try:
@@ -166,8 +163,6 @@ _original_usage_error_format_message = UsageError.format_message
 
 def _custom_context_get_usage(self):
     return ""
-
-click.Context.get_usage = _custom_context_get_usage
 
 
 def _build_command_help(ctx) -> str:
@@ -303,7 +298,17 @@ def _handle_usage_error(e):
         width=CONSOLE_WIDTH
     ))
 
-UsageError.show = _custom_usage_error_show
+@contextmanager
+def _patched_click_error_rendering():
+    original_get_usage = click.Context.get_usage
+    original_usage_error_show = UsageError.show
+    click.Context.get_usage = _custom_context_get_usage
+    UsageError.show = _custom_usage_error_show
+    try:
+        yield
+    finally:
+        click.Context.get_usage = original_get_usage
+        UsageError.show = original_usage_error_show
 
 
 app = typer.Typer(
@@ -494,6 +499,9 @@ def cli(
         raise typer.Exit()
 
 def main():
+    _preprocess_connection_shortcut()
+    _preprocess_cli_aliases()
+
     if len(sys.argv) == 1:
         OutputHelper.print_panel(
             "Use [bright_blue]replx --help[/bright_blue] to see available commands.",
@@ -641,7 +649,8 @@ def main():
         from .helpers.environment import EnvironmentManager
 
         EnvironmentManager.load_env_from_rep()
-        app(standalone_mode=False)
+        with _patched_click_error_rendering():
+            app(standalone_mode=False)
         exit_code = 0
     except click.exceptions.UsageError as e:
         _handle_usage_error(e)

@@ -188,6 +188,16 @@ class BoardConnection:
 
     def is_connected(self) -> bool:
         return self.repl_protocol is not None
+
+    def busy_snapshot(self) -> tuple[bool, Optional[str], Optional[int], Optional[tuple], bool]:
+        with self._busy_lock:
+            return (
+                self.busy,
+                self.busy_command,
+                self.busy_session,
+                self.busy_client,
+                self.detached_running,
+            )
     
     def is_detached(self) -> bool:
         with self._busy_lock:
@@ -232,6 +242,16 @@ class BoardConnection:
             self.busy_session = None
             self.busy_command = None
             self.busy_client = None
+
+    def set_busy_state(self, busy: bool, command: str = None, session: int = None,
+                       client_addr: tuple = None) -> None:
+        with self._busy_lock:
+            self.busy = busy
+            self.busy_command = command if busy else None
+            self.busy_session = session if busy else None
+            self.busy_client = client_addr if busy else None
+            if busy:
+                self.last_command_time = time.time()
 
     def force_release_if_stale(self, timeout_s: float = None) -> bool:
         """Forcefully release a busy lock that has been held too long.
@@ -481,6 +501,7 @@ class ConnectionManager:
         if not conn:
             return None
 
+        busy, busy_command, _busy_session, _busy_client, _detached = conn.busy_snapshot()
         return {
             'port': conn.port,
             'connected': conn.is_connected(),
@@ -489,8 +510,8 @@ class ConnectionManager:
             'manufacturer': conn.manufacturer,
             'version': conn.version,
             'device_root_fs': conn.device_root_fs,
-            'busy': conn.busy,
-            'busy_command': conn.busy_command,
+            'busy': busy,
+            'busy_command': busy_command,
             'board_id': conn.board_id
         }
 
@@ -506,15 +527,11 @@ class ConnectionManager:
     def set_busy(self, port: str, busy: bool, command: str = None, session: int = None):
         conn = self.get_connection(port)
         if conn:
-            conn.busy = busy
-            conn.busy_command = command if busy else None
-            conn.busy_session = session if busy else None
-            if busy:
-                conn.last_command_time = time.time()
+            conn.set_busy_state(busy, command=command, session=session)
 
     def is_busy(self, port: str) -> bool:
         conn = self.get_connection(port)
-        return conn.busy if conn else False
+        return conn.busy_snapshot()[0] if conn else False
 
     def check_health(self, port: str) -> bool:
         conn = self.get_connection(port)

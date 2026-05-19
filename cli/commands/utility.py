@@ -2,7 +2,6 @@ import os
 import re
 import time
 import threading
-import sys
 from typing import Optional
 
 import typer

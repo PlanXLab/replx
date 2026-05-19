@@ -341,7 +341,7 @@ class LineModeTerminal:
 
     def __init__(self, hex_mode: bool = False):
         self.hex_mode = hex_mode
-        self._eol: str = "cr"  # "cr" | "lf" | "crlf"
+        self._eol: str = "cr" 
         self._buf: list[str] = []
         self._cols, self._rows = lmt_terminal_size()
         self._input_row = self._rows
@@ -385,7 +385,7 @@ class LineModeTerminal:
             return self._commit()
         if ch in (b"\x7f", b"\x08"):
             return self._backspace()
-        if ch == b"\x14":  # Ctrl+T — toggle EOL mode (text mode only)
+        if ch == b"\x14": 
             if not self.hex_mode:
                 self._toggle_eol()
             return None
@@ -472,7 +472,7 @@ class LineModeTerminal:
                 return None
         else:
             payload = raw.encode("utf-8")
-        # Save to history on successful commit
+
         if not self._history or self._history[-1] != raw:
             self._history.append(raw)
             if len(self._history) > 100:

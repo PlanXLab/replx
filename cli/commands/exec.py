@@ -23,7 +23,7 @@ from ..helpers import (
     OutputHelper, StoreManager,
     get_panel_box, CONSOLE_WIDTH
 )
-from ..config import STATE
+from ..config import STATE, ConfigManager
 from ..connection import (
     _ensure_connected, _create_agent_client,
     _get_current_agent_port, _get_global_options,
@@ -99,6 +99,14 @@ def _resolve_vscode_command() -> list[str] | None:
     candidates = ["code", "code-insiders", "codium"]
     comspec = os.environ.get("COMSPEC", "cmd.exe")
 
+    if sys.platform.startswith("win"):
+        vscode_cwd = os.environ.get("VSCODE_CWD")
+        if vscode_cwd:
+            for cmd_name in ("code.cmd", "code-insiders.cmd"):
+                cmd_path = Path(vscode_cwd) / "bin" / cmd_name
+                if cmd_path.exists():
+                    return [comspec, "/c", str(cmd_path)]
+
     for name in candidates:
         found = shutil.which(name)
         if found:
@@ -132,6 +140,12 @@ def _resolve_vscode_command() -> list[str] | None:
     return None
 
 
+def _is_missing_file_error(error: Exception | str) -> bool:
+    text = str(error).lower()
+    missing_markers = ('enoent', 'errno 2', 'no such file', 'file not found', 'not found', 'does not exist')
+    return any(marker in text for marker in missing_markers)
+
+
 def _file_md5(path: str) -> str | None:
     try:
         with open(path, "rb") as f:
@@ -155,6 +169,8 @@ def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> 
             if rc is not None:
                 if rc != 0:
                     return False, f"Editor exited with code {rc}"
+                if time.monotonic() - start_ts < 1.0:
+                    input("After saving and closing the VSCode tab, press Enter to continue...")
                 return True, None
 
             time.sleep(0.1)
@@ -171,6 +187,16 @@ def _open_editor_and_wait(local_path: str, original_hash: str | None = None) -> 
         return True, None
     except Exception as e:
         return False, str(e)
+
+
+def _make_edit_temp_dir() -> str:
+    try:
+        vscode_dir = ConfigManager.find_or_create_vscode_dir()
+        edit_root = os.path.join(vscode_dir, ".replx-edit")
+        os.makedirs(edit_root, exist_ok=True)
+        return tempfile.mkdtemp(prefix="session_", dir=edit_root)
+    except Exception:
+        return tempfile.mkdtemp(prefix='replx_edit_')
 
 
 @app.command(name="exec", rich_help_panel="Execution")
@@ -2291,31 +2317,57 @@ Manage WiFi connection.
                 else:
                     remote_path = posixpath.normpath(posixpath.join(current_path, file_arg))
                 
-                temp_dir = tempfile.mkdtemp(prefix='replx_edit_')
+                temp_dir = _make_edit_temp_dir()
                 
                 filename = posixpath.basename(remote_path)
                 local_path = os.path.join(temp_dir, filename)
                 
                 try:
                     client = _create_agent_client()
-                    
+
                     try:
-                        result = client.send_command('is_dir', path=remote_path)
-                        is_dir = result if isinstance(result, bool) else result.get('is_dir', False)
-                        if is_dir:
+                        result = client.send_command('stat', path=remote_path)
+                        file_exists_on_device = True
+                        is_dir = result.get('is_dir', False) if isinstance(result, dict) else False
+                    except Exception as e:
+                        stat_error = str(e)
+                        if not _is_missing_file_error(stat_error):
                             OutputHelper.print_panel(
-                                f"[yellow]'{remote_path}'[/yellow] is a directory, not a file.",
+                                f"Could not check [yellow]{remote_path}[/yellow]: {stat_error}",
                                 title="edit",
                                 border_style="error"
                             )
                             return
-                    except Exception:
-                        pass
-                    
-                    original_hash = None
-                    try:
-                        result = client.send_command('get_to_local', remote_path=remote_path, local_path=local_path)
-                        if isinstance(result, dict) and result.get('error'):
+                        file_exists_on_device = False
+                        is_dir = False
+
+                    if is_dir:
+                        OutputHelper.print_panel(
+                            f"[yellow]'{remote_path}'[/yellow] is a directory, not a file.",
+                            title="edit",
+                            border_style="error"
+                        )
+                        return
+
+                    if file_exists_on_device:
+                        try:
+                            result = client.send_command('get_to_local', remote_path=remote_path, local_path=local_path)
+                            if isinstance(result, dict) and result.get('error'):
+                                raise RuntimeError(result.get('error'))
+                            OutputHelper.print_panel(
+                                f"Downloaded: [yellow]{remote_path}[/yellow]",
+                                title="edit",
+                                border_style="success"
+                            )
+                        except Exception as e:
+                            if not _is_missing_file_error(e):
+                                OutputHelper.print_panel(
+                                    f"Could not download [yellow]{remote_path}[/yellow]: {e}",
+                                    title="edit",
+                                    border_style="error"
+                                )
+                                return
+                            file_exists_on_device = False
                             with open(local_path, 'w', encoding='utf-8') as f:
                                 pass
                             OutputHelper.print_panel(
@@ -2323,13 +2375,7 @@ Manage WiFi connection.
                                 title="edit",
                                 border_style='neutral'
                             )
-                        else:
-                            OutputHelper.print_panel(
-                                f"Downloaded: [yellow]{remote_path}[/yellow]",
-                                title="edit",
-                                border_style="success"
-                            )
-                    except Exception:
+                    else:
                         with open(local_path, 'w', encoding='utf-8') as f:
                             pass
                         OutputHelper.print_panel(
@@ -2359,17 +2405,24 @@ Manage WiFi connection.
                     with open(local_path, 'rb') as f:
                         new_hash = hashlib.md5(f.read()).hexdigest()
 
-                    if new_hash == original_hash:
+                    should_offer_upload = (new_hash != original_hash) or (not file_exists_on_device)
+
+                    if not should_offer_upload:
                         OutputHelper.print_panel(
                             "No changes detected.",
                             title="edit",
                             border_style='neutral'
                         )
                     else:
-                        print("File was modified. Apply the changes? [y/N]: ", end="", flush=True)
+                        prompt = (
+                            "File was modified. Save changes to board? [y/N]: "
+                            if file_exists_on_device
+                            else "Save new file to board? [y/N]: "
+                        )
+                        print(prompt, end="", flush=True)
                         response = sys.stdin.buffer.readline().decode(errors='replace').strip().lower()
-                        
-                        if response == 'y':
+
+                        if response in ('y', 'yes'):
                             result = client.send_command('put_from_local', local_path=local_path, remote_path=remote_path)
                             if isinstance(result, dict) and result.get('error'):
                                 OutputHelper.print_panel(

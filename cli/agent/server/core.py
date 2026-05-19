@@ -3,15 +3,13 @@ import contextlib
 import gc
 import os
 import sys
-import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any
 
 from replx.utils.constants import (
-    DEFAULT_AGENT_PORT, AGENT_HOST, MAX_CONNECTIONS, MAX_UDP_SIZE,
-    AGENT_SOCKET_TIMEOUT, HEARTBEAT_INTERVAL,
+    DEFAULT_AGENT_PORT, AGENT_HOST, MAX_CONNECTIONS, HEARTBEAT_INTERVAL,
     ZOMBIE_CHECK_INTERVAL, GC_THRESHOLD,
     GC_COLLECT_INTERVAL,
 )
@@ -20,6 +18,7 @@ from replx.commands import CmdGroups
 from replx.cli.agent.protocol import AgentProtocol
 from .connection_manager import ConnectionManager, BoardConnection
 from .session_manager import SessionManager, Session
+from .udp import AgentDatagramProtocol, UdpReliabilityMixin
 from .command_dispatcher import (
     CommandContext,
     NON_REPL_COMMANDS,
@@ -43,57 +42,11 @@ from .handlers import (
 
 gc.set_threshold(*GC_THRESHOLD)
 
-_LOOP_COMMANDS: frozenset[str] = frozenset({
-    'ping',
-    'status',
-    'session_info',
-})
-
-_FAST_COMMANDS: frozenset[str] = frozenset({
-    'repl_read',
-})
-
 _FAST_POOL_WORKERS = 4
 _SLOW_POOL_WORKERS = 16
 
-
-class _AgentDatagramProtocol(asyncio.DatagramProtocol):
-    __slots__ = ('_server',)
-
-    def __init__(self, server: 'AgentServer') -> None:
-        self._server = server
-
-    def datagram_received(self, data: bytes, addr: tuple) -> None:
-        server = self._server
-        if not server.running:
-            return
-        try:
-            msg = AgentProtocol.decode_message(data)
-            command = msg.get('command') if msg else None
-        except Exception:
-            command = None
-            msg = None
-
-        if msg is not None and command in _LOOP_COMMANDS:
-            server._handle_direct(msg, addr)
-            return
-
-        executor = (
-            server._fast_executor
-            if command in _FAST_COMMANDS
-            else server._slow_executor
-        )
-        executor.submit(server._handle_request, data, addr)
-
-    def error_received(self, exc: Exception) -> None:
-        if self._server.running:
-            print(f'UDP protocol error: {exc}', file=sys.stderr)
-
-    def connection_lost(self, exc: Exception | None) -> None:
-        pass
-
-
 class AgentServer(
+    UdpReliabilityMixin,
     SessionCommandsMixin,
     ExecCommandsMixin,
     FilesystemCommandsMixin,
@@ -113,10 +66,6 @@ class AgentServer(
         self._uart_bus: dict = {}
         self._spi_bus: dict = {}
 
-        self.last_seq: dict = {}
-        self._last_seq_lock = threading.Lock()
-        self._MAX_LAST_SEQ = 256
-
         self._command_handlers = self._build_command_handlers()
 
         self._fast_executor = ThreadPoolExecutor(
@@ -131,23 +80,7 @@ class AgentServer(
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop_event: asyncio.Event | None = None
         self._datagram_transport: asyncio.DatagramTransport | None = None
-        self._send_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Guards _send_socket lifecycle so a concurrent close cannot null the
-        # socket out from under an in-flight sendto in a worker thread (M3 fix).
-        self._send_lock = threading.Lock()
-        # Cache of recently sent responses keyed by (client_addr, seq) so that
-        # a retransmitted request can be answered from cache instead of being
-        # re-executed (m1 fix). LRU-evicted to bound memory.
-        self._response_cache: "Dict[tuple, bytes]" = {}
-        self._response_cache_order: list = []
-        self._response_cache_lock = threading.Lock()
-        self._RESPONSE_CACHE_MAX = 512
-        # Stream completion ACK tracking — M1: handlers that send a final
-        # ``stream`` message wait here for the client to acknowledge so that
-        # a UDP packet loss is recovered by retransmission. Per-key events
-        # support concurrent waiters.
-        self._stream_ack_events: "Dict[tuple, threading.Event]" = {}
-        self._stream_ack_lock = threading.Lock()
+        self._init_udp_reliability(response_cache_max=512, last_seq_max=256)
         self._cleaned_up: bool = False
     
     @property
@@ -222,8 +155,9 @@ class AgentServer(
                 conn.interactive.stop()
                 conn.release()
                 orphaned_ports.add(conn.port)
-            
-            if conn.busy and conn.busy_session in zombie_ppids:
+
+            busy, _busy_command, busy_session, _busy_client, _detached = conn.busy_snapshot()
+            if busy and busy_session in zombie_ppids:
                 conn.release()
                 orphaned_ports.add(conn.port)
         
@@ -251,7 +185,7 @@ class AgentServer(
         any_detached = False
         for port, conn in connections.items():
             referencing_sessions = self.session_manager.find_sessions_using_port(port)
-            is_detached_port = conn.is_detached()
+            busy, busy_command, _busy_session, _busy_client, is_detached_port = conn.busy_snapshot()
             if is_detached_port:
                 any_detached = True
             conn_info = {
@@ -260,8 +194,8 @@ class AgentServer(
                 'core': conn.core,
                 'version': conn.version,
                 'manufacturer': getattr(conn, 'manufacturer', ''),
-                'busy': conn.busy or is_detached_port,
-                'busy_command': conn.busy_command or ("detached_script" if is_detached_port else None),
+                'busy': busy or is_detached_port,
+                'busy_command': busy_command or ("detached_script" if is_detached_port else None),
                 'connected': conn.is_connected(),
                 'sessions': referencing_sessions
             }
@@ -352,7 +286,7 @@ class AgentServer(
         self._stop_event = asyncio.Event()
 
         transport, _ = await loop.create_datagram_endpoint(
-            lambda: _AgentDatagramProtocol(self),
+            lambda: AgentDatagramProtocol(self),
             local_addr=(AGENT_HOST, self.agent_port),
         )
         self._datagram_transport = transport
@@ -423,7 +357,8 @@ class AgentServer(
                 # forever after a cable pull or board crash. Reap those as soon
                 # as the transport reports a definitive disconnect; keep the
                 # conservative threshold for idle links.
-                fail_threshold = 1 if (conn.busy or conn.is_detached()) else 3
+                busy, _busy_command, _busy_session, _busy_client, detached = conn.busy_snapshot()
+                fail_threshold = 1 if (busy or detached) else 3
                 if conn._liveness_fail_count >= fail_threshold:
                     dead_ports.append(port)
             except Exception:
@@ -536,91 +471,6 @@ class AgentServer(
         conn._drain_thread = drain_thread
         drain_thread.start()
     
-    def _safe_send(self, data: bytes, addr: tuple) -> None:
-        """Send UDP response via dedicated unbound socket. Thread-safe.
-
-        Holds ``_send_lock`` so a concurrent ``cleanup`` cannot close the
-        socket between the truthy check and ``sendto``.
-        """
-        with self._send_lock:
-            sock = self._send_socket
-            if sock is None:
-                return
-            try:
-                sock.sendto(data, addr)
-            except Exception:
-                pass
-
-    def _cache_response(self, client_addr: tuple, seq: int, data: bytes) -> None:
-        if data is None:
-            return
-        key = (client_addr, seq)
-        with self._response_cache_lock:
-            if key in self._response_cache:
-                try:
-                    self._response_cache_order.remove(key)
-                except ValueError:
-                    pass
-            else:
-                if len(self._response_cache_order) >= self._RESPONSE_CACHE_MAX:
-                    oldest = self._response_cache_order.pop(0)
-                    self._response_cache.pop(oldest, None)
-            self._response_cache[key] = data
-            self._response_cache_order.append(key)
-
-    def _lookup_response(self, client_addr: tuple, seq: int) -> Optional[bytes]:
-        with self._response_cache_lock:
-            return self._response_cache.get((client_addr, seq))
-
-    def send_completion_with_ack(
-        self,
-        encoded: bytes,
-        client_addr: tuple,
-        seq: int,
-        max_retries: int = 5,
-        interval_s: float = 0.1,
-    ) -> bool:
-        """Send a completion message and wait for ``stream_ack`` from the
-        client, retransmitting up to ``max_retries`` times (M1 fix).
-
-        Returns ``True`` if the client acknowledged, ``False`` otherwise.
-        """
-        key = (client_addr, seq)
-        event = threading.Event()
-        with self._stream_ack_lock:
-            # If somehow a previous waiter still holds an event for the same
-            # key, replace it — only the latest waiter is meaningful.
-            self._stream_ack_events[key] = event
-
-        try:
-            for _ in range(max(1, max_retries)):
-                self._safe_send(encoded, client_addr)
-                if event.wait(timeout=interval_s):
-                    return True
-            return False
-        finally:
-            with self._stream_ack_lock:
-                if self._stream_ack_events.get(key) is event:
-                    self._stream_ack_events.pop(key, None)
-
-    def _check_and_record_seq(self, client_addr: tuple, seq: int) -> bool:
-        with self._last_seq_lock:
-            if client_addr in self.last_seq:
-                last = self.last_seq[client_addr]
-                # Only reject exact duplicates from the same UDP source.
-                #
-                # Using strict monotonic ordering across client restarts can
-                # incorrectly drop valid requests (e.g. process restart, seq
-                # wrap, or source-port reuse), which then appears as
-                # "No ACK from agent" on the client.
-                if seq == last:
-                    return False
-            self.last_seq[client_addr] = seq
-            if len(self.last_seq) > self._MAX_LAST_SEQ:
-                oldest = next(iter(self.last_seq))
-                del self.last_seq[oldest]
-            return True
-
     def _stop_detached_script(self, conn: BoardConnection = None):
         if conn:
             if not conn.is_detached():
@@ -769,10 +619,7 @@ class AgentServer(
 
             if msg_type == 'stream_ack':
                 # Wake any handler waiting on a completion ACK (M1 fix).
-                with self._stream_ack_lock:
-                    event = self._stream_ack_events.pop((client_addr, seq), None)
-                if event is not None:
-                    event.set()
+                self._ack_stream_completion(client_addr, seq)
                 return
 
             if msg_type == 'request':
@@ -963,9 +810,10 @@ class AgentServer(
                     ppid, command, client_addr,
                     allow_when_detached=allow_when_detached,
                 ):
+                    _busy, busy_command, _busy_session, _busy_client, _detached = active_conn.busy_snapshot()
                     return AgentProtocol.create_response(
                         seq=seq,
-                        error=f"Connection {active_conn.port} is busy. Another command ({active_conn.busy_command}) is currently running. Please wait for it to complete or press Ctrl+C to cancel."
+                        error=f"Connection {active_conn.port} is busy. Another command ({busy_command}) is currently running. Please wait for it to complete or press Ctrl+C to cancel."
                     )
                 # Track acquisition only for commands that should auto-release in finally.
                 if command not in PERSISTENT_BUSY_COMMANDS and command not in STREAMING_COMMANDS:

@@ -46,9 +46,6 @@ def _find_local_pkg_version(local_meta: dict, *, scope: str, target: str, source
 
     base_key = f"{scope}:{target}:{pkg_name}"
 
-    # Prefer exact source matches. Several remote package variants can share
-    # the same logical package name, and using only scope:target:name can make
-    # an unrelated local variant hide a newer remote source.
     matching_versions = []
     for key, meta in local_packages.items():
         if not isinstance(key, str) or not isinstance(meta, dict):

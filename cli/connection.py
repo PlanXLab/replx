@@ -44,9 +44,9 @@ def _is_transport_connection_error(e: Exception) -> bool:
         'transporterror',
         'transport error',
         'cannot configure port',
-        'i/o operation',         # Windows OSError 995
-        'connection lost',       # composite: "Connection X lost:"
-        'connection removed',    # agent mid-command disconnect suffix
+        'i/o operation',
+        'connection lost',
+        'connection removed',
         'disconnectederror',
     ))
 
@@ -99,8 +99,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
     default_conn = _get_default_connection(env_path) if env_path else None
 
     agent_port = _find_available_agent_port(env_path)
-    # Populate the process-level cache so _create_agent_client() skips a redundant
-    # _ensure_singleton_running_agent() call later in the same command invocation.
+
     global _cached_agent_port
     with _agent_port_cache_lock:
         if _cached_agent_port is None:
@@ -143,11 +142,6 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
         
         try:
             AgentClient.start_agent(port=agent_port)
-
-            # 에이전트를 새로 시작했으므로 싱글턴 캐시를 갱신한다.
-            # 그렇지 않으면 _singleton_cache_miss=True가 남아
-            # 같은 프로세스(예: shell 루프)에서 whoami/status 조회 시
-            # "Not connected"로 표시된다.
             AgentPortManager._singleton_cache = agent_port
             AgentPortManager._singleton_cache_miss = False
 

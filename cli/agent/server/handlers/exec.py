@@ -57,9 +57,9 @@ class ExecCommandsMixin:
         
         all_connections = self.connection_manager.get_all_connections()
         any_detached = any(c.is_detached() for c in all_connections.values())
-        
+
         if conn and conn.repl_protocol:
-            is_this_detached = conn.is_detached()
+            busy, busy_command, _busy_session, _busy_client, is_this_detached = conn.busy_snapshot()
             return {
                 "running": True,
                 "connected": True,
@@ -71,8 +71,8 @@ class ExecCommandsMixin:
                 "device_root_fs": conn.device_root_fs,
                 "in_raw_repl": conn.repl_protocol._in_raw_repl if conn.repl_protocol else False,
                 "pid": os.getpid(),
-                "busy": conn.busy or is_this_detached,
-                "busy_command": conn.busy_command or ("detached_script" if is_this_detached else None),
+                "busy": busy or is_this_detached,
+                "busy_command": busy_command or ("detached_script" if is_this_detached else None),
                 "detached_running": any_detached,
                 "board_id": conn.board_id
             }
@@ -99,7 +99,7 @@ class ExecCommandsMixin:
                 first_port, first_conn = default_port, all_connections[default_port]
             else:
                 first_port, first_conn = next(iter(all_connections.items()))
-            is_this_detached = first_conn.is_detached()
+            busy, busy_command, _busy_session, _busy_client, is_this_detached = first_conn.busy_snapshot()
             return {
                 "running": True,
                 "connected": True,
@@ -111,8 +111,8 @@ class ExecCommandsMixin:
                 "device_root_fs": first_conn.device_root_fs,
                 "in_raw_repl": first_conn.repl_protocol._in_raw_repl if first_conn.repl_protocol else False,
                 "pid": os.getpid(),
-                "busy": first_conn.busy or is_this_detached,
-                "busy_command": first_conn.busy_command or ("detached_script" if is_this_detached else None),
+                "busy": busy or is_this_detached,
+                "busy_command": busy_command or ("detached_script" if is_this_detached else None),
                 "detached_running": any_detached,
                 "board_id": first_conn.board_id
             }
@@ -484,9 +484,8 @@ class ExecCommandsMixin:
             raise RuntimeError("Either script_path or script_content required")
         
         if detach:
-            conn.busy = True
-            conn.busy_command = 'detached_script'
-            
+            conn.set_busy_state(True, command='detached_script', session=ctx.ppid, client_addr=ctx.client_addr)
+
             try:
                 try:
                     repl._leave_repl()
