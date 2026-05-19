@@ -262,7 +262,7 @@ class BoardConnection:
             self.detached_running = False
 
         if self._drain_thread and self._drain_thread.is_alive():
-            self._drain_thread.join(timeout=2.0)
+            self._drain_thread.join(timeout=0.2)
         self._drain_thread = None
 
 class ConnectionManager:

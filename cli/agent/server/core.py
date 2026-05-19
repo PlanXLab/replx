@@ -406,14 +406,6 @@ class AgentServer(
             except Exception:
                 pass
 
-            # --- Liveness check for idle connections ---
-            # Skip connections that are actively busy (command in flight) or
-            # running a detached script — those paths handle their own
-            # transport errors and we don't want to race with them.
-            if conn.busy or conn.is_detached():
-                conn._liveness_fail_count = 0
-                continue
-
             transport = getattr(
                 getattr(conn, 'repl_protocol', None), 'transport', None
             )
@@ -427,9 +419,12 @@ class AgentServer(
                 conn._liveness_fail_count = 0
             except TransportError:
                 conn._liveness_fail_count += 1
-                # Require a few consecutive failures to avoid false positives
-                # from momentary glitches.
-                if conn._liveness_fail_count >= 3:
+                # Busy/detached commands can otherwise keep the port blocked
+                # forever after a cable pull or board crash. Reap those as soon
+                # as the transport reports a definitive disconnect; keep the
+                # conservative threshold for idle links.
+                fail_threshold = 1 if (conn.busy or conn.is_detached()) else 3
+                if conn._liveness_fail_count >= fail_threshold:
                     dead_ports.append(port)
             except Exception:
                 pass
@@ -459,7 +454,7 @@ class AgentServer(
             DRAIN_HARD_TIMEOUT_S = 120.0
             # How long to wait without any serial data before running a
             # liveness check (transport still open? board still alive?).
-            SILENCE_LIVENESS_CHECK_S = 30.0
+            SILENCE_LIVENESS_CHECK_S = 1.0
 
             start_time = time.time()
             last_data_time = time.time()
@@ -880,16 +875,7 @@ class AgentServer(
             
             if conn_exists:
                 if session.foreground is None:
-                    if self._default_port and self._default_port != explicit_port:
-                        default_conn_exists = self._get_connection(self._default_port) is not None
-                        
-                        if default_conn_exists:
-                            session.add_connection(self._default_port, as_foreground=True)
-                            session.add_connection(explicit_port, as_foreground=False)
-                        else:
-                            session.add_connection(explicit_port, as_foreground=True)
-                    else:
-                        session.add_connection(explicit_port, as_foreground=True)
+                    session.add_connection(explicit_port, as_foreground=True)
                 else:
                     session.add_connection(explicit_port, as_foreground=False)
 
@@ -1065,11 +1051,11 @@ class AgentServer(
         # socket (M3 fix). ``cancel_futures`` discards queued tasks; the brief
         # wait handles tasks already running.
         try:
-            self._fast_executor.shutdown(wait=True, cancel_futures=True)
+            self._fast_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
         try:
-            self._slow_executor.shutdown(wait=True, cancel_futures=True)
+            self._slow_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
 

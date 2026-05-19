@@ -64,10 +64,10 @@ class InstallHelper:
         return out_path
     
     @staticmethod
-    def ensure_remote_dir(remote_dir: str):
+    def ensure_remote_dir(remote_dir: str, client: AgentClient = None):
         if not remote_dir:
             return
-        client = AgentClient()
+        client = client or AgentClient()
         parts = [p for p in remote_dir.replace("\\", "/").strip("/").split("/") if p]
         path = "/"
         for p in parts:

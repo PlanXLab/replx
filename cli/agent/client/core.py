@@ -463,9 +463,9 @@ class AgentClient:
 
         return response.get('result', {})
 
-    def ping(self) -> bool:
+    def ping(self, timeout: float = 0.3) -> bool:
         try:
-            result = self.send_command(Cmd.PING, timeout=0.3)
+            result = self.send_command(Cmd.PING, timeout=timeout, max_retries=1)
             return result.get('pong', False)
         except Exception:
             return False
@@ -478,10 +478,10 @@ class AgentClient:
         self.disconnect()
 
     @staticmethod
-    def is_agent_running(port: int = None) -> bool:
+    def is_agent_running(port: int = None, timeout: float = 0.2) -> bool:
         try:
             client = AgentClient(port=port)
-            return client.ping()
+            return client.ping(timeout=timeout)
         except Exception:
             return False
 
@@ -556,7 +556,7 @@ class AgentClient:
                     if detail:
                         msg += f"\n{detail}"
                     raise RuntimeError(msg)
-                if AgentClient.is_agent_running(port=port):
+                if AgentClient.is_agent_running(port=port, timeout=0.1):
                     return True
         finally:
             if stderr_path:
@@ -568,20 +568,20 @@ class AgentClient:
         raise RuntimeError("Failed to start agent (timeout)")
 
     @staticmethod
-    def stop_agent(port: int = None, timeout: float = 1.5) -> bool:
-        if not AgentClient.is_agent_running(port=port):
+    def stop_agent(port: int = None, timeout: float = 0.7) -> bool:
+        if not AgentClient.is_agent_running(port=port, timeout=0.1):
             return False
 
         try:
             client = AgentClient(port=port)
-            client.send_command(Cmd.SHUTDOWN, timeout=0.5)
+            client.send_command(Cmd.SHUTDOWN, timeout=0.2, max_retries=1)
         except Exception:
             pass
 
         start_time = time.time()
         while time.time() - start_time < timeout:
             time.sleep(0.05) 
-            if not AgentClient.is_agent_running(port=port):
+            if not AgentClient.is_agent_running(port=port, timeout=0.05):
                 return True
 
-        return not AgentClient.is_agent_running(port=port)
+        return not AgentClient.is_agent_running(port=port, timeout=0.05)

@@ -14,7 +14,7 @@ Example
 ```
 """
 
-from typing import Any, Union
+from typing import Any, Iterator, Union
 
 
 def pack(fmt: str, *values: Any) -> bytes:

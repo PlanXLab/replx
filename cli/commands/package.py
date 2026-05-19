@@ -46,8 +46,26 @@ def _find_local_pkg_version(local_meta: dict, *, scope: str, target: str, source
 
     base_key = f"{scope}:{target}:{pkg_name}"
 
+    # Prefer exact source matches. Several remote package variants can share
+    # the same logical package name, and using only scope:target:name can make
+    # an unrelated local variant hide a newer remote source.
+    matching_versions = []
+    for key, meta in local_packages.items():
+        if not isinstance(key, str) or not isinstance(meta, dict):
+            continue
+        if key == base_key or key.startswith(base_key + "@"):
+            meta_source = meta.get("source") or meta.get("typehint") or ""
+            if meta_source == source_path:
+                matching_versions.append(RegistryHelper.get_version(meta))
+    if matching_versions:
+        return max(matching_versions), False
+
     if base_key in local_packages:
-        return RegistryHelper.get_version(local_packages[base_key]), False
+        meta = local_packages[base_key]
+        if isinstance(meta, dict):
+            meta_source = meta.get("source") or meta.get("typehint") or ""
+            if not source_path or not meta_source or meta_source == source_path:
+                return RegistryHelper.get_version(meta), False
 
     if scope == "device":
         best = None
@@ -654,7 +672,11 @@ def _pkg_download(args: list[str], owner: str, repo: str, ref: str,
                     InstallHelper.download_raw_file(owner, repo, ref, submodule_path, sub_out_path)
                 
                 unique_pkg_name = f"{scope}:{target}:{orig_pkg_name}"
-                _local_touch_package(unique_pkg_name, orig_pkg_meta)
+                source_key = source.replace("\\", "/") if source else ""
+                if source_key:
+                    _local_touch_package(f"{unique_pkg_name}@{source_key}", orig_pkg_meta)
+                else:
+                    _local_touch_package(unique_pkg_name, orig_pkg_meta)
                 return (True, relpath, None)
             except urllib.error.HTTPError:
                 url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{source}"

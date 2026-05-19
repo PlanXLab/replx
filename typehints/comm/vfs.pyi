@@ -24,7 +24,7 @@ Example
 ```
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 
 class VfsFat:

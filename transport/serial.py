@@ -141,6 +141,8 @@ class SerialTransport:
             return False
     
     def keep_alive(self) -> None:
+        if not self._serial or not self._serial.is_open:
+            raise TransportError("Serial port disconnected (device removed or cable unplugged)")
         try:
             _ = self._serial.in_waiting
         except serial.SerialException as e:
