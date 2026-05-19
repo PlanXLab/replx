@@ -18,11 +18,19 @@ from .config import (
     AgentPortManager,
 )
 
-def _print_auto_connect_info(port: str, version: str, core: str, device: str, manufacturer: str = ""):
+def _print_connect_info(
+    port: str,
+    version: str,
+    core: str,
+    device: str,
+    manufacturer: str = "",
+    *,
+    auto: bool = False,
+):
     port_disp = OutputHelper.format_port(port)
     OutputHelper.print_panel(
         f"[bright_green]{port_disp}[/bright_green]  {version}  {core}  [bright_green]{device}[/bright_green]  [dim]{manufacturer}[/dim]",
-        title="Auto-connected",
+        title="Auto-connected" if auto else "Connected",
         border_style="neutral"
     )
 
@@ -177,12 +185,13 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
             STATE.manufacturer = result.get('manufacturer', '')
             STATE.device_root_fs = result.get('device_root_fs', '/')
             
-            _print_auto_connect_info(
+            _print_connect_info(
                 conn['connection'],
                 STATE.version,
                 STATE.core,
                 STATE.device,
-                STATE.manufacturer
+                STATE.manufacturer,
+                auto=not bool(explicit_port),
             )
             
         except Exception as e:
@@ -271,12 +280,13 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         border_style="neutral"
                     )
                 
-                _print_auto_connect_info(
+                _print_connect_info(
                     fg_conn['connection'],
                     result.get('version', '?'),
                     result.get('core', fg_conn.get('core', '?')),
                     result.get('device', fg_conn.get('device', '?')),
-                    result.get('manufacturer', '')
+                    result.get('manufacturer', ''),
+                    auto=True,
                 )
                 
                 status = result
@@ -326,12 +336,12 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                         set_default=False
                     )
                 
-                _print_auto_connect_info(
+                _print_connect_info(
                     fg_conn['connection'],
                     result.get('version', '?'),
                     result.get('core', fg_conn.get('core', '?')),
                     result.get('device', fg_conn.get('device', '?')),
-                    result.get('manufacturer', '')
+                    result.get('manufacturer', ''),
                 )
                 
                 status = result
@@ -373,7 +383,7 @@ def _ensure_connected(ctx: typer.Context = None) -> dict:
                             )
 
                         if bg_result and not bg_result.get('existing', False):
-                            _print_auto_connect_info(
+                            _print_connect_info(
                                 port_arg,
                                 bg_result.get('version', explicit_conn.get('version', '?')),
                                 bg_result.get('core', explicit_conn.get('core', '?')),
