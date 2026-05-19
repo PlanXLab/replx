@@ -795,6 +795,7 @@ The connection is closed and removed from ALL sessions that reference it.
   • The board connection is closed
   • Port becomes available for other programs
   • The CONN is removed from ALL sessions (not just current)
+    • Affected sessions promote their most recent background to foreground
   • Agent server keeps running (fast reconnect later)
 
 [bold cyan]When to use:[/bold cyan]

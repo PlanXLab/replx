@@ -93,50 +93,41 @@ class SessionCommandsMixin:
         if not port and ctx.explicit_port:
             port = ctx.explicit_port
         port = self._canon_port(port) if port else None
-        if not ppid:
-            raise ValueError("Session PPID required")
-
-        session = self._get_session(ppid)
-        if not session:
-            raise ValueError("No session found for this terminal")
 
         ports_to_close = []
-        old_foreground = session.foreground
+        session = self._get_session(ppid) if ppid else None
+        old_foreground = session.foreground if session else None
 
         if all_ports:
+            if not ppid:
+                raise ValueError("Session PPID required")
+            if not session:
+                raise ValueError("No session found for this terminal")
             ports_to_close = list(session.get_all_connections())
             freed_port = "all"
         elif port:
-            found = None
-            for conn in session.get_all_connections():
-                if conn == port:
-                    found = conn
-                    break
-            if not found:
-                raise ValueError(f"Port {port} not in session")
-            ports_to_close = [found]
-            freed_port = found
+            if not self.connection_manager.get_connection(port) and not self.session_manager.find_sessions_using_port(port):
+                raise ValueError(f"Connection {port} not found")
+            ports_to_close = [port]
+            freed_port = port
         else:
+            if not ppid:
+                raise ValueError("Session PPID required")
+            if not session:
+                raise ValueError("No session found for this terminal")
             if not session.foreground:
                 raise ValueError("No foreground connection to free")
             ports_to_close = [session.foreground]
             freed_port = session.foreground
 
         for conn_port in ports_to_close:
-            # Remove this port from every session that referenced it. After
-            # this loop, ``find_sessions_using_port`` reflects the updated
-            # state so we can decide whether the underlying serial connection
-            # is now orphaned and safe to close.
-            for sess in self.session_manager.get_all_sessions().values():
-                if conn_port in sess.get_all_connections():
-                    sess.remove_connection(conn_port)
-
-            # Only close the underlying serial port if no other session still
-            # references it; otherwise we would yank the connection out from
-            # under terminals that are still using it (C2 fix).
-            remaining = self.session_manager.find_sessions_using_port(conn_port)
-            if not remaining:
-                self.connection_manager.disconnect(conn_port)
+            # A user-requested disconnect is global: close the physical port
+            # even if another session references it or the board is busy, then
+            # remove it from every session. Session.remove_connection promotes
+            # the most recent background to foreground for each affected
+            # session.
+            self.connection_manager.disconnect(conn_port)
+            self.session_manager.remove_connection_from_all_sessions(conn_port)
 
         self.session_manager.cleanup_empty_sessions()
 
@@ -152,6 +143,7 @@ class SessionCommandsMixin:
             shutdown_thread = threading.Thread(target=delayed_shutdown, daemon=True)
             shutdown_thread.start()
 
+        session = self._get_session(ppid) if ppid else None
         remaining_connections = len(session.get_all_connections()) if session and not session.is_empty() else 0
         new_foreground = session.foreground if session and not session.is_empty() else None
         fg_changed = old_foreground != new_foreground
