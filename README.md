@@ -149,7 +149,7 @@ These commands communicate with the board. Except for `setup`, the port can be o
 - Execution/interaction: `exec`, `run`, `repl`, `shell`
 - Files: `ls`, `cat`, `get`, `put`, `cp`, `mv`, `rm`, `mkdir`, `touch`
 - Board: `usage`, `reset`, `format`, `init`, `wifi`, `firmware`
-- Package/compile: `pkg`, `mpy`
+- Package/compile: `mip`, `pkg`, `mpy`
 - Hardware: `gpio`, `pwm`, `adc`, `uart`, `spi`, `i2c`, `ble`
 
 ---

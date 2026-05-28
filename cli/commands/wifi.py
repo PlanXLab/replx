@@ -315,15 +315,13 @@ print(json.dumps({{
 
         if not data.get("connected"):
             fail_status = data.get("fail_status")
-            # Definitive failure codes — re-checking would just add delay
-            if fail_status in (2, -3, 3, -2):
+            if fail_status in (3, -2):
                 msg, _ = _wifi_get_status_message(fail_status)
                 data["error"] = msg
                 return data
 
-            # Genuine timeout: board may have connected just after the last poll
             import time as pytime
-            for _ in range(2):  # up to 1 s
+            for _ in range(3): 
                 pytime.sleep(0.5)
                 verify = _wifi_check_current_connection(client, target_ssid=ssid)
                 if verify.get("connected") and verify.get("same_ssid"):
