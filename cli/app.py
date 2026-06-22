@@ -602,7 +602,7 @@ def main():
             break
     first_nonopt = sys.argv[first_nonopt_idx] if first_nonopt_idx is not None else None
 
-    run_opts = {'-n', '--non-interactive', '-e', '--echo', '-d', '--device', '--line', '--hex'}
+    run_opts = {'-n', '--non-interactive', '-e', '--echo', '-d', '--device', '--line', '--hex', '--text'}
     has_device_opt = bool(run_opts & {'-d', '--device'} & set(args))
     
     script_files = []
@@ -666,6 +666,24 @@ def main():
             pass
         print()
         exit_code = 130
+    except SystemExit as e:
+        exit_code = e.code if isinstance(e.code, int) else 1
+    except Exception as e:
+        console = OutputHelper.make_console(width=CONSOLE_WIDTH, file=sys.stderr)
+        cmd_name = None
+        for arg in sys.argv[1:]:
+            if not arg.startswith('-'):
+                cmd_name = arg
+                break
+        hint = f"replx {cmd_name} --help" if cmd_name else "replx --help"
+        console.print(Panel(
+            f"[red]{e}[/red]\n\n[dim]Run [bright_blue]{hint}[/bright_blue] for usage.[/dim]",
+            title="Error",
+            border_style=OutputHelper._resolve_category_color('error'),
+            box=get_panel_box(),
+            width=CONSOLE_WIDTH,
+        ))
+        exit_code = 1
     sys.exit(exit_code)
 
 

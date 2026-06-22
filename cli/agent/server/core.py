@@ -152,6 +152,15 @@ class AgentServer(
                 orphaned_ports.add(conn.port)
             
             if conn.interactive.active and conn.interactive.ppid in zombie_ppids:
+                # Signal the blocking _read_ex loop to exit before stopping so
+                # the interactive thread unblocks quickly even when the board
+                # has frozen without disconnecting the USB port.
+                if conn.repl_protocol:
+                    try:
+                        conn.repl_protocol._stop_event.set()
+                        conn.repl_protocol.interrupt()
+                    except Exception:
+                        pass
                 conn.interactive.stop()
                 conn.release()
                 orphaned_ports.add(conn.port)
@@ -513,6 +522,14 @@ class AgentServer(
         if conn.repl.active:
             conn.repl.stop()
         if conn.interactive.active:
+            # Signal the blocking _read_ex loop to exit so the interactive
+            # thread can finish quickly before the transport is closed.
+            if conn.repl_protocol:
+                try:
+                    conn.repl_protocol._stop_event.set()
+                    conn.repl_protocol.interrupt()
+                except Exception:
+                    pass
             conn.interactive.stop()
         conn.release()
 

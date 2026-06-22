@@ -509,6 +509,7 @@ def mip(
     device: str = typer.Option("lib", "--device", "-d", help="Board target path (for install)"),
     index: str = typer.Option(_MIP_INDEX_URL, "--index", help="Package index URL"),
     no_compile: bool = typer.Option(False, "--no-compile", help="Skip .mpy compilation, upload .py as-is"),
+    source: str = typer.Option(None, "--source", "-s", help="Base URL; filenames in ARGS are appended to it"),
     show_help: bool = typer.Option(False, "--help", "-h", is_eager=True, hidden=True),
 ):
     if show_help:
@@ -526,24 +527,26 @@ MicroPython community package manager (micropython.org/pi/v2).
   [green]requests@0.10.0[/green]              Install specific version
   [green]github:org/repo[/green]              Install from GitHub repo root
   [green]github:org/repo/path[/green]         Install from GitHub repo sub-path
-    [green]github:org/repo/path/foo.py[/green]  Install a single GitHub source file
-    [green]github:org/repo/src/package[/green]  Install a GitHub source package directory
+  [green]github:org/repo/path/foo.py[/green]  Install a single GitHub source file
+  [green]github:org/repo/src/package[/green]  Install a GitHub source package directory
 
 [bold cyan]Install Options:[/bold cyan]
   [bright_blue]--device PATH[/bright_blue]                Board target path [dim](default: lib → /lib/)[/dim]
   [bright_blue]--no-compile[/bright_blue]                 Skip .mpy compilation, upload .py directly
   [bright_blue]--index URL[/bright_blue]                  Custom package index
+  [bright_blue]--source/-s URL[/bright_blue]              Base URL; remaining args are filenames appended to it
 
 [bold cyan]Examples:[/bold cyan]
-  replx mip search                                     [dim]List all packages[/dim]
-  replx mip search mqtt                                [dim]Search by name[/dim]
+  replx mip search                                           [dim]List all packages[/dim]
+  replx mip search mqtt                                      [dim]Search by name[/dim]
   replx mip search github:micropython/micropython-lib
-  replx mip install requests                           [dim]→ /lib/[/dim]
-  replx mip install requests@0.10.0                    [dim]→ /lib/[/dim]
-  replx mip install aioble                             [dim]→ /lib/aioble/[/dim]
-  replx mip install github:org/repo                    [dim]→ /lib/[/dim]
+  replx mip install requests                                 [dim]→ /lib/[/dim]
+  replx mip install requests@0.10.0                          [dim]→ /lib/[/dim]
+  replx mip install aioble                                   [dim]→ /lib/aioble/[/dim]
+  replx mip install github:org/repo                          [dim]→ /lib/[/dim]
   replx mip install --device /lib/ext umqtt.simple
-  replx mip install --no-compile logging               [dim]→ /lib/logging.py[/dim]
+  replx mip install --no-compile logging                     [dim]→ /lib/logging.py[/dim]
+  replx mip install --source https://host/path/ a.mpy b.mpy  [dim]→ /lib/[/dim]
 
 [bold cyan]Note:[/bold cyan]
   • All downloads happen on PC — board WiFi is not required
@@ -571,7 +574,7 @@ MicroPython community package manager (micropython.org/pi/v2).
     if cmd == "search":
         _mip_search(cmd_args, index)
     elif cmd == "install":
-        _mip_install(cmd_args, device, index, no_compile)
+        _mip_install(cmd_args, device, index, no_compile, source_base=source)
     else:
         OutputHelper.print_panel(
             f"Unknown subcommand: [red]{cmd}[/red]\n\n"
@@ -790,8 +793,188 @@ def _mip_search_github_contents(spec: str, org: str, repo: str, sub_path: str, r
     OutputHelper.print_panel("\n".join(lines), title=f"GitHub: {spec}", border_style="data")
 
 
-def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: bool):
+def _mip_install_from_source(
+    filenames: list[str],
+    base_url: str,
+    device_path: str,
+    no_compile: bool,
+) -> None:
+    """Batch-install a list of filenames from a common base URL.
+
+    Downloads all files silently, then uploads them to the board with a single
+    Live progress panel showing [1/N], [2/N], ... [N/N] per file.
+    """
+    base = base_url.rstrip('/')
+    total = len(filenames)
+
+    slug = hashlib.md5(base.encode()).hexdigest()[:8]
+    staging_dir = _mip_staging() / slug
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_files_dir = staging_dir / "files"
+    staging_files_dir.mkdir(parents=True, exist_ok=True)
+
+    # Download all files silently — no per-file "Fetching..." messages.
+    file_pairs: list[tuple[str, str]] = []
+    for filename in filenames:
+        url = f"{base}/{filename}"
+        local_path = str(staging_files_dir / filename)
+        _write_file(local_path, _download_bytes(url))
+        file_pairs.append((local_path, filename))
+
+    device_base = device_path.strip("/")
+    upload_specs: list[tuple[str, str]] = []
+    for local_path, filename in file_pairs:
+        if not no_compile and local_path.endswith(".py"):
+            try:
+                out_mpy = CompilerHelper.compile_to_staging(local_path, str(staging_files_dir))
+                remote_path = f"/{device_base}/{os.path.splitext(filename)[0]}.mpy"
+                upload_specs.append((out_mpy, remote_path.replace("//", "/")))
+            except Exception as e:
+                OutputHelper.print_panel(
+                    f"Compilation failed for [yellow]{filename}[/yellow]: [red]{e}[/red]\n\n"
+                    "Use [bright_blue]--no-compile[/bright_blue] to upload .py files directly.",
+                    title="Compile Error",
+                    border_style="error",
+                )
+                raise typer.Exit(1)
+        else:
+            remote_path = f"/{device_base}/{filename}"
+            upload_specs.append((local_path, remote_path.replace("//", "/")))
+
+    client = _create_agent_client()
+    unique_dirs: set[str] = set()
+    for _, remote_path in upload_specs:
+        d = remote_path.rsplit("/", 1)[0]
+        if d and d != "/":
+            unique_dirs.add(d)
+    _ensure_remote_dirs(unique_dirs, client)
+
+    file_sizes = [os.path.getsize(lp) if os.path.exists(lp) else 0 for lp, _ in upload_specs]
+    total_bytes = sum(file_sizes)
+
+    progress_state = {"cumulative": 0, "current": 0}
+    progress_lock = threading.Lock()
+
+    def progress_callback(data):
+        with progress_lock:
+            if isinstance(data, dict):
+                progress_state["current"] = data.get("current", 0)
+
+    install_errors: list[str] = []
+    _url_display = base_url
+    if len(base_url) > 50:
+        _cut = base_url[:48].rfind('/')
+        _url_display = (base_url[:_cut + 1] + "...") if _cut > 10 else (base_url[:48] + "...")
+    panel_title = f"{_url_display}  →  /{device_base}/"
+
+    with Live(
+        OutputHelper.create_progress_panel(
+            0, max(total_bytes, 1),
+            title=panel_title,
+            message="Preparing...",
+            counter_text=f"0B/{OutputHelper.format_bytes(total_bytes)}",
+        ),
+        console=OutputHelper._console,
+        refresh_per_second=10,
+    ) as live:
+        for idx, (local_path, remote_path) in enumerate(upload_specs):
+            filename = os.path.basename(local_path)
+            file_size = file_sizes[idx]
+
+            with progress_lock:
+                progress_state["current"] = 0
+
+            upload_result: list = [None]
+
+            def do_upload(lp=local_path, rp=remote_path):
+                try:
+                    upload_result[0] = _upload_file_with_progress(client, lp, rp, progress_callback)
+                except Exception as exc:
+                    upload_result[0] = {"error": str(exc)}
+
+            upload_thread = threading.Thread(target=do_upload, daemon=True)
+            upload_thread.start()
+
+            while upload_thread.is_alive():
+                with progress_lock:
+                    current = progress_state["current"]
+                    cumulative = progress_state["cumulative"]
+                total_sent = cumulative + current
+                msg = f"[{idx + 1}/{total}] {filename} ({OutputHelper.format_bytes(file_size)})"
+                counter = f"({OutputHelper.format_bytes(total_sent)}/{OutputHelper.format_bytes(total_bytes)})"
+                live.update(
+                    OutputHelper.create_progress_panel(
+                        total_sent, max(total_bytes, 1),
+                        title=panel_title,
+                        message=msg,
+                        counter_text=counter,
+                    )
+                )
+                time.sleep(0.1)
+
+            upload_thread.join()
+            with progress_lock:
+                progress_state["cumulative"] += file_size
+
+            resp = upload_result[0]
+            if resp and isinstance(resp, dict) and resp.get("error"):
+                install_errors.append(f"{remote_path}: {resp['error']}")
+
+        live.update(
+            OutputHelper.create_progress_panel(
+                total_bytes, max(total_bytes, 1),
+                title=panel_title,
+                message=f"Complete ({total} files)",
+                counter_text=f"({OutputHelper.format_bytes(total_bytes)}/{OutputHelper.format_bytes(total_bytes)})",
+            )
+        )
+
+    try:
+        shutil.rmtree(staging_dir)
+    except Exception:
+        pass
+
+    if install_errors:
+        OutputHelper.print_panel(
+            f"[yellow]{len(install_errors)}[/yellow] file(s) failed to upload:\n"
+            + "\n".join(f"  [red]•[/red] {e}" for e in install_errors[:5])
+            + (f"\n  [dim]... and {len(install_errors) - 5} more[/dim]" if len(install_errors) > 5 else ""),
+            title="Install Warnings",
+            border_style="warning",
+        )
+
+    file_list = "\n".join(
+        f"  [bright_cyan]{os.path.basename(rp)}[/bright_cyan]  [dim]→  {rp}[/dim]"
+        for _, rp in upload_specs
+    )
+    ext_note = ".py" if no_compile else ".mpy"
+    OutputHelper.print_panel(
+        f"{file_list}\n\n"
+        f"[green]{total}[/green] file(s) "
+        f"([cyan]{OutputHelper.format_bytes(total_bytes)}[/cyan]) "
+        f"installed to [cyan]/{device_base}/[/cyan] as {ext_note}",
+        title=f"Installed: {total} files from --source",
+        border_style="success",
+    )
+
+
+def _mip_install(args: list[str], device_path: str, index_url: str, no_compile: bool,
+                 source_base: Optional[str] = None):
     _ensure_connected()
+
+    if source_base is not None:
+        if not args:
+            OutputHelper.print_panel(
+                "When using [bright_blue]--source[/bright_blue], provide one or more filenames.\n\n"
+                "Example:\n"
+                "  [bright_green]replx mip install --source https://host/path/ file1.mpy file2.mpy[/bright_green]",
+                title="mip install Error",
+                border_style="error",
+            )
+            raise typer.Exit(1)
+        _mip_install_from_source(args, source_base, device_path, no_compile)
+        return
 
     if not args:
         OutputHelper.print_panel(
