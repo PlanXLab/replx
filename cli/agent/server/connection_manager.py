@@ -464,6 +464,16 @@ class ConnectionManager:
         was_detached = conn.is_detached()
         conn.stop_detached()
 
+        # Signal _read_ex() loops to exit immediately (checked every ~1ms).
+        # Without this, interactive.stop()'s join() waits the full 1s timeout
+        # because the thread has no way to know it should exit.
+        if conn.repl_protocol:
+            try:
+                conn.repl_protocol._stop_event.set()
+                conn.repl_protocol.interrupt()
+            except Exception:
+                pass
+
         if conn.repl.active:
             conn.repl.stop()
         if conn.interactive.active:
@@ -478,7 +488,6 @@ class ConnectionManager:
                     try:
                         if not was_detached:
                             transport.write(CTRL_B)
-                            time.sleep(0.1 if sys.platform == 'win32' else 0.05)
                     except Exception:
                         pass
                     transport.close()

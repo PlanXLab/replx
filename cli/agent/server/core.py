@@ -722,14 +722,15 @@ class AgentServer(
         target_port = port or ctx.explicit_port
         if not target_port:
             raise ValueError("Port required")
-        
+
         conn = self.connection_manager.get_connection(target_port)
-        if not conn:
-            raise ValueError(f"Connection {target_port} not found")
-        
-        self.connection_manager.disconnect(target_port)
+        if conn:
+            self.connection_manager.disconnect(target_port)
+        # Always remove from sessions regardless of whether the connection
+        # object still existed — prevents stale foreground references when the
+        # port was already removed by a concurrent _handle_port_disconnect().
         self.session_manager.remove_connection_from_all_sessions(target_port)
-        
+
         return {"disconnected": target_port}
 
     def _update_session_connections(self, ppid: int, explicit_port: str) -> None:

@@ -393,14 +393,15 @@ class ExecCommandsMixin:
                 flush_buffer()
             
             send_stream(completed=True, error=conn.interactive.error)
-            self._safe_reset_repl(repl)
+            if not repl._stop_event.is_set():
+                self._safe_reset_repl(repl)
                 
         except Exception as e:
             input_thread_running[0] = False
             flush_timer_running[0] = False
             conn.interactive.error = str(e)
             send_stream(completed=True, error=str(e))
-            if conn and conn.repl_protocol:
+            if conn and conn.repl_protocol and not conn.repl_protocol._stop_event.is_set():
                 self._safe_reset_repl(conn.repl_protocol)
         finally:
             input_thread_running[0] = False

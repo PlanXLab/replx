@@ -106,8 +106,6 @@ class SessionCommandsMixin:
             ports_to_close = list(session.get_all_connections())
             freed_port = "all"
         elif port:
-            if not self.connection_manager.get_connection(port) and not self.session_manager.find_sessions_using_port(port):
-                raise ValueError(f"Connection {port} not found")
             ports_to_close = [port]
             freed_port = port
         else:
@@ -126,7 +124,11 @@ class SessionCommandsMixin:
             # remove it from every session. Session.remove_connection promotes
             # the most recent background to foreground for each affected
             # session.
-            self.connection_manager.disconnect(conn_port)
+            conn = self.connection_manager.get_connection(conn_port)
+            if conn:
+                self.connection_manager.disconnect(conn_port)
+            # Always clean up session references even if the connection was
+            # already removed (e.g., by a concurrent _handle_port_disconnect).
             self.session_manager.remove_connection_from_all_sessions(conn_port)
 
         self.session_manager.cleanup_empty_sessions()
