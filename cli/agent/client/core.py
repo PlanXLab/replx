@@ -265,48 +265,14 @@ class AgentClient:
                             except Exception:
                                 break
 
-                    grace_deadline = time.time() + ctrl_c_grace_s
-                    _no_content_timeout = 0.5
-                    _last_real_content = time.time()
-                    graceful = False
-                    while time.time() < grace_deadline:
-                        try:
-                            data, addr = self.sock.recvfrom(MAX_UDP_SIZE)
-                            msg = AgentProtocol.decode_message(data)
-                            if msg and msg.get('seq') == seq:
-                                if msg.get('type') == 'stream':
-                                    last_stream_time = time.time()
-                                    output = msg.get('output', '')
-                                    if output and output_callback:
-                                        output_callback(output.encode('utf-8'), 'stdout')
-                                        _last_real_content = time.time()
-                                    if msg.get('completed'):
-                                        error = msg.get('error')
-                                        if error and output_callback:
-                                            output_callback(error.encode('utf-8'), 'stderr')
-                                        graceful = True
-                                        _last_real_content = time.time()
-                                        try:
-                                            self.sock.sendto(
-                                                AgentProtocol.encode_message(
-                                                    AgentProtocol.create_stream_ack(seq)
-                                                ),
-                                                (AGENT_HOST, self.agent_port),
-                                            )
-                                        except Exception:
-                                            pass
-                                        break
-                        except socket.timeout:
-                            if time.time() - _last_real_content >= _no_content_timeout:
-                                break
-                        except Exception:
-                            pass
-
-                    if not graceful:
-                        try:
-                            self.send_command(Cmd.RUN_STOP, timeout=2.0)
-                        except Exception:
-                            pass
+                    # Send run_stop IMMEDIATELY so the agent releases the busy
+                    # lock right away.  Waiting until after the grace period means
+                    # the connection stays "busy" while the user can already see
+                    # that the CLI has returned to the prompt.
+                    try:
+                        self.send_command(Cmd.RUN_STOP, timeout=2.0)
+                    except Exception:
+                        pass
                     break
 
                 now = time.time()
