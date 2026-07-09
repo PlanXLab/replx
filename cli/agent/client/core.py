@@ -31,9 +31,7 @@ class AgentClient:
         if not self.sock:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.settimeout(self.TIMEOUT)
-        # M7: ensure the agent releases the device port if the CLI process
-        # exits abnormally (Ctrl-C, unhandled exception, parent terminated)
-        # without its normal teardown path running.
+
         if not self._atexit_registered and self.device_port:
             try:
                 atexit.register(self._atexit_release)
@@ -55,12 +53,6 @@ class AgentClient:
             self.sock = None
 
     def _release_device_port_safe(self) -> None:
-        """Best-effort release of the bound device port on the agent.
-
-        Used when the client detects the device is unresponsive (e.g. cable
-        unplugged, board hung) so that subsequent commands won't operate on
-        a stale serial connection that the agent still believes is active.
-        """
         if not self.device_port:
             return
         try:
@@ -74,7 +66,6 @@ class AgentClient:
                 self.sock.sendto(data, (AGENT_HOST, self.agent_port))
             except Exception:
                 return
-            # Drain any matching response briefly; ignore errors.
             deadline = time.time() + 1.0
             seq = request.get('seq')
             try:
@@ -112,7 +103,7 @@ class AgentClient:
 
         busy_deadline = time.time() + wait_on_busy
 
-        while True:  # outer loop: retry on transient busy
+        while True:  
             request = AgentProtocol.create_request(
                 command,
                 ppid=self._ppid,
@@ -163,10 +154,9 @@ class AgentClient:
 
             error = response.get('error', '')
 
-            # Retry only for transient "Another command" busy — not REPL/detached.
             if error and 'is busy. Another command' in error and time.time() < busy_deadline:
                 time.sleep(1.0)
-                continue  # retry with a fresh seq (server rejected; never executed)
+                continue 
 
             if error:
                 raise RuntimeError(error)
@@ -196,8 +186,6 @@ class AgentClient:
         seq = request['seq']
         request_data = AgentProtocol.encode_message(request)
 
-        # UDP can drop ACK packets. Retry start request a few times while
-        # waiting for ACK/early stream for this seq.
         self.sock.settimeout(0.2)
         ack_received = False
         error_response = None
@@ -220,8 +208,6 @@ class AgentClient:
                         if msg_type == 'response' and msg.get('error'):
                             error_response = msg
                             break
-                        # If stream arrives before ACK (ACK loss/reordering),
-                        # treat it as a successful start.
                         if msg_type == 'stream':
                             ack_received = True
                             output = msg.get('output', '')
@@ -232,7 +218,6 @@ class AgentClient:
                                 if error and output_callback:
                                     output_callback(error.encode('utf-8'), 'stderr')
                                 completed_during_handshake = True
-                                # M1: ACK so server stops retransmitting.
                                 try:
                                     self.sock.sendto(
                                         AgentProtocol.encode_message(
@@ -263,7 +248,7 @@ class AgentClient:
         input_interval = 0.001
         last_input_time = 0
         last_stream_time = time.time()
-        stream_timeout = 5.0  # 5 seconds without stream = connection lost
+        stream_timeout = 5.0  
 
         try:
             while True:
@@ -281,6 +266,8 @@ class AgentClient:
                                 break
 
                     grace_deadline = time.time() + ctrl_c_grace_s
+                    _no_content_timeout = 1.0
+                    _last_real_content = time.time()
                     graceful = False
                     while time.time() < grace_deadline:
                         try:
@@ -292,12 +279,13 @@ class AgentClient:
                                     output = msg.get('output', '')
                                     if output and output_callback:
                                         output_callback(output.encode('utf-8'), 'stdout')
+                                        _last_real_content = time.time()
                                     if msg.get('completed'):
                                         error = msg.get('error')
                                         if error and output_callback:
                                             output_callback(error.encode('utf-8'), 'stderr')
                                         graceful = True
-                                        # M1: ACK so server stops retransmitting.
+                                        _last_real_content = time.time()
                                         try:
                                             self.sock.sendto(
                                                 AgentProtocol.encode_message(
@@ -309,7 +297,8 @@ class AgentClient:
                                             pass
                                         break
                         except socket.timeout:
-                            pass
+                            if time.time() - _last_real_content >= _no_content_timeout:
+                                break
                         except Exception:
                             pass
 
@@ -322,10 +311,7 @@ class AgentClient:
 
                 now = time.time()
 
-                # Check for stream reception timeout (connection loss detection)
                 if now - last_stream_time > stream_timeout:
-                    # Release the device port on the agent so subsequent
-                    # commands don't operate on a stale serial connection.
                     self._release_device_port_safe()
                     raise RuntimeError("Connection lost - no data from board for {}s".format(stream_timeout))
 
@@ -350,7 +336,7 @@ class AgentClient:
                         if msg.get('type') == 'response' and msg.get('error'):
                             _pending_error = msg['error']
                         elif msg.get('type') == 'stream':
-                            last_stream_time = time.time()  # Update on any stream (even empty)
+                            last_stream_time = time.time()  
                             output = msg.get('output', '')
                             if output and output_callback:
                                 output_callback(output.encode('utf-8'), 'stdout')
@@ -359,7 +345,6 @@ class AgentClient:
                                 error = msg.get('error')
                                 if error and output_callback:
                                     output_callback(error.encode('utf-8'), 'stderr')
-                                # M1: ACK so server stops retransmitting.
                                 try:
                                     self.sock.sendto(
                                         AgentProtocol.encode_message(
