@@ -851,6 +851,7 @@ class ReplProtocol:
 
     def reset(self):
         self._in_raw_repl = False
+        self._stop_event.clear()  # ensure stop event is cleared for fresh use
         self._enter_repl()
         
         try:

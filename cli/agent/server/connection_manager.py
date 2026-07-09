@@ -90,6 +90,23 @@ class InteractiveSessionState:
         if thread_to_join and thread_to_join.is_alive() and thread_to_join is not threading.current_thread():
             thread_to_join.join(timeout=1)
 
+    def stop_no_join(self):
+        """Mark the session as stopped without waiting for the background thread.
+
+        Used by _cmd_run_stop so that the connection is released immediately
+        rather than blocking for up to 1 second while the thread finishes.
+        The background thread must check ``session_seq`` in its own finally
+        block to avoid releasing a subsequently-acquired session.
+        """
+        with self.lock:
+            self.active = False
+            self.ppid = None
+            self.seq = 0
+            self.client_addr = None
+            self.input_queue = []
+            self.stop_requested = False
+            self.thread = None
+
     def is_owner(self, ppid: int) -> bool:
         with self.lock:
             if ppid is None:

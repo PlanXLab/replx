@@ -272,6 +272,9 @@ class ExecCommandsMixin:
     def _run_interactive_thread(self, conn: BoardConnection, script_data: bytes):
         client_addr = conn.interactive.client_addr
         seq = conn.interactive.seq
+        # Capture once — used in the finally guard to detect whether
+        # _cmd_run_stop already released this session (seq reset to 0).
+        session_seq = seq
         
         if client_addr is None:
             return
@@ -376,6 +379,11 @@ class ExecCommandsMixin:
                         except Exception:
                             pass
                     time.sleep(0.01)
+
+                try:
+                    repl._stop_event.set()
+                except Exception:
+                    pass
             
             input_thread = threading.Thread(target=input_handler, daemon=True)
             input_thread.start()
@@ -391,25 +399,47 @@ class ExecCommandsMixin:
                 input_thread_running[0] = False
                 flush_timer_running[0] = False
                 flush_buffer()
-            
-            send_stream(completed=True, error=conn.interactive.error)
-            if not repl._stop_event.is_set():
-                self._safe_reset_repl(repl)
+
+            # Only send completion and clean up if we are still the session
+            # owner.  _cmd_run_stop may have already called stop_no_join() which
+            # resets seq to 0, so a mismatch here means the connection has been
+            # released and possibly re-acquired by a new session.
+            with conn.interactive.lock:
+                _still_owner = (conn.interactive.seq == session_seq)
+            if _still_owner:
+                send_stream(completed=True, error=conn.interactive.error)
+                # Release the connection immediately after confirming completion
+                # so that status shows idle and new commands are not blocked.
+                # Board state is handled by repl.reset() in the next session,
+                # which clears _stop_event and robustly re-enters raw REPL.
+                conn.interactive.stop()
+                conn.release()
                 
         except Exception as e:
             input_thread_running[0] = False
             flush_timer_running[0] = False
             conn.interactive.error = str(e)
-            send_stream(completed=True, error=str(e))
-            if conn and conn.repl_protocol and not conn.repl_protocol._stop_event.is_set():
-                self._safe_reset_repl(conn.repl_protocol)
+            with conn.interactive.lock:
+                _still_owner_err = (conn.interactive.seq == session_seq)
+            if _still_owner_err:
+                send_stream(completed=True, error=str(e))
+                conn.interactive.stop()
+                conn.release()
         finally:
             input_thread_running[0] = False
             flush_timer_running[0] = False
             if input_thread.is_alive():
                 input_thread.join(timeout=0.5)
-            conn.interactive.stop()
-            conn.release()
+            # Guard: only clean up if we are still the session owner.
+            # _cmd_run_stop may have already released the connection via
+            # stop_no_join() + release(), resetting seq to 0. If seq no
+            # longer matches, a new session may already be running and we
+            # must not release its busy lock or clear its interactive state.
+            with conn.interactive.lock:
+                _final_owner = (conn.interactive.seq == session_seq)
+            if _final_owner:
+                conn.interactive.stop()
+                conn.release()
             self._last_command_time = time.time()
     
     def _cmd_run_stop(self, ctx: CommandContext) -> dict:
@@ -429,33 +459,34 @@ class ExecCommandsMixin:
 
         if not conn:
             return {"stopped": False, "reason": "Not connected"}
-        
+
         with conn.interactive.lock:
             if not conn.interactive.active:
                 return {"stopped": False, "reason": "No active session on this connection"}
-            
+
             if not conn.interactive.is_owner(ctx.ppid):
                 return {"stopped": False, "reason": "Not the session owner"}
-            
+
             conn.interactive.stop_requested = True
-            
-            if conn.repl_protocol:
-                try:
-                    conn.repl_protocol.interrupt()
-                    time.sleep(0.05)
-                    conn.repl_protocol.interrupt()
-                except Exception:
-                    pass
-        
-        for _ in range(20):
-            time.sleep(0.05)
-            with conn.interactive.lock:
-                if not conn.interactive.active:
-                    return {"stopped": True}
-        
-        conn.interactive.stop()
+
+        # Send stop signals outside the lock (interrupt() may block briefly).
+        if conn.repl_protocol:
+            try:
+                conn.repl_protocol.interrupt()
+            except Exception:
+                pass
+            try:
+                conn.repl_protocol._stop_event.set()
+            except Exception:
+                pass
+
+        # Release the connection immediately without waiting for the background
+        # thread to finish.  The CLI has a short run_stop timeout (0.3 s) so we
+        # must respond fast; any lingering cleanup is handled asynchronously by
+        # _run_interactive_thread which guards itself with session_seq.
+        conn.interactive.stop_no_join()
         conn.release()
-        
+
         return {"stopped": True}
     
     def _cmd_run(self, ctx: CommandContext, script_path: str = None, script_content: str = None, detach: bool = False) -> dict:
