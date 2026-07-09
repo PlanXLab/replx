@@ -266,7 +266,7 @@ class AgentClient:
                                 break
 
                     grace_deadline = time.time() + ctrl_c_grace_s
-                    _no_content_timeout = 1.0
+                    _no_content_timeout = 0.5
                     _last_real_content = time.time()
                     graceful = False
                     while time.time() < grace_deadline:
