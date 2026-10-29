@@ -538,7 +538,7 @@ class AgentClient:
 
                 proc = subprocess.Popen(
                     cmd,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
                     stdout=subprocess.DEVNULL,
                     stderr=stderr_file if stderr_file else subprocess.DEVNULL,
                     startupinfo=startupinfo
